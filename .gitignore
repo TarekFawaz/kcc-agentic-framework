@@ -1,0 +1,134 @@
+# KCC framework -- runtime and generated outputs are NOT committed.
+# Source of truth is .KCC/kernel/ and .KCC/capabilities/.
+# Regenerate cells with .KCC/tools/framework-init.ps1 (see QUICKSTART).
+
+# ---------- Cell outputs (regenerate per harness) ----------
+.claude/
+.codex/
+.opencode/
+.agents/
+ollama/
+
+# Generated root entrypoints (template-sourced; uncomment to keep out of git
+# if you'd rather every cell regenerate them fresh on init):
+# AGENTS.md
+# CLAUDE.md
+
+# ---------- Runtime work folders (per-cell, never shipped) ----------
+ideation/IDEA-*/
+specs/SPEC-*/
+solution/*/
+!solution/solution.md
+Traces/Session-*/
+migrations/IMPORT-*/
+
+# Coordination runtime
+coordination/orchestrator.json
+coordination/backchannel.jsonl
+coordination/backchannel-*.jsonl
+
+# Memory store entries (template + schema preserved via .gitkeep)
+memory/decisions/*.md
+memory/patterns/*.md
+memory/incidents/*.md
+memory/preferences/*.md
+memory/glossary/*.md
+!memory/decisions/.gitkeep
+!memory/patterns/.gitkeep
+!memory/incidents/.gitkeep
+!memory/preferences/.gitkeep
+!memory/glossary/.gitkeep
+
+# Inspector pipeline runtime proposals
+.KCC/kernel/inspector/proposals/*.md
+!.KCC/kernel/inspector/proposals/.gitkeep
+
+# Architecture runtime (templates preserved)
+architecture/adrs/*.md
+!architecture/adrs/.gitkeep
+!architecture/adrs/template.md
+architecture/guardrails.md
+architecture/quality-gates.md
+
+# ---------- Private notes (never publish) ----------
+.KCC/TheChat.md
+*.private.md
+*-private.md
+*.local.md
+
+# ---------- Obsidian local state ----------
+.obsidian/workspace.json
+.obsidian/workspace-*.json
+.obsidian/cache
+.obsidian/plugins/*/data.json
+
+# ---------- Editor / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- PowerShell / script backups ----------
+*.ps1.bak
+*.sh.bak
+
+# ---------- Build / package artifacts (if any future tooling adds them) ----------
+node_modules/
+dist/
+build/
+*.egg-info/
+__pycache__/
+
+# ---------- Optional generated-output snapshots ----------
+output/*
+!output/README.md
+
+# ---------- Test/browser temp artifacts ----------
+# Scratch screenshots and browser profile temp dirs must never land at the
+# repo root. Real test output (TestResults/) is kept and intentionally NOT
+# ignored. See .KCC/kernel/protocols/test-results-layout.md.
+.tmp/
+.tmp-*
+.test-tmp/
+.test-tmp
+*.tmp-edge-profile-*
+.tmp-edge-profile-*/
+.tmp-chromium-profile-*/
+*.playwright-profile-*/
+
+# Local demo/test databases produced by generated cells.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---------- Generated-cell runtime/build artifacts ----------
+# Default ignores for artifacts a generated local cell may produce at runtime.
+# Mirrored by the hygiene check in .KCC/tools/validate-kcc.{ps1,sh}.
+.tmp-*
+**/__pycache__/
+*.pyc
+*.db
+*.db-journal
+.test-tmp/
+node_modules/
+.next/
+
+
+architecture/*
+coordination/*
+memory/*
+solution/*
+specs/*
+traces/*
+dashboard/*
+TestResults/*
+migrations/*
+/CLAUDE.md
+/AGENTS.md

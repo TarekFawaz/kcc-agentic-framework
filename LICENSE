@@ -1,0 +1,152 @@
+KCC (Kernel · Capabilities · Cells) Operating Model — License
+==============================================================
+
+Copyright © 2026 Tarek Fawaz · tikasway.dev. Licensed under the terms in this LICENSE.
+
+This license governs the KCC framework starting from version 1.0.0 and
+applies to all subsequent versions unless a future version explicitly
+supersedes it. The current published version is 1.2.0.
+
+----------------------------------------------------------------------
+SCOPE OF INTELLECTUAL PROPERTY
+----------------------------------------------------------------------
+
+The KCC (Kernel · Capabilities · Cells) operating model, the .KCC
+framework layout, the agent contract surfaces, the lifecycle, the
+protocol set (including but not limited to: cells, workspace,
+sandbox-runtime, deployment, accuracy-calibration,
+architecture-documentation, progress-tracking, lethal-trifecta,
+spec-layout, idea-layout, trace-layout, auto-mode, confidence-gate,
+obsidian-standard, adaptation-guide, token-budget, solution-onboarding,
+architecture-governance), the dialect family pattern, the phase model,
+the inspector pipeline design, and all original written content in this
+repository remain the intellectual property of Tarek Fawaz and
+tikasway.dev.
+
+----------------------------------------------------------------------
+GRANT OF PERMISSION
+----------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software, framework, documentation, and associated files
+(the "Work"), to use, copy, modify, merge, publish, distribute,
+sublicense, and create derivative works of the Work, subject to the
+following conditions:
+
+1. ATTRIBUTION
+
+   Any use, redistribution, or derivative work — whether the Work is
+   used in source form, as a generated cell (`.claude/`, `.codex/`,
+   `.opencode/`, `.agents/`, `ollama/`), in documentation, in a packaged
+   distribution (npm, container image, binary release), or as the basis
+   for a related framework — must include visible attribution to the
+   original creator in one of the following forms:
+
+   a. A README, ABOUT, or "Credits" section stating, in clear visible
+      text:
+
+         "Based on the KCC (Kernel · Capabilities · Cells) operating
+         model by Tarek Fawaz · tikasway.dev — https://tikasway.dev"
+
+   b. An equivalent credit visible to the end users of the derivative
+      work (an "About" screen, a printed/displayed banner, a release
+      notes line, a `kcc --version` output line, etc.).
+
+   For native CLI distributions (when the planned `@tikasway/kcc`
+   package ships), attribution must appear in `kcc --version` and in
+   the package's `README.md`.
+
+2. NOTICE PRESERVATION
+
+   The above copyright notice and this License must be included in all
+   copies or substantial portions of the Work, including in any
+   distribution of source files, generated cells, container images,
+   pipeline templates, IaC stubs produced by `infrastructure-implementer`,
+   or documentation bundles.
+
+3. IP ACKNOWLEDGMENT
+
+   The KCC name, the three-layer architecture (Kernel, Capabilities,
+   Cells), the agent contract surfaces, the lifecycle, the protocol
+   set, the dialect family pattern, and the phase model described
+   herein remain the intellectual property of Tarek Fawaz and
+   tikasway.dev. Derivative works may extend, modify, adapt, or
+   re-implement the framework, but may not claim original ownership of
+   the KCC model, its primitives, or its naming.
+
+4. NO ENDORSEMENT
+
+   Neither the name "Tarek Fawaz" nor "tikasway.dev" nor "KCC" may be
+   used to endorse or promote products, services, or derivative works
+   without prior written permission from Tarek Fawaz. Stating
+   compatibility ("KCC v0.4 compatible", "uses KCC primitives") is
+   permitted; implying endorsement ("certified by KCC", "official KCC
+   tool") is not, absent written permission.
+
+5. UPSTREAM CONTRIBUTIONS
+
+   Contributors who submit changes to this repository (e.g. via pull
+   request, KCC-FB-NNN upstream entry, capability ownership claim, or
+   maintainer-slot acceptance) grant Tarek Fawaz · tikasway.dev a
+   non-exclusive, perpetual, worldwide, royalty-free license to use,
+   distribute, and incorporate their contributions under the terms of
+   this License, including the right to relicense the combined Work
+   under updated license terms in future major releases.
+
+6. CELL TEAM AUTONOMY
+
+   Cell teams (delivery teams using a generated cell) may add their own
+   capabilities, scripts, configurations, and documentation under
+   `<cell>/local/` without those additions being subject to this
+   License's attribution clause for the team's internal use, provided
+   they do not redistribute their `local/` additions publicly. Public
+   redistribution of `local/` additions is subject to the same
+   attribution requirements as the rest of the Work.
+
+7. PIPELINE TEMPLATES AND IaC STUBS
+
+   Pipeline templates contributed under
+   `.KCC/kernel/templates/pipelines/` and IaC stubs produced by the
+   `infrastructure-implementer` agent are licensed under the same terms
+   as the rest of the Work. Generated pipelines and IaC files in a
+   downstream cell's `.github/workflows/`, `azure-pipelines/`, or
+   `infrastructure/` directories are considered derivative works of the
+   templates and must carry the attribution line above in their own
+   header comment.
+
+----------------------------------------------------------------------
+WARRANTY DISCLAIMER
+----------------------------------------------------------------------
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE WORK OR THE USE OR
+OTHER DEALINGS IN THE WORK.
+
+This explicitly includes (but is not limited to):
+
+- AI agent outputs produced by capabilities defined in this framework
+  (Tarek Fawaz · tikasway.dev is not responsible for the correctness,
+  safety, or legal compliance of code, decisions, or artifacts produced
+  by agents you run under KCC).
+- Token costs incurred by running agents (Token Guard provides
+  estimates; actual costs depend on the model provider and may differ).
+- Deployment outcomes from pipeline templates or IaC stubs produced by
+  `infrastructure-implementer` (the agent never auto-executes; humans
+  approve and run the actual deployments at their own risk).
+- Decisions made under `--silent --assume` AutoPolicy mode
+  (users are responsible for the AutoPolicy budget cap and accuracy
+  threshold they configure).
+
+----------------------------------------------------------------------
+CONTACT
+----------------------------------------------------------------------
+
+General:        tarek.fawaz1983@gmail.com
+Security:       tarek.fawaz1983@gmail.com (use SECURITY.md disclosure flow)
+Website:        https://tikasway.dev
+GitHub:         (TBD — link added after first public push)
+Upstream spec:  KCC v0.4 — URL TBD when published

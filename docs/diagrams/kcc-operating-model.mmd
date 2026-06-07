@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph Kernel["Kernel - slow, shared contracts"]
+        KC[Contracts<br/>cost envelope, confidence,<br/>decision trace, agent, skill]
+        KP[Protocols<br/>handover, backchannel,<br/>cells, lethal trifecta,<br/>phase model, dialects]
+        KI[Inspector spec<br/>Observe -> Detect -> Propose<br/>-> Review -> Promote]
+    end
+
+    subgraph Capabilities["Capabilities - versioned reusable agents/skills, tagged L1/L2/L3"]
+        Agents[Lifecycle agents<br/>interrogators, architect,<br/>spec-writer, planner,<br/>implementer, verifier]
+        Skills[Skills<br/>spec-*, butler-*, token-estimate,<br/>auto, critical-human-gate,<br/>adapt-workflow]
+        Meta[Meta-agents<br/>butler - token-guard<br/>always-on, fast-implementation]
+    end
+
+    Kernel --> Capabilities
+
+    Capabilities --> A[Cell A<br/>team workflow]
+    Capabilities --> B[Cell B<br/>team workflow]
+    Capabilities --> D[Cell C<br/>team workflow]
+
+    A --> T[Decision traces<br/>cost signals - confidence signals<br/>backchannel events - patterns]
+    B --> T
+    D --> T
+
+    T --> I[Inspector pipeline<br/>1 Observe -> 2 Detect -> 3 Propose<br/>-> 4 Review -> 5 Promote]
+    I --> Capabilities
+    I --> Kernel
+
+    classDef kernelStyle fill:#1a365d,stroke:#2c5282,color:#fff
+    classDef capStyle fill:#2c7a7b,stroke:#234e52,color:#fff
+    classDef cellStyle fill:#744210,stroke:#5f370e,color:#fff
+    classDef learnStyle fill:#553c9a,stroke:#44337a,color:#fff
+    class KC,KP,KI kernelStyle
+    class Agents,Skills,Meta capStyle
+    class A,B,D cellStyle
+    class T,I learnStyle

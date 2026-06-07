@@ -1,0 +1,28 @@
+{
+  "$schema": "./settings.schema.json",
+  "version": "1.0",
+  "solution": {
+    "name": "kcc-v04-cell",
+    "type": "single-repo",
+    "primary_repo_path": ".",
+    "primary_repo_url": null
+  },
+  "workspace": {
+    "repositories": [],
+    "relationships": []
+  },
+  "tracker": {
+    "type": "none",
+    "config": {}
+  },
+  "defaults": {
+    "model_class_overrides": {},
+    "auto_policy": {
+      "silent": false,
+      "assume": false,
+      "accuracy_threshold_pct": 95,
+      "budget_cap_amount": null,
+      "budget_cap_currency": "USD"
+    }
+  }
+}

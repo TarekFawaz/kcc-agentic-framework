@@ -1,0 +1,27 @@
+flowchart LR
+    subgraph Cell["This repository = one KCC cell"]
+        H[Human intent] --> K[.KCC/kernel<br/>contracts, protocols, cells doc,<br/>phase model, inspector scaffold,<br/>lethal trifecta]
+        K --> CAP[.KCC/capabilities<br/>agents and skills<br/>each tagged maturity: L1/L2/L3<br/>and maintainer: ...]
+        CAP --> TOOLS[.KCC/tools<br/>framework-init - sync-adapters<br/>validate-kcc - adapt-workflow<br/>show-backchannel - start-session]
+        TOOLS --> ADAPT[Generated adapter surfaces for this cell<br/>.claude - .codex - .opencode<br/>.agents - ollama<br/>each with optional /local/ for<br/>team-specific additions]
+        ADAPT --> WORK[Runtime work<br/>ideation - specs - architecture<br/>traces - memory - src - docs]
+
+        WORK -. backchannel events .-> BC[coordination/<br/>backchannel.jsonl]
+        BC -. brief / remember .-> META[Meta-agents<br/>butler - token-guard<br/>wrap every turn]
+        META -. context packs / budgets .-> WORK
+
+        WORK --> LEARN[Reusable learning<br/>decisions - patterns<br/>incidents - preferences]
+        LEARN --> CAP
+        LEARN -. upstream proposals .-> FB[KCC-FB catalog<br/>upstream to KCC v0.4 spec<br/>maintained internally]
+    end
+
+    classDef sourceStyle fill:#1a365d,stroke:#2c5282,color:#fff
+    classDef toolStyle fill:#2c5282,stroke:#1a365d,color:#fff
+    classDef cellStyle fill:#744210,stroke:#5f370e,color:#fff
+    classDef metaStyle fill:#553c9a,stroke:#44337a,color:#fff
+    classDef learnStyle fill:#22543d,stroke:#1c4532,color:#fff
+    class K,CAP sourceStyle
+    class TOOLS toolStyle
+    class ADAPT,WORK cellStyle
+    class BC,META metaStyle
+    class LEARN,FB learnStyle

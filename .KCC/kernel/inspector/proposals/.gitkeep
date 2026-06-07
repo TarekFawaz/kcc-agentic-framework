@@ -1,0 +1,4 @@
+# Placeholder so the proposals folder exists in source control.
+# Real proposal files land here as `{YYYY-MM-DD}-{slug}.md` once the
+# Inspector pipeline (see ../README.md) is exercised — manually today,
+# automated later.

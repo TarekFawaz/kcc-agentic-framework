@@ -1,0 +1,29 @@
+# KCC v0.4 — OpenAI Codex CLI sandbox runtime
+# See .KCC/sandbox/README.md and .KCC/kernel/protocols/sandbox-runtime.md
+FROM debian:stable-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg apt-transport-https \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/microsoft.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends powershell \
+ && npm install -g @openai/codex \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+VOLUME ["/workspace"]
+
+# Host mounts (applied by start-agent-session.ps1 --sandbox):
+#   /workspace                  rw  (cell repo)
+#   /workspace/.KCC/kernel       ro
+#   /workspace/.KCC/capabilities ro
+CMD ["codex"]
