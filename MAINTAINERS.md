@@ -1,24 +1,3 @@
----
-title: Maintainers
-aliases:
-  - maintainers
-  - kcc-maintainers
-  - roster
-tags:
-  - framework/documentation
-  - kcc/governance
-  - kcc/v04
-created: 2026-05-25
-updated: 2026-05-30
-version: 1.2.0
-status: active
-related:
-  - "[[CONTRIBUTING]]"
-  - "[[CODE_OF_CONDUCT]]"
-  - "[[SECURITY]]"
-  - "[[README]]"
----
-
 # Maintainers
 
 This file maps the role addresses used in capability frontmatter to the

@@ -1,26 +1,3 @@
----
-title: Contributing to KCC
-aliases:
-  - contributing
-  - contribution-guide
-  - how-to-contribute
-tags:
-  - framework/documentation
-  - entrypoint
-  - kcc/v04
-  - kcc/governance
-created: 2026-05-25
-updated: 2026-06-04
-version: 1.4.0
-status: active
-related:
-  - "[[MAINTAINERS]]"
-  - "[[CODE_OF_CONDUCT]]"
-  - "[[SECURITY]]"
-  - "[[LICENSE]]"
-  - "[[README]]"
----
-
 # Contributing to KCC
 
 Thanks for thinking about contributing. KCC is a structural operating

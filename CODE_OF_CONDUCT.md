@@ -1,22 +1,3 @@
----
-title: Code of Conduct
-aliases:
-  - code-of-conduct
-  - coc
-tags:
-  - framework/documentation
-  - kcc/governance
-  - kcc/v04
-created: 2026-05-25
-updated: 2026-05-30
-version: 1.2.0
-status: active
-related:
-  - "[[CONTRIBUTING]]"
-  - "[[MAINTAINERS]]"
-  - "[[SECURITY]]"
----
-
 # Code of Conduct
 
 ## Our pledge

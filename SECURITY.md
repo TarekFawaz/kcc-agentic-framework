@@ -1,19 +1,3 @@
----
-title: Security Policy
-aliases:
-  - security
-  - security-policy
-  - disclosure-policy
-tags:
-  - framework/documentation
-  - kcc/governance
-  - security
-created: 2026-05-25
-updated: 2026-05-25
-version: 1.0.0
-status: active
----
-
 # Security Policy
 
 KCC ships PowerShell tools, generated agent definitions, and shared

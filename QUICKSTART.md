@@ -1,20 +1,3 @@
----
-title: "KCC Quickstart"
-aliases:
-  - QUICKSTART
-  - quick start
-  - getting started
-tags:
-  - quickstart
-  - entrypoint
-  - documentation
-  - kcc/v04
-created: 2026-05-24
-updated: 2026-06-07
-version: 1.5.0
-status: active
----
-
 # KCC Quickstart
 
 From clone to your first **agentic AI workflow** in five minutes.
@@ -83,9 +66,7 @@ my-project/
 |   `-- settings.json          <- workspace + tracker + AutoPolicy defaults
 |-- docs/
 |   |-- alignment-matrix.md    <- implementation status vs KCC v0.4 (color-coded)
-|   `-- diagrams/              <- animated GIF + Mermaid + draw.io sources
-|-- output/                    <- local-only notes + generated-output examples (gitignored)
-`-- tools/                     <- compatibility wrappers (.ps1 + .sh)
+    `-- diagrams/              <- animated GIF + Mermaid + draw.io sources
 ```
 
 After first run, the framework adds:

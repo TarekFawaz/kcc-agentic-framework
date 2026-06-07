@@ -1,19 +1,3 @@
----
-title: Example Solutions - Worked Walkthroughs
-aliases:
-  - example-solutions
-  - worked-examples
-  - examples
-tags:
-  - documentation
-  - examples
-  - kcc/v04
-created: 2026-06-07
-updated: 2026-06-07
-version: 1.0.0
-status: active
----
-
 # Example Solutions
 
 End-to-end worked walkthroughs of the KCC lifecycle. Start with
