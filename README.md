@@ -22,8 +22,6 @@ related:
   - "[[CLAUDE]]"
   - "[[QUICKSTART]]"
   - "[[example-solutions]]"
-  - "[[PLAN]]"
-  - "[[CLI-PLAN]]"
   - "[[docs/alignment-matrix|alignment-matrix]]"
   - "[[docs/agentic-ai-operating-model|agentic-ai-operating-model]]"
   - "[[docs/spec-driven-ai-development|spec-driven-ai-development]]"
@@ -43,32 +41,76 @@ related:
 
 # KCC: Agentic AI Operating Model and Spec-Driven Workflow Framework
 
-KCC is a local-first **agentic AI operating model** and
-**spec-driven workflow framework** for teams using AI coding agents such as
-Codex, Claude Code, OpenCode, and Ollama-backed runners.
+KCC helps software teams use AI coding agents without losing governance,
+traceability, cost awareness, quality gates, or reusable learning.
 
-[![Status: public alpha](https://img.shields.io/badge/status-public%20alpha-blue)](./PLAN.md)
+[![Status: public alpha](https://img.shields.io/badge/status-public%20alpha-blue)](./docs/alignment-matrix.md)
 [![License](https://img.shields.io/badge/license-see%20LICENSE-green)](./LICENSE)
 [![Harnesses](https://img.shields.io/badge/harnesses-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode%20%7C%20Ollama-informational)](#initialize-or-sync)
 
-It asks a practical question:
 
-> How can teams use autonomous agents without losing governance, traceability,
-> cost awareness, security posture, and reusable learning?
+**Official KCC page:** [tikasway.dev/kcc](https://tikasway.dev/kcc)
 
-This repository is a working reference implementation of **one local KCC
-cell**. It does not implement every part of the wider KCC operating model.
-Instead, it shows how one team can turn the doctrine into a usable workflow:
-ideas become specs, specs become plans, plans become code, and every step
-leaves decisions, traces, cost signals, and reusable knowledge behind.
+![KCC lifecycle animation](./docs/diagrams/kcc-lifecycle.gif)
+
+```text
+idea -> interrogate -> spec -> budget -> plan -> budget -> implement -> test -> review
+```
+
+KCC is local-first. The source of truth lives in `.KCC/`, and the framework
+generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
+`.agents` bundles, and Ollama-backed runners.
 
 > KCC exists to structurally compound intelligence without collapsing
 > governance.
 
-## Why KCC Exists
+## Contents
 
-Scaling agentic AI inside an organization tends to produce four structural
-failures. KCC is designed around preventing each one:
+- [What You Get](#what-you-get)
+- [Quick Start](#quick-start)
+- [Why KCC](#why-kcc)
+- [How KCC Works](#how-kcc-works)
+- [The KCC Model](#the-kcc-model)
+- [Supported Harnesses](#supported-harnesses)
+- [Repository Map](#repository-map)
+- [Current Status](#current-status)
+- [Learn More](#learn-more)
+- [Contributing](#contributing)
+
+## What You Get
+
+| KCC gives you | Why it matters |
+|---|---|
+| Spec-driven lifecycle | Raw ideas become specs, plans, tests, reviews, and traceable implementation work. |
+| Governance gates | Humans approve budget, confidence, toolchain, security, privacy, and scope decisions when needed. |
+| Token Guard | Cost and token estimates appear before expensive planning or implementation. |
+| Butler memory | Reusable decisions and patterns survive beyond a single agent context window. |
+| Multi-harness adapters | One `.KCC` source generates Codex, Claude Code, OpenCode, generic, and Ollama surfaces. |
+
+## Quick Start
+
+```powershell
+git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
+cd my-project
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claudecode
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
+```
+
+Then open your preferred harness and start with an idea:
+
+```text
+auto build a CLI that converts CSV to JSON
+```
+
+See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
+generic/Ollama, and Mac/Linux paths.
+
+## Why KCC
+
+Agentic AI is fast, but unmanaged speed creates new failure modes. KCC is
+designed around preventing the most common ones:
 
 | Failure | What it looks like | KCC's structural answer |
 |---|---|---|
@@ -79,6 +121,20 @@ failures. KCC is designed around preventing each one:
 
 The load-bearing claim: *the kernel does not run the cells - it defines the
 contract they all honor.*
+
+## How KCC Works
+
+KCC wraps the agent workflow with evidence-producing roles:
+
+| Role | What it contributes |
+|---|---|
+| Interrogators | Clarify problem, technical direction, UX, security, and infrastructure assumptions. |
+| Architect | Produces ADRs, guardrails, quality gates, diagrams, and architecture depth. |
+| Spec writer | Creates epic specs, story/enabler backlog files, and parallelization maps. |
+| Planner | Converts specs into implementation plans and atomic test cases. |
+| Implementer | Writes scoped code under the approved idea folder. |
+| Verifier | Checks tests and acceptance criteria, then writes review evidence. |
+| Butler + Token Guard | Preserve memory, traces, calibration signals, token estimates, and budget gates. |
 
 ## Who This Is For
 
@@ -93,32 +149,6 @@ This repo is for:
 
 If you only want to run the framework, start with [QUICKSTART.md](./QUICKSTART.md).
 If you want to understand the operating-model claim, start here.
-
-## Quick Start
-
-```powershell
-git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
-cd my-project
-# all harnesses (default):
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1
-
-# or just the one you'll use:
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claude
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 generic
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
-```
-
-Then open your preferred harness and start with an idea:
-
-```text
-auto build a CLI that converts CSV to JSON
-```
-
-See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
-and Mac/Linux paths.
-
 
 ## Why Not Just Use Coding Agents Directly?
 
@@ -136,7 +166,7 @@ budgets, specialist interrogators, test/review handoffs, and reusable memory.
 | Generic agent frameworks | Software-delivery governance: specs, backlogs, token budgets, confidence, and review artifacts. |
 | Project templates | A reproducible local cell that generates harness-specific surfaces from one `.KCC` source of truth. |
 
-## The KCC Idea
+## The KCC Model
 
 Most AI adoption starts as individual productivity: better prompting, faster
 coding, local automations, and personal workflows. That helps, but it does
@@ -189,7 +219,7 @@ locally:
 | `.KCC/kernel/` | Source of truth for contracts, protocols, adapters, templates, dialects, and governance docs. |
 | `.KCC/capabilities/` | Source of truth for local reusable agents and skills. |
 | `.KCC/tools/` | Init, sync, validation, migration, backchannel, and session tools. |
-| Root docs | Public explanation, quick start, contribution docs, and roadmap. |
+| Root docs | Public explanation, quick start, contribution docs, and project policy. |
 
 Generated harness folders such as `.claude/`, `.codex/`, `.opencode/`,
 `.agents/`, and `ollama/` are **local output**, not source. They are adapter
@@ -208,8 +238,7 @@ framework.
 | Current maturity | Public alpha / field-pilot reference implementation |
 
 The detailed implementation status lives in
-[docs/alignment-matrix.md](./docs/alignment-matrix.md). The future activity
-list lives in [PLAN.md](./PLAN.md).
+[docs/alignment-matrix.md](./docs/alignment-matrix.md).
 
 ## Lifecycle
 
@@ -219,11 +248,8 @@ The cell moves work through a fixed lifecycle:
 interrogate -> create -> estimate -> plan -> estimate -> implement -> test -> review -> deploy
 ```
 
-The animated lifecycle view is here:
-
-![KCC lifecycle animation|697](./docs/diagrams/kcc-lifecycle.gif)
-
-Editable diagram sources live in [docs/diagrams/](./docs/diagrams/).
+The animated lifecycle view is shown near the top of this README. Editable
+diagram sources live in [docs/diagrams/](./docs/diagrams/).
 
 ## Operating Scenarios
 
@@ -291,8 +317,8 @@ src/
 ```
 
 Generated output is ignored by default. If this public repo needs to show a
-captured example of generated output, place it under [output/](./output/)
-instead of committing live harness folders at the root.
+captured example of generated output later, publish it as a curated document
+under `docs/` instead of committing live harness folders at the root.
 
 ## Repository Map
 
@@ -311,6 +337,16 @@ instead of committing live harness folders at the root.
 | `docs/alignment-matrix.md`             | Honest status matrix against the KCC v0.4 operating-model primitives.                               |
 | `docs/diagrams/`                       | Animated GIF, Mermaid, and draw.io sources.                                                         |
 | `QUICKSTART.md`                        | Guided first run.                                                                                   |
+
+## Supported Harnesses
+
+| Harness | Generated local output |
+|---|---|
+| Codex CLI | `.codex/agents/`, `.codex/skills/`, `.codex/tools/` |
+| Claude Code | `.claude/agents/`, `.claude/skills/` |
+| OpenCode | `.opencode/agents/`, `.opencode/commands/`, `.opencode/skills/` |
+| Generic | `.agents/agents/`, `.agents/skills/`, `.agents/tools/` |
+| Ollama | `ollama/agents.json`, `ollama/README.md` |
 
 ## Initialize or Sync
 
@@ -360,6 +396,15 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 - multi-cell rollout examples across separate team repos
 - native `kcc` CLI packaging
 
+## Learn More
+
+| Topic | Start here |
+|---|---|
+| Agentic AI operating model | [docs/agentic-ai-operating-model.md](./docs/agentic-ai-operating-model.md) |
+| Spec-driven AI development | [docs/spec-driven-ai-development.md](./docs/spec-driven-ai-development.md) |
+| AI agent governance | [docs/ai-agent-governance.md](./docs/ai-agent-governance.md) |
+| KCC vs agent frameworks | [docs/kcc-vs-agent-frameworks.md](./docs/kcc-vs-agent-frameworks.md) |
+| Codex, Claude Code, OpenCode, and Ollama | [docs/codex-claude-opencode-ollama.md](./docs/codex-claude-opencode-ollama.md) |
 
 ## Contributing
 
