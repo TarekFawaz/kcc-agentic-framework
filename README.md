@@ -119,16 +119,6 @@ auto build a CLI that converts CSV to JSON
 See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
 and Mac/Linux paths.
 
-## GitHub Topics
-
-Suggested repository topics:
-
-```text
-agentic-ai ai-agents ai-governance spec-driven-development
-software-engineering developer-tools workflow-automation llmops
-codex claude-code opencode ollama multi-agent-systems
-human-in-the-loop
-```
 
 ## Why Not Just Use Coding Agents Directly?
 
@@ -231,7 +221,7 @@ interrogate -> create -> estimate -> plan -> estimate -> implement -> test -> re
 
 The animated lifecycle view is here:
 
-![KCC lifecycle animation](./docs/diagrams/kcc-lifecycle.gif)
+![KCC lifecycle animation|697](./docs/diagrams/kcc-lifecycle.gif)
 
 Editable diagram sources live in [docs/diagrams/](./docs/diagrams/).
 
@@ -306,22 +296,21 @@ instead of committing live harness folders at the root.
 
 ## Repository Map
 
-| Path | Description |
-|---|---|
-| `.KCC/kernel/` | KCC governance: contracts, protocols, adapters, templates, dialects, cells, inspector, phase model. |
-| `.KCC/capabilities/agents/` | Neutral source files for lifecycle, specialist, meta, and utility agents. |
-| `.KCC/capabilities/skills/` | Neutral source files for slash-command style skills. |
-| `.KCC/tools/` | Canonical tool entrypoints for Windows PowerShell and Mac/Linux bash. |
-| `.KCC/sandbox/` | Docker sandbox files and sandbox runtime docs. |
-| `docs/agentic-ai-operating-model.md` | Search-friendly overview of the KCC operating-model claim. |
-| `docs/spec-driven-ai-development.md` | How KCC structures AI-assisted delivery around specs and evidence. |
-| `docs/ai-agent-governance.md` | Governance surfaces: cost, confidence, traces, toolchain gates, and memory. |
-| `docs/kcc-vs-agent-frameworks.md` | How KCC differs from prompt libraries, coding assistants, and agent frameworks. |
-| `docs/codex-claude-opencode-ollama.md` | Harness adapter overview for Codex, Claude Code, OpenCode, generic, and Ollama. |
-| `docs/alignment-matrix.md` | Honest status matrix against the KCC v0.4 operating-model primitives. |
-| `docs/diagrams/` | Animated GIF, Mermaid, and draw.io sources. |
-| `PLAN.md` | Future work and roadmap for this local-cell reference implementation. |
-| `QUICKSTART.md` | Guided first run. |
+| Path                                   | Description                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `.KCC/kernel/`                         | KCC governance: contracts, protocols, adapters, templates, dialects, cells, inspector, phase model. |
+| `.KCC/capabilities/agents/`            | Neutral source files for lifecycle, specialist, meta, and utility agents.                           |
+| `.KCC/capabilities/skills/`            | Neutral source files for slash-command style skills.                                                |
+| `.KCC/tools/`                          | Canonical tool entrypoints for Windows PowerShell and Mac/Linux bash.                               |
+| `.KCC/sandbox/`                        | Docker sandbox files and sandbox runtime docs.                                                      |
+| `docs/agentic-ai-operating-model.md`   | Search-friendly overview of the KCC operating-model claim.                                          |
+| `docs/spec-driven-ai-development.md`   | How KCC structures AI-assisted delivery around specs and evidence.                                  |
+| `docs/ai-agent-governance.md`          | Governance surfaces: cost, confidence, traces, toolchain gates, and memory.                         |
+| `docs/kcc-vs-agent-frameworks.md`      | How KCC differs from prompt libraries, coding assistants, and agent frameworks.                     |
+| `docs/codex-claude-opencode-ollama.md` | Harness adapter overview for Codex, Claude Code, OpenCode, generic, and Ollama.                     |
+| `docs/alignment-matrix.md`             | Honest status matrix against the KCC v0.4 operating-model primitives.                               |
+| `docs/diagrams/`                       | Animated GIF, Mermaid, and draw.io sources.                                                         |
+| `QUICKSTART.md`                        | Guided first run.                                                                                   |
 
 ## Initialize or Sync
 
@@ -365,14 +354,12 @@ claude | codex | opencode | generic | ollama | all
 This repo is intentionally honest about its gaps. The main deferred areas are:
 
 - trace-driven Inspector automation
-- full decision-trace replay tooling
 - tracker adapters for Jira, Azure DevOps, Asana, Linear, and GitHub Issues
 - production pipeline templates for deploy
 - real Mac/Linux host validation for the native bash path
 - multi-cell rollout examples across separate team repos
 - native `kcc` CLI packaging
 
-See [PLAN.md](./PLAN.md) for the full roadmap.
 
 ## Contributing
 
