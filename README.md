@@ -99,8 +99,15 @@ If you want to understand the operating-model claim, start here.
 ```powershell
 git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
 cd my-project
+# all harnesses (default):
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1
+
+# or just the one you'll use:
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claude
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
-powershell -ExecutionPolicy Bypass -File .KCC\tools\validate-kcc.ps1
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 generic
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
 ```
 
 Then open your preferred harness and start with an idea:
