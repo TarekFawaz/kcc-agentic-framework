@@ -56,6 +56,16 @@ architecture/quality-gates.md
 *-private.md
 *.local.md
 
+# ---------- Personal/internal tracking (never publish) ----------
+/.obsidian/
+/output/
+/ideation/
+/tools/
+/CLI-PLAN.md
+/PLAN.md
+/opencode.json
+/progress.md
+
 # ---------- Obsidian local state ----------
 .obsidian/workspace.json
 .obsidian/workspace-*.json
