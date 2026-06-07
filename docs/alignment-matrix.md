@@ -8,8 +8,8 @@ tags:
   - kcc/operating-model
   - kcc/alignment
 created: 2026-06-02
-updated: 2026-06-07
-version: 2.0.0
+updated: 2026-06-08
+version: 2.1.0
 status: active
 ---
 
@@ -17,6 +17,11 @@ status: active
 
 This file is the honest implementation contract between the KCC v0.4
 operating-model doctrine and this repository's current local-cell example.
+
+As of 2026-06-08 the patterns this cell pioneered have been folded into the
+public v0.4 doctrine. The **Doctrine cross-reference** table near the bottom
+records where each one now lives in the spec, so the repo's status map and the
+published doctrine stay in sync.
 
 ## Status legend
 
@@ -71,7 +76,7 @@ is why no row is 🟢 Exercised today.
 | Inspector Pipeline automation         | 🔴 Missing                                      | Needs real trace data for honest rules.                                                                                                                                                                                                                                                                                               |
 
 
-### Recently added capabilities (this repo, beyond the original v0.4 list)
+### Capabilities beyond the original v0.4 list (now folded into the doctrine)
 
 | Capability                            | Status        | Where it lives / what is proven                                                                                                                                                                                      |
 | ------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,6 +87,36 @@ is why no row is 🟢 Exercised today.
 | Dashboard auto-refresh                | 🟡 Scaffolded | `backchannel-append.ps1` best-effort rebuilds the dashboard after each event (`-NoDashboard` / `KCC_SKIP_DASHBOARD=1` to opt out); not pilot-exercised.                                                              |
 | Token-actuals contract                | 🟢 Exercised  | Token usage carries an explicit source (`harness-reported` / `api-usage` / `manual-meter` / `unavailable`); agents must never invent actuals. Token Guard Mode D ingests actuals from `Traces/.../TokenUsage.md`.    |
 | Toolchain-preflight traceability      | 🟢 Exercised  | `toolchain-preflight.{ps1,sh}` (detect + suggest only, never installs); install/defer decisions must hit four sinks (HumanDecisions, backchannel, ToolsUsed, Actions). Never silent, even under `--silent --assume`. |
+
+## Doctrine cross-reference (v0.4 gap-fill, 2026-06-08)
+
+Where each pattern this cell pioneered now lives in the public KCC v0.4 doctrine
+(published at [tikasway.dev/kcc](https://tikasway.dev/kcc)). Section numbers are
+v0.4 sections; two entries are small **normative** additions, the rest are
+non-normative reference material.
+
+| Pattern (and where it runs in this repo) | Doctrine home |
+| --- | --- |
+| Capability families / dialects (`kernel/protocols/dialects/`) | §2.2 — Capability Families and Dialect Variants |
+| Cell materialization (`tools/framework-init`, `sync-adapters`) | §2.3 — Cell Materialization |
+| Workspace above cells (`settings.json`, `solution-inspector`) | §2.3 — Composing Cells: The Workspace |
+| Token-actuals provenance (Token Guard Mode D) | §5.5 — Actuals and Provenance *(normative)* |
+| Autonomy envelope / AutoPolicy (`auto` skill) | §5.6 — The Autonomy Envelope |
+| Escalation gate (`critical-human-gate`) | §5.6 — The Escalation Gate |
+| Offline dashboard (`dashboard`, `build-dashboard`) | §5.7 — The Derived Human View |
+| Confidence gate (`confidence-gate.md`) | §5.8 — The Confidence Gate *(normative)* |
+| Accuracy calibration loop (Butler, `accuracy-calibration.md`) | §5.8 — The Calibration Loop |
+| Backchannel JSONL (`backchannel.md`) | §5.9 — Reference Transport |
+| Migrator intake (`migrator`, `adapt-workflow`) | §7 — Stage 0: Import |
+| Docker sandbox (`sandbox/`, `--sandbox`) | §10.1 — Detect, Then Isolate |
+| Toolchain preflight (`toolchain-preflight`) | §10.7 — Environment Mutation Boundary |
+| Solution onboarding + deploy + Epic/Story/Enabler/Wave | §12.6 — The Work Lifecycle |
+| Specialist interrogators (`*-interrogator`) | §13.5 — Specialist Interrogators |
+| Architecture critic (`architecture-critic`) | §13.6 — The Architecture Critic |
+
+Deliberately **not** folded into the doctrine (insufficient trace evidence) and
+kept cell-local: full Inspector Pipeline automation, workslop-detection
+heuristics, and maturity-ladder enforcement gates. 
 
 ## Current Validation Snapshot
 

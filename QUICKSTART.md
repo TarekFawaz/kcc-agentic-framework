@@ -526,6 +526,8 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 ## What to read next
 
 - [README](./README.md) - KCC operating-model background + local-cell orientation
+- [How to use KCC](./docs/how-to-use-kcc.md) - scenarios for fresh ideas, existing solutions, and adapting workflows
+- [KCC tools reference](./docs/kcc-tools-reference.md) - `.ps1` and `.sh` tools with arguments and examples
 - [Agentic AI operating model](./docs/agentic-ai-operating-model.md) - short public explanation of the KCC model
 - [Spec-driven AI development](./docs/spec-driven-ai-development.md) - lifecycle and artifact overview
 - [AI agent governance](./docs/ai-agent-governance.md) - cost, confidence, trace, and toolchain gates

@@ -27,6 +27,8 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 
 - [What You Get](#what-you-get)
 - [Quick Start](#quick-start)
+- [How To Use KCC](./docs/how-to-use-kcc.md)
+- [KCC Tools Reference](./docs/kcc-tools-reference.md)
 - [Why KCC](#why-kcc)
 - [How KCC Works](#how-kcc-works)
 - [The KCC Model](#the-kcc-model)
@@ -288,6 +290,8 @@ under `docs/` instead of committing live harness folders at the root.
 | `.KCC/capabilities/skills/`            | Neutral source files for slash-command style skills.                                                |
 | `.KCC/tools/`                          | Canonical tool entrypoints for Windows PowerShell and Mac/Linux bash.                               |
 | `.KCC/sandbox/`                        | Docker sandbox files and sandbox runtime docs.                                                      |
+| `docs/how-to-use-kcc.md`               | Scenario guide for fresh ideas, existing solutions, and adapting workflows.                         |
+| `docs/kcc-tools-reference.md`          | PowerShell and bash tool reference with arguments and examples.                                     |
 | `docs/agentic-ai-operating-model.md`   | Search-friendly overview of the KCC operating-model claim.                                          |
 | `docs/spec-driven-ai-development.md`   | How KCC structures AI-assisted delivery around specs and evidence.                                  |
 | `docs/ai-agent-governance.md`          | Governance surfaces: cost, confidence, traces, toolchain gates, and memory.                         |
@@ -359,6 +363,8 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 
 | Topic | Start here |
 |---|---|
+| How to use KCC | [docs/how-to-use-kcc.md](./docs/how-to-use-kcc.md) |
+| KCC command-line tools | [docs/kcc-tools-reference.md](./docs/kcc-tools-reference.md) |
 | Agentic AI operating model | [docs/agentic-ai-operating-model.md](./docs/agentic-ai-operating-model.md) |
 | Spec-driven AI development | [docs/spec-driven-ai-development.md](./docs/spec-driven-ai-development.md) |
 | AI agent governance | [docs/ai-agent-governance.md](./docs/ai-agent-governance.md) |
