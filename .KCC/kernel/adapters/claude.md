@@ -58,7 +58,7 @@ Neutral -> Claude:
 
 | Neutral class         | Claude model        |
 |--|--|
-| `strong-reasoning`    | `claude-opus-4-6`   |
+| `strong-reasoning`    | `claude-opus-4-8`   |
 | `balanced`            | `claude-sonnet-4-6` |
 | `fast-implementation` | `claude-haiku-4-5`  |
 | `local-strong`        | n/a - use Ollama adapter |
