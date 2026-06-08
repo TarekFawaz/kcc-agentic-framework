@@ -197,6 +197,15 @@ granularity of each spawned unit:
 - **One upfront token-budget gate covers the whole wave set.** The orchestrator
   estimates the fan-out once before spawning; it does not re-gate each item
   inside the wave. See [[token-budget]].
+- **Post-wave roll-up (mandatory).** After a wave's barrier, the orchestrator
+  **aggregates the spawned units' findings** into the shared trace: a concise
+  roll-up appended to `Decisions.md` and `Handovers.md` (what each unit decided,
+  produced, and handed back), and a `/butler-remember` pass that triages those
+  findings into memory. Subagent findings that live only inside an individual
+  unit's turn and are never rolled up are a conformance gap - the blog pilot lost
+  subagent insight exactly this way. The shared session must still end with the
+  7 canonical trace files (see [[trace-layout]]); per-agent named appends are
+  additive, never a substitute for them.
 
 ---
 

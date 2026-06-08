@@ -159,6 +159,11 @@ shape, file naming case, and the trace-chain rule. Honor it exactly.
      [[.KCC/kernel/protocols/spec-layout]]. The index is the **only** file
      allowed to link upstream to
      `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md`.
+   - **Back-fill the downward edge.** Update the idea file's `## Related` block to
+     add `Specs index: [[../../specs/IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs]]`
+     if it is not already present. This is the idea->specs link (the idea side
+     adds it, so the "index is the only file that links *up*" rule stays intact),
+     and the conformance gate checks the idea file for it (LINK-001).
 
 10. **Create the epic folder.** Pick a kebab-case slug for the spec. For each
     selected epic, create the folder
@@ -257,7 +262,15 @@ Use the folder-note shape in [[.KCC/kernel/protocols/spec-layout]]. It must incl
 - Epic acceptance criteria with `AC-N` IDs.
 - Stories and Enablers table linking each `Backlog/Story-*` and
   `Backlog/Enabler-*`.
-- Links to architecture ADRs, guardrails, and quality gates when applicable.
+- An **Architecture** section using **wikilinks**:
+  `[[../../../architecture/architecture|Architecture Document]]` plus the
+  relevant `[[../../../architecture/adrs/ADR-...]]`,
+  `[[../../../architecture/guardrails]]`, and
+  `[[../../../architecture/quality-gates]]`. **Never** reference
+  `architecture/README.md` (it must not exist - the Architecture Document is
+  `architecture.md`), and **never** use bare relative paths like
+  `../../../architecture/README.md` in place of a `[[wikilink]]` - bare paths do
+  not connect the Obsidian graph and fail the conformance gate (LINK-004/005/006).
 - Risks, dependencies, verification approach, and related links.
 
 ### `backlog.md`

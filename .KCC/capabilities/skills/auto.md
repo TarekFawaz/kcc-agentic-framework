@@ -158,20 +158,31 @@ band initially; the band tightens to +/-20% as specs are materialized).
 - Operating scenario 2 (full hand-off HOTL): show estimate as awareness; do not block.
 - Operating scenario 3 (controlled hand-off HOTL): show estimate; **STOP** if it exceeds the cap.
 
-### CR-2 - Architecture artifacts are ALWAYS produced
+### CR-2 - Architecture artifacts are ALWAYS produced (embedded, never `.mmd`)
 
 The architect pass runs in every operating scenario, including `--silent --assume`.
-Required minimum deliverables:
+All diagrams are **embedded as inline fenced ```mermaid``` blocks inside `.md`
+files** per [[../../kernel/protocols/architecture-documentation|architecture-documentation]].
+**Never** emit loose `.mmd` files; **never** create an `architecture/README.md`
+hub. Required minimum deliverables:
 
-- **Mermaid C4 - Context level** (`architecture/c4-context.mmd`)
-- **Mermaid C4 - Container level** (`architecture/c4-container.mmd`)
-- **Mermaid flowchart(s)** for non-trivial business workflows
-- **Mermaid DFD(s)** when data flow is non-trivial
+- **`architecture/architecture.md`** - the Architecture Document: narrative
+  prose **plus** embedded fenced ```mermaid``` blocks (C4 Context + Container at
+  minimum). It is NOT a link hub and NOT a sub-1KB stub.
+- **C4 Context + Container** as embedded ```mermaid``` (in `architecture.md`
+  and/or `architecture/c4-context.md` + `c4-container.md` - `.md`, not `.mmd`).
+- **Mermaid flowchart(s)** for non-trivial business workflows (embedded).
+- **Mermaid DFD(s)** when data flow is non-trivial (embedded).
 - Spec-local `arch.md` inside each `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/`
-  when the spec introduces architecture-relevant decisions
+  with **>=1 embedded ```mermaid``` block** plus prose (content bar - a
+  link-only or sub-1KB stub FAILS).
 
 **NO BPMN.** Use flowcharts. In silent mode, the architect documents
 assumptions in each artifact's frontmatter and in `architecture/assumptions.md`.
+
+The architect MUST self-review via `/architecture-review` **in every scenario,
+including `--silent --assume`**, and the orchestrator MUST pass the
+architecture-conformance gate (CR-14) before handing off to `/spec-create`.
 
 ### CR-3 - Loop detection (orchestrator-tracked)
 
@@ -372,6 +383,33 @@ low-confidence ROI. The 60% threshold is fixed and is **not** overridden by
 independent. Both gates route through `/critical-human-gate` but for different
 reasons. See [[../../kernel/protocols/confidence-gate|confidence-gate]].
 
+### CR-14 - Mechanical conformance gates (self-healing, never silent-able)
+
+Prose alone does not hold under `--silent --assume --parallel`; the orchestrator
+MUST verify output mechanically with
+`.KCC/tools/check-run-conformance.ps1` (`.sh` on Mac/Linux), which returns a
+deterministic violation list. Run it at two checkpoints:
+
+- **Architecture gate** - immediately after the architect pass and **before**
+  `/spec-create`: run `check-run-conformance -Scope architecture`. It enforces
+  that `architecture/architecture.md` exists with embedded ```mermaid```, that
+  there are **zero `.mmd` files** and **no `architecture/README.md`**, and that
+  each spec `arch.md` embeds >=1 diagram.
+- **Run-close gate** - before `session-closed`: run `check-run-conformance`
+  (full scope). It enforces the linking graph (idea<->specs<->architecture
+  wikilinks, no `architecture/README` refs, no bare relative architecture
+  paths), the 7 canonical trace files, and non-empty memory for substantive
+  runs.
+
+**Self-healing loop (honors `--silent`):** on any violation, do NOT proceed.
+Route each violation back to its **fix owner** (the tool prints `fix owner`:
+architect / spec-writer / idea-interrogator / butler) and re-run that agent with
+the violation list, then re-check. This counts as a CR-3 attempt: after 3 failed
+self-heal cycles for the same gate, escalate to `/critical-human-gate`. A gate
+that returns `Errors: 0` is required before advancing - this is **never**
+silent-able, even in Scenario 2/3. Emit a `conformance-checked` backchannel
+event (pass/fail + counts) at each checkpoint.
+
 ---
 
 ## Operating scenario 1 - `auto <input>` (default HOTL)
@@ -434,9 +472,18 @@ confirmation, and budget gate.
    chosen design system) as a single bulleted recap and asks one question:
    `confirm all / revise <topic> / abort`. No agent advances until the human
    answers.
-8. **Architect pass (REQUIRED - see CR-2).** Produce C4 Context + Container,
-   workflow flowcharts, DFDs as needed. Update `architecture/adrs/`,
-   `architecture/guardrails.md`, `architecture/quality-gates.md`.
+8. **Architect pass (REQUIRED - see CR-2).** Produce `architecture/architecture.md`
+   (narrative + embedded ```mermaid``` C4 Context + Container), workflow
+   flowcharts, DFDs as needed - all **embedded in `.md`, never `.mmd`, and no
+   `architecture/README.md`**. Update `architecture/adrs/`,
+   `architecture/guardrails.md`, `architecture/quality-gates.md`. The architect
+   MUST self-review via `/architecture-review` (mandatory in every scenario).
+8b. **Architecture-conformance gate (CR-14).** Run
+   `.KCC/tools/check-run-conformance.ps1 -Scope architecture` (`.sh` on
+   Mac/Linux). If it reports any error, route the violations back to the
+   architect and re-run (self-healing); after 3 failed cycles escalate via
+   `/critical-human-gate`. Do **not** proceed to `/spec-create` until it returns
+   `Errors: 0`. Emit a `conformance-checked` backchannel event.
 9. **Upfront budget estimate (CR-1).** Run `/token-estimate IDEA-{ID}` in
    idea-scope mode against the phases/epics breakdown. Display the
    pessimistic estimate with +/-50% band. Ask the human:
@@ -459,6 +506,14 @@ confirmation, and budget gate.
       prompt. Per-unit governance (butler-brief/remember, token-guard,
       confidence, CR-3 loop detection) applies to each subagent; the single
       upfront budget gate (step 9) covers all planned specs.
+
+    **Idempotency (no duplicate specs).** Choose **exactly one** path - either the
+    sequential pass **or** the parallel fan-out, never both. Each selected epic is
+    created **once** and emits **one** `spec-created` backchannel event. Before
+    creating a spec, check whether its `SPEC-{ID}-{slug}/` folder already exists;
+    if so, skip creation (do not re-emit). (The `--parallel` regression in the
+    blog pilot emitted `spec-created` twice for SPEC-001..003 by running a
+    sequential pass and then a parallel pass - this guard prevents that.)
 
     Require (per spec):
     - `IDEA-{ID}-{slug}-Specs.md` (per-idea index, created on first spec)
@@ -532,6 +587,21 @@ confirmation, and budget gate.
     explicitly invokes `/spec-deploy`. Even in `--silent --assume`, deploy
     never runs silently - it requires explicit human confirmation per the
     [[../../kernel/protocols/deployment|deployment protocol]].
+17. **Run-close gate + closeout (CR-14, CR-10).** Before finishing:
+    - Run the **full** `check-run-conformance` (linking + trace + memory). On any
+      error, self-heal via the printed fix owners (up to 3 cycles) then escalate.
+    - Ensure `/butler-remember` ran for every agent turn and gate, and that
+      substantive decisions were written to `memory/decisions/` (and preferences
+      to `memory/preferences/`) via `.KCC/tools/memory-append.ps1` - an empty
+      `memory/` after a real run is a violation, not an outcome.
+    - Confirm the active `Traces/Session-*/` has the **7 canonical files**
+      (`Decisions.md`, `Handovers.md`, `Actions.md`, `ToolsUsed.md`,
+      `HumanActions.md`, `HumanDecisions.md`, `TokenUsage.md`) - copied from
+      `_session-template/`. Custom files are additive, not substitutes.
+    - **No silent mid-pipeline halt.** A run either completes its lifecycle
+      (through `/spec-review` for each in-scope spec) or records an explicit stop
+      reason in `Decisions.md` and as a backchannel event - it must never just
+      end after spec creation without saying why. Emit `session-closed` last.
 
 ---
 
@@ -631,8 +701,11 @@ If the human declines, fall back to Scenario 1.
    briefs from assumptions. UX still emits the 3-design-system comparison;
    the agent picks the default-best with rationale rather than asking.
 4. **Skip the confirmation step (Scenario 1 step 7).**
-5. **Architect pass STILL RUNS (CR-2).** All artifacts produced. Each
-   contains an `## Assumptions` block listing what was assumed and why.
+5. **Architect pass STILL RUNS (CR-2).** All artifacts produced, with diagrams
+   **embedded in `.md` (never `.mmd`)** and **no `architecture/README.md`**; each
+   contains an `## Assumptions` block. Mandatory `/architecture-review`, then the
+   **architecture-conformance gate (CR-14, step 8b)** must return `Errors: 0`
+   before spec creation - self-healing, never silent-able.
 6. **Upfront budget (CR-1)** - show estimate as awareness only, no gate.
 7. **Spec creation, planning** - proceed without human gates.
 8. **Maximum parallel sessions** - open the full fan-out from
@@ -645,6 +718,10 @@ If the human declines, fall back to Scenario 1.
     - ROI confidence below 60% (CR-11) -> `/critical-human-gate` (`mode: roi-gate`).
     - Loop detection trip (CR-3) -> `/critical-human-gate`.
     - Prohibited-assumption need (CR-7) -> `/critical-human-gate`.
+    - Conformance gate failure after 3 self-heal cycles (CR-14) ->
+      `/critical-human-gate`. The CR-14 architecture and run-close gates still
+      run in silent mode; they self-heal by routing back to the fix owner and are
+      never silent-able.
 
 ---
 

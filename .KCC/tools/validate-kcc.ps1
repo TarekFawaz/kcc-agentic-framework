@@ -574,12 +574,30 @@ if (Test-Path -LiteralPath $archDir) {
         Add-Error "Deprecated architecture format: architecture/diagrams/ folder exists. Use named .md diagram files with embedded inline mermaid (see .KCC/kernel/protocols/architecture-documentation.md)."
     }
 
+    # Forbidden: an architecture/README.md hub. The Architecture Document is
+    # architecture.md, never a README that just lists files.
+    foreach ($readmeName in @('README.md', 'readme.md')) {
+        if (Test-Path -LiteralPath (Join-Path $archDir $readmeName)) {
+            Add-Error "Forbidden architecture format: architecture/$readmeName exists. The Architecture Document is architecture.md (narrative + embedded mermaid), not a README hub (see .KCC/kernel/protocols/architecture-documentation.md)."
+        }
+    }
+
+    # When architecture/ is populated (any ADR or diagram content), the
+    # Architecture Document architecture.md MUST exist.
+    $archPopulated = $false
+    $archMdAll = Get-ChildItem -LiteralPath $archDir -Recurse -File -Filter '*.md' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne '.gitkeep' }
+    if (($archMdAll -and $archMdAll.Count -gt 0) -or ($mmdFiles -and $mmdFiles.Count -gt 0)) { $archPopulated = $true }
+
     $archDoc = Join-Path $archDir 'architecture.md'
     if (Test-Path -LiteralPath $archDoc) {
         $archDocLen = (Get-Item -LiteralPath $archDoc).Length
         if ($archDocLen -lt 2048) {
             Add-Warning "architecture/architecture.md is suspiciously thin ($archDocLen bytes < 2 KB); it should be a mature Architecture Document, not a stub."
         }
+    }
+    elseif ($archPopulated) {
+        Add-Error "architecture/ is populated but architecture/architecture.md (the Architecture Document) is missing. Create it with narrative + embedded mermaid (see .KCC/kernel/protocols/architecture-documentation.md)."
     }
 
     $adrsDir = Join-Path $archDir 'adrs'

@@ -247,11 +247,23 @@ if [[ -d "$REPO_ROOT/architecture" ]]; then
     add_error "Deprecated architecture format: architecture/diagrams/ folder exists. Use named .md diagram files with embedded inline mermaid (see .KCC/kernel/protocols/architecture-documentation.md)."
   fi
 
+  for readme_name in README.md readme.md; do
+    if [[ -f "$REPO_ROOT/architecture/$readme_name" ]]; then
+      add_error "Forbidden architecture format: architecture/$readme_name exists. The Architecture Document is architecture.md (narrative + embedded mermaid), not a README hub (see .KCC/kernel/protocols/architecture-documentation.md)."
+    fi
+  done
+
+  arch_populated=0
+  if [[ -n "$(find "$REPO_ROOT/architecture" -type f -name '*.md' ! -name '.gitkeep' -print 2>/dev/null | head -n 1)" ]]; then arch_populated=1; fi
+  if [[ -n "$mmd_found" ]]; then arch_populated=1; fi
+
   if [[ -f "$REPO_ROOT/architecture/architecture.md" ]]; then
     arch_size="$(wc -c < "$REPO_ROOT/architecture/architecture.md" | tr -d '[:space:]')"
     if (( arch_size < 2048 )); then
       add_warning "architecture/architecture.md is suspiciously thin ($arch_size bytes < 2 KB); it should be a mature Architecture Document, not a stub."
     fi
+  elif (( arch_populated == 1 )); then
+    add_error "architecture/ is populated but architecture/architecture.md (the Architecture Document) is missing. Create it with narrative + embedded mermaid (see .KCC/kernel/protocols/architecture-documentation.md)."
   fi
 
   has_adrs=0

@@ -174,6 +174,10 @@ The same verbatim text is stored in the `source_prompt:` frontmatter field of
 
 ## Related
 
+- Specs index: [[../../specs/IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs]]
+  (**required wikilink once specs exist** - this is the downward idea->specs edge
+  that connects the Obsidian graph; the conformance gate checks for it. The specs
+  index links back up; the idea must link down).
 - All ideas: [[../ideas|Ideas MOC]]
 - Source protocol: [[../../.KCC/kernel/protocols/idea-layout]]
 ````

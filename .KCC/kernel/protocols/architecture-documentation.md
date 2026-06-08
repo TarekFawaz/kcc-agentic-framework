@@ -43,10 +43,15 @@ link-hub. **Never** a sub-1KB stub that just points at diagram files.
 
 - `architecture/architecture.md` IS the **Architecture Document** (a readable
   design document), not a MOC / link hub.
+- **There is no `architecture/README.md`.** The Architecture Document is
+  `architecture.md`; a `README.md` hub that just lists files is forbidden (it
+  was the blog-pilot drift). The mechanical conformance gate flags it.
 - Each spec's `arch.md` IS a real **per-spec design document** that embeds the
   spec's slice of the design inline, not a link stub.
 
-Two rules make this concrete and are enforced by the verifier:
+These rules make this concrete and are enforced by the verifier and by the
+mechanical `check-run-conformance` gate (no README hub, no `.mmd`, embedded
+diagrams):
 
 - **Embed rule.** Every diagram referenced in a document appears as an inline
   fenced ```mermaid``` block with a `Source: [[file]]` citation line directly

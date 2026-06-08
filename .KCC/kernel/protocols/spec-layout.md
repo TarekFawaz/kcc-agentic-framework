@@ -228,11 +228,17 @@ is to this file, never directly to the idea.)
 
 ## Architecture
 
-- Technical decision brief: {link or "Not required"}
-- ADRs: {links or "None yet"}
-- C4 diagrams: {links to Mermaid files or "Not required"}
+Use **wikilinks** only (never bare relative paths, never `architecture/README.md`
+- that file must not exist; the Architecture Document is `architecture.md`):
+
+- Architecture Document: [[../../../architecture/architecture]]
+- Technical decision brief: {wikilink or "Not required"}
+- ADRs: {wikilinks to `[[../../../architecture/adrs/ADR-...]]` or "None yet"}
 - Guardrails: [[../../../architecture/guardrails]]
 - Quality gates: [[../../../architecture/quality-gates]]
+
+(Diagrams are embedded inline in `architecture.md` and the spec's `arch.md` -
+there are no standalone `.mmd` diagram files to link.)
 
 ## Risks
 - {Risk} - {mitigation}

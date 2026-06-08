@@ -69,8 +69,13 @@ set.
      [[../../kernel/templates/spec-arch|spec-arch.md]], then fill it.
    This deterministic scaffold guarantees the Architecture Document is a real
    document (not a thin stub) and that diagrams are embedded inline. **Never
-   produce `.mmd` files; never create an `architecture/diagrams/` folder**
-   (both deprecated) - diagram sources are named `.md` files embedded inline.
+   produce `.mmd` files; never create an `architecture/diagrams/` folder; never
+   create an `architecture/README.md`** (all deprecated/forbidden) - the
+   Architecture Document is `architecture/architecture.md`, and diagram sources
+   are named `.md` files embedded inline. The orchestrator runs a mechanical
+   architecture-conformance gate (`check-run-conformance -Scope architecture`,
+   CR-14 in [[../skills/auto|auto]]) before spec creation; output that emits
+   `.mmd`, a README hub, or a stub `architecture.md` will be routed back to you.
 1. **Orient.** Read root project instructions (`CLAUDE.md` or `AGENTS.md`) and:
    - [[.KCC/kernel/protocols/architecture-governance]]
    - [[.KCC/kernel/protocols/architecture-documentation]]

@@ -67,6 +67,14 @@ still records what happened.
    least one entry; "no new entries" must be RARE and justified, not the
    default. Tracing is full telemetry; memory is curated reuse - do not conflate
    them.
+
+   **Gate resolutions become memory.** Whenever this remember turn follows a
+   `/critical-human-gate` resolution (confidence, ROI, budget, prohibited
+   assumption, or toolchain), write the chosen option + rationale as a
+   `decision` entry. A freeform note in `memory/memory.md` is **not** an entry -
+   only `memory-append`-written `memory/{type}/{ID}.md` files count, and the
+   run-close conformance gate (MEM-001) fails an empty `memory/` after a
+   substantive run.
 6. **Confirm the `remember-stored` backchannel event was emitted.** The butler
    emits it via `.KCC/tools/backchannel-append.ps1 -Kind remember-stored
    -From butler ...` on EVERY remember turn - including the rare "0 entries"

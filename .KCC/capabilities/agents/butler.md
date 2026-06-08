@@ -216,6 +216,18 @@ Decide which mode you are in from the invocation. The four modes
    Drop only true trivia: restatements of existing entries, one-off mechanical
    steps, and content already in CLAUDE.md or the spec. When a candidate is
    genuinely borderline, prefer storing a tight entry over losing the signal.
+
+   **A freeform note appended to `memory/memory.md` is NOT a memory entry.** Every
+   qualifying item MUST become a structured `memory/{type}/{ID}.md` written by
+   `memory-append` (step 4); `memory.md` and `index.json` are updated *by the
+   helper*, not by you. **Under `--silent --assume[ --parallel]` the "0 entries"
+   escape is almost never valid:** any run that produced architecture/ADRs,
+   selected a tech stack, created specs, or resolved a human gate has at least one
+   `decision` (and usually a `preference`) to record. Emitting `remember-stored`
+   with `entry_ids=none` after such a run is a conformance violation (MEM-001),
+   not a clean outcome. The blog pilot regressed exactly this way: it emitted
+   `remember-stored` but wrote one prose blob into `memory.md` and zero `DEC-*`/
+   `PRE-*` files.
 4. For each retained item, **write it via the deterministic helper - do NOT
    hand-author the entry file, index record, or MOC row**:
    - Choose the entry type per `memory/schema.md` using the routing table above.

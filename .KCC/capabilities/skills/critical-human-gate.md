@@ -58,7 +58,10 @@ accuracy/confidence gate otherwise.
    - escalate
    - abort
 5. Record the decision in `Traces/Session-*/HumanDecisions.md` when a trace
-   folder exists and append `human-gate-resolved` to the backchannel.
+   folder exists and append `human-gate-resolved` to the backchannel. **Also
+   persist it as memory:** on the next `/butler-remember`, the resolution (chosen
+   option + rationale + gate context) must be written as a `decision` entry via
+   `memory-append` - gate decisions are durable knowledge, not just trace lines.
 6. Route based on the decision:
    - approve: continue the lifecycle.
    - revise: return to the triggering agent with corrections.

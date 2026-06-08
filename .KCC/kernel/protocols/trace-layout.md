@@ -176,6 +176,14 @@ All seven exist from the moment the session starts (copied as stubs from
 via `butler-remember` as the session progresses; it never rewrites prior
 entries.
 
+**These exact seven filenames are mandatory and non-negotiable.** Inventing a
+different scheme (e.g. `AgentReports.md`, `Summary.md`, `OpenQuestions.md`) in
+their place is a conformance failure - the run-close gate
+(`check-run-conformance`, TRACE-001) checks for the seven by name. Extra files
+are allowed only as **additions** alongside the seven, never as substitutes, and
+the seven must be genuinely populated (the blog pilot shipped custom files and
+omitted `Decisions.md`/`Handovers.md`/`HumanActions.md`/`TokenUsage.md`).
+
 ## TokenUsage actuals contract
 
 Every model-backed agent turn must return a compact token-usage block for
