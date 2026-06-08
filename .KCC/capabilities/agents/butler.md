@@ -183,6 +183,15 @@ Decide which mode you are in from the invocation. The four modes
      with the actual counts, `source`, and `estimate_event_id`; when
      `source: unavailable`, still emit `actual-recorded` with that source and
      the `unavailable_reason` so the missing accounting is visible.
+
+     **Reality check:** most harnesses (Claude Code, Codex) do **not** expose
+     per-turn usage to the agent, so per-turn `ActualTokenUsage` blocks are
+     usually `source: unavailable`. The authoritative **session-total**
+     `harness-reported` row is produced separately by
+     `.KCC/tools/record-token-actuals.{ps1,sh}` (the Claude Code `SessionEnd`
+     hook) parsing the transcript. At run close, ensure that row exists (or a
+     `manual-meter` / `unavailable` row) and let Token Guard Mode D reconcile it -
+     do not treat the absence of per-turn actuals as "nothing to record".
    Each append is timestamped (ISO-8601) and names the agent whose turn it was.
    Update the per-session MOC `session-{slug}-{datetime}.md` (links + running
    summary) and the session's row in `Traces/traces.md`. This is the **trace**

@@ -598,6 +598,13 @@ confirmation, and budget gate.
       (`Decisions.md`, `Handovers.md`, `Actions.md`, `ToolsUsed.md`,
       `HumanActions.md`, `HumanDecisions.md`, `TokenUsage.md`) - copied from
       `_session-template/`. Custom files are additive, not substitutes.
+    - **Token actuals (TOKEN-001).** `TokenUsage.md` must carry at least one
+      *actual* row (not estimates only). On Claude Code the `SessionEnd` hook
+      writes a `harness-reported` row automatically at session end; if the run
+      ends inside `auto` before that fires, or on a harness without the hook, run
+      `.KCC/tools/record-token-actuals.{ps1,sh}` explicitly - `-ManualTotal` when
+      a metered count is known, else `-Unavailable -Reason ...`. Then run Token
+      Guard **Mode D** to reconcile estimate-vs-actual and feed calibration.
     - **No silent mid-pipeline halt.** A run either completes its lifecycle
       (through `/spec-review` for each in-scope spec) or records an explicit stop
       reason in `Decisions.md` and as a backchannel event - it must never just

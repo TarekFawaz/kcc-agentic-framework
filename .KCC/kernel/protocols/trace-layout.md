@@ -222,10 +222,22 @@ When `source` is `unavailable`, `unavailable_reason` is required, for example:
 `codex-cli-did-not-expose-usage`. Token Guard uses these rows for transparency
 but excludes them from calibration math.
 
-After Butler appends a row with actual counts, Token Guard emits
-`actual-recorded` to the backchannel, linking the `estimate_event_id` where
-available. If the row is unavailable, Token Guard may still emit
-`actual-recorded` with `source: "unavailable"` so the gap is auditable.
+**Producer of `harness-reported` rows: `.KCC/tools/record-token-actuals.{ps1,sh}`.**
+Agents cannot see their own usage mid-session, so actuals are captured *after*
+the fact: on Claude Code a `SessionEnd` hook runs this tool, which parses the
+transcript's per-message `message.usage` and appends one **session-total**
+`harness-reported` row here (input = `input_tokens + cache_creation`; output =
+`output_tokens`; `cache_read` recorded separately as `actual_cache_read_tokens`).
+The same tool provides `manual-meter` (human/billing counts) and `unavailable`
+(honest no-accounting) modes for other harnesses. Without this producer the
+actuals pipeline is dead - estimates only.
+
+After a row with actual counts exists (written by the tool, or by Butler), Token
+Guard Mode D emits `actual-recorded` to the backchannel, linking the
+`estimate_event_id` where available. If the row is unavailable, `actual-recorded`
+is still emitted with `source: "unavailable"` so the gap is auditable. (The tool
+itself also emits `actual-recorded` when it writes the row, so a non-`auto`
+session still produces the event.)
 
 ---
 

@@ -1094,7 +1094,26 @@ $obsidianBlock
         [void]$report.Files.Add($outPath)
     }
 
-    [void]$report.Notes.Add('.claude/settings.json is hand-edited and was not touched.')
+    # Seed .claude/settings.json from the kernel template ONLY when absent
+    # (so new cells get the token-actuals SessionEnd hook + base hooks/perms).
+    # Never overwrite an existing, hand-edited settings.json.
+    $claudeSettings = Join-Path $Root '.claude/settings.json'
+    if (-not (Test-Path -LiteralPath $claudeSettings)) {
+        $settingsTemplate = Join-Path $Root '.KCC/kernel/templates/claude-settings.json'
+        if (Test-Path -LiteralPath $settingsTemplate) {
+            $tplContent = Get-Content -LiteralPath $settingsTemplate -Raw
+            Write-Utf8File -Path $claudeSettings -Content $tplContent
+            Write-Host "[claude   ] [config] $claudeSettings (seeded from template)"
+            [void]$report.Files.Add($claudeSettings)
+            [void]$report.Notes.Add('.claude/settings.json was absent and seeded from kernel template (includes the token-actuals SessionEnd hook).')
+        }
+        else {
+            [void]$report.Notes.Add('.claude/settings.json is absent and no template was found to seed it.')
+        }
+    }
+    else {
+        [void]$report.Notes.Add('.claude/settings.json is hand-edited and was not touched.')
+    }
     return $report
 }
 

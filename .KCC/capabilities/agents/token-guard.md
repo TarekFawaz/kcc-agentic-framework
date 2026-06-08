@@ -308,8 +308,12 @@ and only tightens once a real spec exists for Mode A to anchor against.
 
 ### Mode D - actual-token ingestion + estimate-vs-actual (input: TokenUsage.md row or session path)
 
-Use this mode after Butler has appended token usage rows to
-`Traces/Session-*/TokenUsage.md`. Each row carries the returning agent's
+Use this mode after actual token usage rows exist in
+`Traces/Session-*/TokenUsage.md`. The **producer** of `harness-reported` rows is
+`.KCC/tools/record-token-actuals.{ps1,sh}` (run by the Claude Code `SessionEnd`
+hook; `manual-meter` / `unavailable` for other harnesses) - agents cannot self-
+report usage mid-session, so do not expect an agent turn to carry real counts.
+Each row carries the
 `ActualTokenUsage` block per
 [[../../kernel/contracts/agent-contract|agent-contract]]
 (`actual_input_tokens`, `actual_output_tokens`, `actual_total_tokens`,

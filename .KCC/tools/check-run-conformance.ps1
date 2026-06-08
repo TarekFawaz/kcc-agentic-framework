@@ -44,7 +44,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [string]$RepoRoot,
-    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory')]
+    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory', 'token')]
     [string]$Scope = 'all',
     [switch]$Json
 )
@@ -238,10 +238,34 @@ function Invoke-MemoryChecks {
     }
 }
 
+# ---------------------------------------------------------------------------
+# TOKEN ACTUALS
+# ---------------------------------------------------------------------------
+function Invoke-TokenChecks {
+    if (-not (Test-Path -LiteralPath $tracesDir)) { return }
+    # Only judge substantive runs (ADRs or specs produced).
+    $hasArch = (Test-Path -LiteralPath $archDir) -and (@(Get-ChildItem -LiteralPath $archDir -Recurse -File -Filter '*.md' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne '.gitkeep' }).Count -gt 0)
+    $hasSpecs = (Test-Path -LiteralPath $specsDir) -and (@(Get-ChildItem -LiteralPath $specsDir -Recurse -File -Filter 'SPEC-*.md' -ErrorAction SilentlyContinue).Count -gt 0)
+    if (-not ($hasArch -or $hasSpecs)) { return }
+
+    $sessions = @(Get-ChildItem -LiteralPath $tracesDir -Directory -Filter 'Session-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    if ($sessions.Count -eq 0) { return }
+    $tokenFile = Join-Path $sessions[0].FullName 'TokenUsage.md'
+    if (-not (Test-Path -LiteralPath $tokenFile)) {
+        Add-Violation 'TOKEN-001' 'error' 'butler' ("Trace session {0} has no TokenUsage.md. Record actuals via record-token-actuals (SessionEnd hook / -ManualTotal / -Unavailable)." -f $sessions[0].Name)
+        return
+    }
+    $t = Read-Text $tokenFile
+    if ($t -notmatch '(?m)^\s*source:\s*(harness-reported|api-usage|manual-meter|unavailable)') {
+        Add-Violation 'TOKEN-001' 'error' 'butler' ("TokenUsage.md in {0} has estimates only - no actual row (source: harness-reported|api-usage|manual-meter|unavailable). Run record-token-actuals at session end." -f $sessions[0].Name)
+    }
+}
+
 if ($Scope -eq 'all' -or $Scope -eq 'architecture') { Invoke-ArchitectureChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'linking') { Invoke-LinkingChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'trace') { Invoke-TraceChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'memory') { Invoke-MemoryChecks }
+if ($Scope -eq 'all' -or $Scope -eq 'token') { Invoke-TokenChecks }
 
 $errors = @($violations | Where-Object { $_.severity -eq 'error' })
 $warnings = @($violations | Where-Object { $_.severity -eq 'warning' })

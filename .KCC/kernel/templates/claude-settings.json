@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": "implementer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"[HOOK] Implementer starting. Branch: $(git branch --show-current). Uncommitted: $(git status --porcelain | wc -l) files\"'"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"%CLAUDE_PROJECT_DIR%\\.KCC\\tools\\record-token-actuals.ps1\" -FromHookStdin"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git branch*)",
+      "Bash(git status*)",
+      "Read",
+      "Glob",
+      "Grep"
+    ]
+  }
+}

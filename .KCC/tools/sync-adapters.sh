@@ -571,6 +571,20 @@ sync_claude() {
     } > "$skills_out/$name/SKILL.md"
     echo "[claude   ] [skill ] $skills_out/$name/SKILL.md"
   done < <(find "$SKILLS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+
+  # Seed .claude/settings.json from the kernel template ONLY when absent
+  # (new cells get the token-actuals SessionEnd hook). Never overwrite a
+  # hand-edited settings.json.
+  local claude_settings="$REPO_ROOT/.claude/settings.json"
+  local settings_tpl="$REPO_ROOT/.KCC/kernel/templates/claude-settings.json"
+  if [[ ! -f "$claude_settings" ]]; then
+    if [[ -f "$settings_tpl" ]]; then
+      cp "$settings_tpl" "$claude_settings"
+      echo "[claude   ] [config] $claude_settings (seeded from template)"
+    fi
+  else
+    echo "[claude   ] [config] $claude_settings is hand-edited and was not touched."
+  fi
 }
 
 sync_codex() {

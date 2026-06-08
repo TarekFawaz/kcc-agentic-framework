@@ -148,6 +148,26 @@ check_trace() {
   done
 }
 
+check_token() {
+  [ -d "$TRACES_DIR" ] || return 0
+  local has_arch=0 has_specs=0
+  if [ -d "$ARCH_DIR" ] && [ "$(find "$ARCH_DIR" -type f -name '*.md' ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then has_arch=1; fi
+  if [ -d "$SPECS_DIR" ] && [ "$(find "$SPECS_DIR" -type f -name 'SPEC-*.md' 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then has_specs=1; fi
+  [ "$has_arch" -eq 1 ] || [ "$has_specs" -eq 1 ] || return 0
+
+  local latest
+  latest="$(find "$TRACES_DIR" -maxdepth 1 -type d -name 'Session-*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
+  [ -n "$latest" ] || return 0
+  local tf="$latest/TokenUsage.md"
+  if [ ! -f "$tf" ]; then
+    violation "TOKEN-001" "error" "butler" "Trace session $(basename "$latest") has no TokenUsage.md. Record actuals via record-token-actuals (SessionEnd hook / --manual-total / --unavailable)."
+    return 0
+  fi
+  if ! grep -qE '^[[:space:]]*source:[[:space:]]*(harness-reported|api-usage|manual-meter|unavailable)' "$tf"; then
+    violation "TOKEN-001" "error" "butler" "TokenUsage.md in $(basename "$latest") has estimates only - no actual row. Run record-token-actuals at session end."
+  fi
+}
+
 check_memory() {
   [ -d "$MEMORY_DIR" ] || return 0
   local has_arch=0 has_specs=0
@@ -167,11 +187,12 @@ echo "KCC run conformance: $REPO_ROOT  (scope: $SCOPE)"
 echo ""
 
 case "$SCOPE" in
-  all) check_architecture; check_linking; check_trace; check_memory ;;
+  all) check_architecture; check_linking; check_trace; check_memory; check_token ;;
   architecture) check_architecture ;;
   linking) check_linking ;;
   trace) check_trace ;;
   memory) check_memory ;;
+  token) check_token ;;
   *) echo "unknown scope: $SCOPE" >&2; exit 2 ;;
 esac
 

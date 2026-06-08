@@ -277,6 +277,7 @@ Use the folder-note shape in [[.KCC/kernel/protocols/spec-layout]]. It must incl
 
 Use the backlog shape in [[.KCC/kernel/protocols/spec-layout]]. It must include:
 
+- Link to the parent spec `SPEC-{ID}-{slug}.md`
 - Backlog summary table.
 - Links to one file per story under `Backlog/` (e.g. `[[Backlog/Story-001-...]]`).
 - Links to one file per enabler under `Backlog/`.
