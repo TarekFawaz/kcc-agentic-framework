@@ -62,6 +62,16 @@ case "$HARNESS" in
 esac
 
 if (( SANDBOX == 1 )); then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "error: docker not found on PATH. Install Docker, or run without --sandbox." >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "error: Docker is installed but the daemon is not reachable (is Docker Desktop / the engine running?)." >&2
+    echo "       Start Docker and retry, or run without --sandbox:" >&2
+    echo "         .KCC/tools/start-agent-session.sh --agent $AGENT --harness $HARNESS" >&2
+    exit 1
+  fi
   dockerfile="$REPO_ROOT/.KCC/sandbox/Dockerfile.$HARNESS"
   [[ -f "$dockerfile" ]] || dockerfile="$REPO_ROOT/.KCC/sandbox/Dockerfile.generic"
   image="kcc-${HARNESS}-agent:local"

@@ -136,10 +136,37 @@ function ConvertTo-DockerMountPath {
     return ($WindowsPath -replace '\\', '/')
 }
 
+function Test-DockerDaemon {
+    # Returns $true only when the Docker daemon is reachable. Runs under a local
+    # SilentlyContinue + try/catch so a down daemon's stderr never becomes a
+    # terminating NativeCommandError (PS 5.1 promotes native stderr to errors
+    # under ErrorActionPreference='Stop').
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        & docker info 1>$null 2>$null
+        $ok = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prev
+        return $ok
+    } catch {
+        $ErrorActionPreference = $prev
+        return $false
+    }
+}
+
 function Test-DockerImageExists {
     param([Parameter(Mandatory)][string]$Tag)
-    $null = & docker image inspect $Tag 2>$null
-    return ($LASTEXITCODE -eq 0)
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        & docker image inspect $Tag 1>$null 2>$null
+        $ok = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prev
+        return $ok
+    } catch {
+        $ErrorActionPreference = $prev
+        return $false
+    }
 }
 
 function Invoke-SandboxBuild {
@@ -283,7 +310,17 @@ if ($useSandbox) {
 
     $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
     if (-not $dockerCmd) {
-        throw "docker not found on PATH. Install Docker Desktop (Windows/macOS) or Docker Engine (Linux)."
+        throw "docker not found on PATH. Install Docker Desktop (Windows/macOS) or Docker Engine (Linux), or run without -Sandbox."
+    }
+
+    if (-not (Test-DockerDaemon)) {
+        Write-Host ''
+        Write-Host 'Docker is installed but the daemon is not reachable (e.g. Docker Desktop is not running).' -ForegroundColor Yellow
+        Write-Host 'Sandbox mode needs a running Docker engine. Options:'
+        Write-Host '  - Start Docker Desktop (or the Docker engine) and re-run this command, or'
+        Write-Host '  - Run without -Sandbox to launch a normal local session:'
+        Write-Host ("      .KCC\tools\start-agent-session.ps1 -Agent {0} -Harness {1}" -f $Agent, $Harness)
+        exit 1
     }
 
     if (-not (Test-DockerImageExists -Tag $imageTag)) {
