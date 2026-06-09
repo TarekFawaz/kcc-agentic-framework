@@ -54,7 +54,7 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
 cd my-project
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claudecode
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claude
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
 ```
