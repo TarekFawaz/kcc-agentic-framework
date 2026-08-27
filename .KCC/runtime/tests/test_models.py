@@ -54,7 +54,7 @@ def test_dependency_status_values_pinned() -> None:
     assert [member.value for member in DependencyStatus] == [
         "USER_MUST_PROVIDE",
         "ALREADY_EXISTS",
-        "AUTO_PROVISION_AFTER_LOCK",
+        "AUTO_PROVISION_AUTHORIZED",
         "NOT_REQUIRED",
     ]
 
