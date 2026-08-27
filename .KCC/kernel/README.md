@@ -101,3 +101,11 @@ docs/
 
 No command output, traces, generated source code, or project documentation
 should be written under `.KCC/kernel/`.
+
+## Deterministic Autobuild Runtime
+
+`.KCC/runtime/` contains executable control-plane support for the optional
+`autobuild` workflow: schemas, durable state, lifecycle validation, budgets,
+leases, policy evaluation, evidence verification, and local API/CLI code.
+Generated run state remains at `coordination/autobuild/<RUN-ID>/`; `.KCC/runtime/`
+is source code only.

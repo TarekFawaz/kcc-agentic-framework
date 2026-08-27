@@ -142,3 +142,9 @@ TestResults/*
 migrations/*
 /CLAUDE.md
 /AGENTS.md
+
+.KCC/runtime/.venv/
+.KCC/runtime/**/__pycache__/
+.KCC/runtime/**/*.pyc
+coordination/autobuild/**/run.db-wal
+coordination/autobuild/**/run.db-shm
