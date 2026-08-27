@@ -16,6 +16,15 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+RUN_ID_PATTERN = r"^RUN-[A-Za-z0-9][A-Za-z0-9-]*$"
+"""Canonical run identity pattern (single source of truth for the CLI).
+
+A run id must start with RUN- followed by an alphanumeric character and
+any mix of alphanumerics and single hyphens; directory traversal or other
+separators are rejected before any coordination artifact exists.
+"""
+
+
 class StrictModel(BaseModel):
     """Base model with strict extra/assignment validation."""
 
@@ -70,7 +79,7 @@ class DependencyStatus(str, Enum):
 
     USER_MUST_PROVIDE = "USER_MUST_PROVIDE"
     ALREADY_EXISTS = "ALREADY_EXISTS"
-    AUTO_PROVISION_AUTHORIZED = "AUTO_PROVISION_AUTHORIZED"
+    AUTO_PROVISION_AFTER_LOCK = "AUTO_PROVISION_AFTER_LOCK"
     NOT_REQUIRED = "NOT_REQUIRED"
 
 
@@ -100,7 +109,7 @@ class RunRecord(StrictModel):
     so run timestamps are unambiguous when hashed or persisted.
     """
 
-    run_id: str = Field(pattern=r"^RUN-[A-Za-z0-9][A-Za-z0-9-]*$")
+    run_id: str = Field(pattern=RUN_ID_PATTERN)
     title: str
     created_at: datetime
     state: LifecycleState = LifecycleState.INTAKE

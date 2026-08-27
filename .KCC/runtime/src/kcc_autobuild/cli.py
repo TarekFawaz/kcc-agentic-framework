@@ -13,12 +13,13 @@ failures are never swallowed into exit 0.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
 
-from kcc_autobuild.models import LifecycleState, RunRecord
+from kcc_autobuild.models import RUN_ID_PATTERN, LifecycleState, RunRecord
 from kcc_autobuild.store import RunStore
 
 app = typer.Typer(no_args_is_help=True)
@@ -27,6 +28,28 @@ app = typer.Typer(no_args_is_help=True)
 def db_for(repo_root: Path, run_id: str) -> Path:
     """Return the ``run.db`` path for a run under a repository root."""
     return repo_root / "coordination" / "autobuild" / run_id / "run.db"
+
+
+def validate_run_id(run_id: str) -> None:
+    """Reject run ids that do not match the canonical identity pattern.
+
+    Runs before any RunStore/db_for use so an invalid identity can never
+    create a coordination directory or database.
+    """
+    if re.fullmatch(RUN_ID_PATTERN, run_id) is None:
+        raise typer.BadParameter(
+            f"invalid run_id {run_id!r}; must match {RUN_ID_PATTERN}"
+        )
+
+
+def require_existing_run_db(db_path: Path, run_id: str) -> None:
+    """Fail if the run database does not exist (never create-on-read)."""
+    if not db_path.exists():
+        typer.echo(
+            f"error: run {run_id!r} not found (no database at {db_path})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 def deterministic_json(model: RunRecord) -> str:
@@ -43,6 +66,7 @@ def init_run(
     ),
 ) -> None:
     """Create an autobuild run in INTAKE and print its record as JSON."""
+    validate_run_id(run_id)
     store = RunStore(db_for(repo_root, run_id))
     try:
         record = RunRecord(
@@ -64,7 +88,10 @@ def show_run(
     ),
 ) -> None:
     """Load an existing run and print its record as deterministic JSON."""
-    store = RunStore(db_for(repo_root, run_id))
+    validate_run_id(run_id)
+    run_db = db_for(repo_root, run_id)
+    require_existing_run_db(run_db, run_id)
+    store = RunStore(run_db)
     try:
         typer.echo(deterministic_json(store.load_run(run_id)))
     finally:
@@ -87,7 +114,10 @@ def transition(
     ),
 ) -> None:
     """Transition a run to target; non-zero exit if the transition is invalid."""
-    store = RunStore(db_for(repo_root, run_id))
+    validate_run_id(run_id)
+    run_db = db_for(repo_root, run_id)
+    require_existing_run_db(run_db, run_id)
+    store = RunStore(run_db)
     try:
         store.transition(run_id, expected=expected, target=target, reason=reason)
         typer.echo(deterministic_json(store.load_run(run_id)))
