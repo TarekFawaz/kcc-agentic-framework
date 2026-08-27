@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kcc-autobuild-runtime"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.8,<3",
+    "PyYAML>=6,<7",
+    "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+kcc-autobuild = "kcc_autobuild.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
