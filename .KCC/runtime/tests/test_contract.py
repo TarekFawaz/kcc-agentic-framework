@@ -174,6 +174,7 @@ def _tier1(**kwargs: object) -> Tier1Invariants:
         "definition_of_done": (
             "analysis output is produced end to end and validated in staging"
         ),
+        "definition_of_done_ids": ["PROD-001"],
     }
     defaults.update(kwargs)
     return Tier1Invariants(**defaults)
@@ -717,6 +718,61 @@ def test_lock_succeeds_with_production_target() -> None:
     locked = lock_contract(contract, now=NOW)
     assert locked.contract_hash == tier1_canonical_hash(contract)
     assert locked.tier1.rollout_class is RolloutClass.CANARY
+
+
+# ---------------------------------------------------------------------------
+# Outcome-based Definition of Done (Plan 05, Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_tier1_requires_definition_of_done_ids() -> None:
+    """The outcome-based DoD set is mandatory (spec 21).
+
+    The default Definition of Done is outcome-based: a contract that
+    names no production outcome cannot be locked -- the DONE gate would
+    have no locked outcomes to require.
+    """
+    with pytest.raises(ValidationError):
+        _tier1(definition_of_done_ids=[])
+    fields = _tier1().model_dump()
+    del fields["definition_of_done_ids"]
+    with pytest.raises(ValidationError):
+        Tier1Invariants(**fields)  # type: ignore[arg-type]
+
+
+def test_tier1_rejects_blank_definition_of_done_id() -> None:
+    with pytest.raises(ValidationError):
+        _tier1(definition_of_done_ids=["PROD-001", "  "])
+
+
+def test_tier1_rejects_duplicate_definition_of_done_ids() -> None:
+    with pytest.raises(ValidationError):
+        _tier1(definition_of_done_ids=["PROD-001", "PROD-001"])
+
+
+def test_definition_of_done_ids_are_locked_tier1_invariants() -> None:
+    """The production-outcome set that gates DONE is part of the
+    canonical Tier-1 hash (R7): changing it requires a contract
+    revision and a fresh lock."""
+    locked = lock_contract(_contract(), now=NOW)
+    assert locked.tier1.definition_of_done_ids == ["PROD-001"]
+    assert locked.contract_hash == tier1_canonical_hash(locked)
+
+    other = lock_contract(
+        _contract(tier1=_tier1(definition_of_done_ids=["PROD-999"])), now=NOW
+    )
+    assert other.contract_hash != locked.contract_hash
+
+
+def test_tier1_requires_rollback_evidence_defaults_off_and_locks() -> None:
+    """Rollback evidence is only required when the contract explicitly
+    locks the requirement (spec 21); the default is off."""
+    tier1 = _tier1()
+    assert tier1.requires_rollback_evidence is False
+    locked = lock_contract(
+        _contract(tier1=_tier1(requires_rollback_evidence=True)), now=NOW
+    )
+    assert locked.tier1.requires_rollback_evidence is True
 
 
 # ---------------------------------------------------------------------------

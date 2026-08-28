@@ -143,6 +143,7 @@ def _contract(**tier1_overrides: object) -> BuildContract:
         "definition_of_done": (
             "analysis output is produced end to end and validated in staging"
         ),
+        "definition_of_done_ids": ["PROD-999"],
     }
     defaults.update(tier1_overrides)
     return BuildContract(

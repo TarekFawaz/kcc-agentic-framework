@@ -694,6 +694,7 @@ def _locked_real_contract(
             definition_of_done=(
                 "analysis output is produced end to end and validated in staging"
             ),
+            definition_of_done_ids=["PROD-001"],
         ),
         trace=_real_trace(),
         readiness=_real_readiness(),

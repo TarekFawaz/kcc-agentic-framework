@@ -63,7 +63,8 @@ def test_transition_missing_does_not_create_database(tmp_path):
             "  product_scope: demo\n"
             "  authority: {}\n"
             "  money: {}\n"
-            "  definition_of_done: demo done\n",
+            "  definition_of_done: demo done\n"
+            "  definition_of_done_ids: [PROD-001]\n",
         ),
         (
             "prototype",

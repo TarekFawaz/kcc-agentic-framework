@@ -359,8 +359,9 @@ class Tier1Invariants(StrictModel):
 
     Every material decision that a Tier-1 change would revise lives
     here — including the authority envelope, money policy and
-    destructive-action policy of sections 14.3-14.5 — so the canonical
-    hash (R7) covers exactly the locked content.
+    destructive-action policy of sections 14.3-14.5, the production
+    deployment surface and the outcome-based Definition of Done — so the
+    canonical hash (R7) covers exactly the locked content.
     """
 
     product_scope: str
@@ -381,11 +382,33 @@ class Tier1Invariants(StrictModel):
     production_target: str | None = None
     rollout_class: RolloutClass | None = None
     definition_of_done: str
+    definition_of_done_ids: list[str]
+    requires_rollback_evidence: bool = False
 
     @field_validator("product_scope", "definition_of_done")
     @classmethod
     def _required_text(cls, value: str, info: ValidationInfo) -> str:
         return _require_nonempty(value, info.field_name)
+
+    @field_validator("definition_of_done_ids")
+    @classmethod
+    def _definition_of_done_ids_required_and_unique(
+        cls, value: list[str]
+    ) -> list[str]:
+        """The production-outcome set that gates DONE (spec 21).
+
+        The default Definition of Done is outcome-based, so the locked
+        contract must name at least one production validation outcome;
+        the set is unique and every entry non-empty.
+        """
+        unique = _unique_strings(value, "definition_of_done_ids")
+        if not unique:
+            raise ValueError(
+                "definition_of_done_ids must name at least one "
+                "production outcome (the Definition of Done is "
+                "outcome-based, spec 21)"
+            )
+        return unique
 
     @field_validator("non_goals", "primary_user_journeys")
     @classmethod

@@ -74,6 +74,12 @@ tier1:
       classification: IRREVERSIBLE_WHITELISTED
       backup_required: true
   definition_of_done: "An operator can upload a PDF, read the reviewed summary and export it on the deployed system."
+  # The production outcomes that gate DONE (spec 21): the outcome-based
+  # Definition of Done is met only when every one of these production
+  # validations is executed and traced.
+  definition_of_done_ids:
+    - PROD-001
+  requires_rollback_evidence: true
 tier2:
   component_boundaries:
     - "cli / upload / summarize / export"
