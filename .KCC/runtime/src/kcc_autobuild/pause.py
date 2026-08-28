@@ -51,9 +51,25 @@ The behavioral contract is owned by :file:`.KCC/runtime/tests/test_pause.py`:
   :class:`ResumeRevalidationError` carries the findings (persisted as
   ``run.resume_rejected``).
 
-All timestamps are timezone-aware UTC (R7 discipline); no wall clock is
-read unless one is handed in; identical input always yields identical
+All timestamps are timezone-aware UTC (R7 discipline). ``now`` defaults to
+the wall clock when a caller does not hand one in (the tests always hand
+in a deterministic instant); identical input always yields identical
 output (the drain polls on a fixed interval, the task sets are sorted).
+Two additional fail-closed paths are guaranteed:
+
+- a **drain adapter failure mid-``pause``** never strands the run ``PAUSED``
+  without a checkpoint: the durable ``PAUSED`` transition happened first,
+  so the still-unresolved workers are fenced as hung at the pause instant,
+  the best-effort checkpoint is persisted, and
+  :class:`PauseDrainAdapterError` (carrying that checkpoint) is raised;
+- ``resume`` wraps the **whole mutation phase** (rebalance, resource
+  restore, lease mint, clock start, dispatch transitions) in one guarded
+  block: on any failure the minted leases are fenced, the started clocks
+  are refrozen and the restored resources are re-frozen, ``run.resume_
+  failed`` is persisted with the cleanup report, and
+  :class:`ResumeMutationError` is raised -- the run stays ``PAUSED`` and a
+  later resume retries from a clean ledger instead of wedging on an
+  abandoned live lease.
 """
 
 from __future__ import annotations
@@ -62,6 +78,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -76,7 +93,7 @@ from kcc_autobuild.contract import (
 )
 from kcc_autobuild.leases import Lease, LeaseLedger, LeaseStore
 from kcc_autobuild.models import RUN_ID_PATTERN, LifecycleState, RunEvent, StrictModel
-from kcc_autobuild.rate_limit import RateCapacityLedger
+from kcc_autobuild.rate_limit import RateCapacityLedger, RateDemand
 from kcc_autobuild.readiness import ReadinessPack, evaluate_readiness
 from kcc_autobuild.store import RunStore
 
@@ -170,6 +187,49 @@ class ResumeRevalidationError(PauseError):
         failed = [f.check.value for f in revalidation.findings if not f.ok]
         super().__init__(
             "light resume revalidation failed: " + ", ".join(failed)
+        )
+
+
+class PauseDrainAdapterError(PauseError):
+    """A pause's drain adapter failed mid-drain (the pause stays durable).
+
+    The ``PAUSED`` transition and a *best-effort* checkpoint WERE
+    persisted -- every still-unresolved worker is fenced as hung at the
+    pause instant -- so the run is never left ``PAUSED`` without durable
+    pause state (spec 22). ``checkpoint`` carries that record;
+    ``__cause__`` the adapter failure.
+    """
+
+    def __init__(self, checkpoint: "PauseCheckpoint") -> None:
+        if not isinstance(checkpoint, PauseCheckpoint):
+            raise TypeError(
+                f"checkpoint must be a PauseCheckpoint, "
+                f"got {type(checkpoint).__name__}"
+            )
+        self.checkpoint = checkpoint
+        super().__init__(
+            "pause drain adapter failed; best-effort checkpoint persisted "
+            f"({len(checkpoint.tasks)} task(s), unresolved workers fenced)"
+        )
+
+
+class ResumeMutationError(PauseError):
+    """A resume aborted inside its guarded mutation phase (fail closed).
+
+    Every effect of the aborted attempt was rolled back (minted leases
+    fenced, started clocks refrozen, restored resources re-frozen) and the
+    failure was persisted as ``run.resume_failed``; the run stays ``PAUSED``
+    and a later resume retries from a clean ledger (never a lease conflict
+    with an abandoned live lease). ``cleanup`` is the rolled-back effect
+    report; ``__cause__`` the original mutation failure.
+    """
+
+    def __init__(self, cleanup: dict[str, list[str]]) -> None:
+        self.cleanup = cleanup
+        super().__init__(
+            "resume aborted inside its mutation phase; run stays PAUSED "
+            f"(fenced leases: {', '.join(cleanup['fenced_lease_ids']) or 'none'}, "
+            f"refrozen clocks: {', '.join(cleanup['refrozen_clocks']) or 'none'})"
         )
 
 
@@ -600,6 +660,36 @@ class ResumeRevalidation(StrictModel):
         return all(item.ok for item in self.findings)
 
 
+class ReservedRateDemand(StrictModel):
+    """One task's pinned rate reservation (the pause-time ledger value).
+
+    ``provider_key`` + ``units`` mirror :class:`kcc_autobuild.rate_limit.
+    RateDemand` so the durable checkpoint records *exactly* what the pause
+    retained and the resume revalidation can fail closed on a lost or
+    altered rate booking (never a silent re-reserve).
+    """
+
+    provider_key: str
+    units: int = 1
+
+    @field_validator("provider_key")
+    @classmethod
+    def _provider_key_nonblank(cls, value: str) -> str:
+        return _require_nonempty(value, "reserved_rate.provider_key")
+
+    @field_validator("units")
+    @classmethod
+    def _units_positive_int(cls, value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(
+                f"reserved_rate.units must be an int, "
+                f"got {type(value).__name__}"
+            )
+        if value < 1:
+            raise ValueError("reserved_rate.units must be positive")
+        return value
+
+
 class PausedTaskState(StrictModel):
     """One paused task's durable drain/fence/freeze record.
 
@@ -611,8 +701,10 @@ class PausedTaskState(StrictModel):
     ``time_remaining`` are the frozen clock values; ``terminal`` -- the
     time budget was exhausted at the boundary (the only case where the
     retained booking is released); ``reservation_retained`` -- resume
-    reservation kept by default; ``resources_frozen`` -- reversible
-    resources the contract allowed freezing.
+    reservation kept by default; ``reserved_money`` / ``reserved_rate``
+    pin the retained booking amounts (``None`` when that ledger held no
+    booking) so resume validates both ledgers exactly; ``resources_frozen``
+    -- reversible resources the contract allowed freezing.
     """
 
     task_id: str
@@ -624,6 +716,8 @@ class PausedTaskState(StrictModel):
     time_remaining: float
     terminal: bool
     reservation_retained: bool
+    reserved_money: str | None = None
+    reserved_rate: ReservedRateDemand | None = None
     resources_frozen: list[str] = []
 
     @field_validator("task_id")
@@ -642,6 +736,27 @@ class PausedTaskState(StrictModel):
     @classmethod
     def _flags_are_bools(cls, value: bool, info: ValidationInfo) -> bool:
         _require_bool(value, info.field_name)
+        return value
+
+    @field_validator("reserved_money")
+    @classmethod
+    def _money_pin_is_decimal_text(
+        cls, value: str | None
+    ) -> str | None:
+        if value is None:
+            return None
+        return _require_nonempty(value, "reserved_money")
+
+    @field_validator("reserved_rate")
+    @classmethod
+    def _rate_pin_is_model(cls, value: ReservedRateDemand | None) -> ReservedRateDemand | None:
+        if value is None:
+            return None
+        if not isinstance(value, ReservedRateDemand):
+            raise TypeError(
+                "reserved_rate must be a ReservedRateDemand, "
+                f"got {type(value).__name__}"
+            )
         return value
 
     @field_validator("elapsed_seconds", "time_remaining")
@@ -688,8 +803,12 @@ class PauseCheckpoint(StrictModel):
 
     Records the pause instant, the Tier-1 hash at pause (so resume can
     detect a re-issue), the drain deadline, whether reversible-resource
-    freezing was requested, and one :class:`PausedTaskState` per running
-    task -- durable run state (spec 22), never conversational memory.
+    freezing was requested, the pinned reservation universe
+    (``reserved_task_ids`` -- every task holding money and/or rate
+    bookings when the pause began, including reserved-but-not-running
+    bookings, so the resume rebalance reconciles a deterministic,
+    auditable set), and one :class:`PausedTaskState` per running task --
+    durable run state (spec 22), never conversational memory.
     """
 
     run_id: str
@@ -697,6 +816,7 @@ class PauseCheckpoint(StrictModel):
     contract_hash: str | None = None
     drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT.total_seconds()
     freeze_reversible_resources: bool = False
+    reserved_task_ids: list[str] = []
     tasks: list[PausedTaskState] = []
 
     @field_validator("run_id")
@@ -737,6 +857,11 @@ class PauseCheckpoint(StrictModel):
         _require_bool(value, "freeze_reversible_resources")
         return value
 
+    @field_validator("reserved_task_ids")
+    @classmethod
+    def _reserved_ids_sorted_unique(cls, value: list[str]) -> list[str]:
+        return list(_normalize_task_ids(value))
+
     @field_validator("tasks")
     @classmethod
     def _tasks_unique(cls, value: list[PausedTaskState]) -> list[PausedTaskState]:
@@ -753,6 +878,12 @@ class ContractResourceFreezer:
     resources; the freeze is authorized exactly when the locked
     destructive policy classifies ALL of them reversible (spec 14.5:
     destructive/mutating operations policy-classified before execution).
+    The freezer is a state machine, not a policy-only stub: ``freeze``
+    records the frozen resource set (and returns it, exactly what the
+    checkpoint records), ``unfreeze`` restores it, and
+    :meth:`is_frozen` / :meth:`frozen_resources` expose the applied
+    freeze state so a paused run's frozen resources are observable and
+    auditable -- never an audit-only field.
     """
 
     def __init__(
@@ -776,6 +907,7 @@ class ContractResourceFreezer:
                     f"task_resources[{task_id!r}] must not contain duplicates"
                 )
             self._task_resources[task_id] = tuple(sorted(parsed))
+        self._frozen: dict[str, tuple[str, ...]] = {}
 
     def freeze_authorized(self, task_id: str) -> bool:
         return contract_allows_reversible_freeze(
@@ -788,12 +920,20 @@ class ContractResourceFreezer:
                 f"task {task_id!r} resources are not classified reversible "
                 "by the locked Tier-1 destructive policy"
             )
-        return self._task_resources[task_id]
+        resources = self._task_resources[task_id]
+        self._frozen[task_id] = resources
+        return resources
 
     def unfreeze(self, task_id: str) -> None:
-        # Restoring the resources is the resume side's observer action; the
-        # coordinator records that it happened via the adapter call itself.
-        return None
+        self._frozen.pop(task_id, None)
+
+    def is_frozen(self, task_id: str) -> bool:
+        """Whether the task's resources are currently frozen."""
+        return task_id in self._frozen
+
+    def frozen_resources(self, task_id: str) -> tuple[str, ...]:
+        """The frozen resource set for the task (``()`` when not frozen)."""
+        return self._frozen.get(task_id, ())
 
 
 # ---------------------------------------------------------------------------
@@ -806,8 +946,12 @@ class PauseOutcome:
     """Result of :meth:`PauseCoordinator.pause`.
 
     ``checkpoint`` is the persisted :class:`PauseCheckpoint`;
-    ``fenced`` the paused tasks in deterministic order; ``released`` the
-    (terminal) tasks whose retained booking had to be released.
+    ``fenced`` lists **every running task** in deterministic order -- the
+    pause closes ALL of them by fencing the attempt's lease (a drained
+    attempt at its stable boundary, a hung attempt at the deadline), so
+    this is not a hung-only set; the checkpoint's per-task
+    ``drained``/``hung``/``fenced`` flags distinguish the two; ``released``
+    the (terminal) tasks whose retained booking had to be released.
     """
 
     run_id: str
@@ -876,8 +1020,9 @@ class PauseCoordinator:
     All components are injected (store / leases / budget / rate /
     clocks / contract / drain / probe / optional resource freezer) so the
     semantics are testable and the ledgers stay the single authority on
-    money, rate and attempt identity. No wall clock is read unless one is
-    handed in; every ``now`` is normalized to UTC (R7).
+    money, rate and attempt identity. ``now`` defaults to the wall clock
+    when a caller does not hand one in; every handed-in ``now`` is
+    normalized to UTC (R7).
     """
 
     def __init__(
@@ -989,7 +1134,10 @@ class PauseCoordinator:
         budget is exhausted -- the task is terminal); reversible
         resources are frozen only when requested and only when the
         contract's freezer authorizes it; and the paused checkpoint is
-        persisted => ``PAUSED``.
+        persisted => ``PAUSED``. A drain adapter failure mid-drain does
+        NOT strand the run: the unresolved workers are fenced as hung at
+        the pause instant, the best-effort checkpoint is persisted and
+        :class:`PauseDrainAdapterError` is raised (fail closed).
         """
         now = _as_utc(now if now is not None else datetime.now(timezone.utc), "now")
         drain_timeout = _positive_timedelta(drain_timeout, "drain_timeout")
@@ -1011,6 +1159,12 @@ class PauseCoordinator:
             for task_id in sorted(self.clocks)
             if self._running_lease(task_id, now) is not None
         ]
+        # Pin the reservation universe BEFORE any release: every booking the
+        # pause retains (including reserved-but-not-running bookings) is
+        # recorded in the checkpoint so the resume rebalance reconciles a
+        # deterministic, auditable set instead of silently releasing an
+        # unpinned booking.
+        reserved_task_ids = sorted(set(self._reservation_universe()))
 
         # 1) Stop new dispatch: the durable PAUSED transition happens FIRST,
         # so nothing new can be dispatched while the drain is still running.
@@ -1022,35 +1176,47 @@ class PauseCoordinator:
         )
 
         # 2) Signal every running worker to check out at its next boundary.
-        for task_id in running:
-            self._drain.signal(task_id)
-
-        # 3) Drains at a fixed poll interval (deterministic tick advance).
+        # 3) Drain at a fixed poll interval (deterministic tick advance); an
+        # adapter failure fails closed: the still-unresolved workers are
+        # treated as hung at the pause instant, never stranded uncheckpointed.
         statuses: dict[str, DrainStatus] = {}
         resolved_at: dict[str, datetime] = {}
         boundary_waited: set[str] = set()
         pending = list(running)
-        tick = now
-        deadline = now + drain_timeout
-        while True:
+        drain_failure: Exception | None = None
+        try:
+            for task_id in running:
+                self._drain.signal(task_id)
+            tick = now
+            deadline = now + drain_timeout
+            while True:
+                for task_id in pending:
+                    status = self._drain.poll(task_id, tick)
+                    statuses[task_id] = status
+                    resolved_at[task_id] = tick
+                    if status is DrainStatus.NONINTERRUPTIBLE_IN_PROGRESS:
+                        boundary_waited.add(task_id)
+                pending = [
+                    task_id
+                    for task_id in pending
+                    if statuses[task_id] is not DrainStatus.STABLE
+                ]
+                if not pending:
+                    break
+                if tick >= deadline:
+                    break  # hung workers: fenced below
+                tick = min(tick + self._poll_interval, deadline)
+        except Exception as exc:
+            # The PAUSED transition is already durable: a drain adapter
+            # failure must not leave the run PAUSED without a checkpoint
+            # (spec 22). An unobservable boundary is not a stable boundary,
+            # so the unresolved workers are hung/fenced at the pause instant.
+            drain_failure = exc
             for task_id in pending:
-                status = self._drain.poll(task_id, tick)
-                statuses[task_id] = status
-                resolved_at[task_id] = tick
-                if status is DrainStatus.NONINTERRUPTIBLE_IN_PROGRESS:
-                    boundary_waited.add(task_id)
-            pending = [
-                task_id
-                for task_id in pending
-                if statuses[task_id] is not DrainStatus.STABLE
-            ]
-            if not pending:
-                break
-            if tick >= deadline:
-                break  # hung workers: fenced below
-            tick = min(tick + self._poll_interval, deadline)
+                statuses[task_id] = DrainStatus.UNRESPONSIVE
+                resolved_at[task_id] = now
 
-        # 4) Fence / freeze / retain per task at its resolution instant.
+        # 4) Fence / freeze / retain / pin per task at its resolution instant.
         paused_tasks: list[PausedTaskState] = []
         released: list[str] = []
         for task_id in running:
@@ -1063,6 +1229,23 @@ class PauseCoordinator:
             remaining = clock.remaining(resolved)
             terminal = remaining <= 0
             retained = not terminal
+            # Pin what the pause retains BEFORE the terminal release, so the
+            # resume revalidation can fail closed on a lost OR altered
+            # booking on BOTH ledgers (never a silent re-reserve).
+            money_pin = (
+                str(self.budget.reservations[task_id])
+                if task_id in self.budget.reservations
+                else None
+            )
+            rate_demand = self.rate.reservations.get(task_id)
+            rate_pin = (
+                ReservedRateDemand(
+                    provider_key=rate_demand.provider_key,
+                    units=rate_demand.units,
+                )
+                if rate_demand is not None
+                else None
+            )
             if terminal:
                 self._release_reservation(task_id)
                 released.append(task_id)
@@ -1087,20 +1270,26 @@ class PauseCoordinator:
                     time_remaining=remaining,
                     terminal=terminal,
                     reservation_retained=retained,
+                    reserved_money=money_pin,
+                    reserved_rate=rate_pin,
                     resources_frozen=frozen_resources,
                 )
             )
 
-        # 5) Persist the paused checkpoint => PAUSED.
+        # 5) Persist the paused checkpoint => PAUSED (also on an adapter
+        # failure: the best-effort record is durable before the error rises).
         checkpoint = PauseCheckpoint(
             run_id=self.run_id,
             paused_at=pause_at,
             contract_hash=self.contract.contract_hash,
             drain_timeout_seconds=drain_timeout.total_seconds(),
             freeze_reversible_resources=freeze_reversible_resources,
+            reserved_task_ids=reserved_task_ids,
             tasks=paused_tasks,
         )
         self._emit("run.paused", checkpoint.model_dump(mode="json"), pause_at)
+        if drain_failure is not None:
+            raise PauseDrainAdapterError(checkpoint) from drain_failure
         return PauseOutcome(
             run_id=self.run_id,
             checkpoint=checkpoint,
@@ -1116,12 +1305,19 @@ class PauseCoordinator:
         A paused run resumes ONLY after the four light checks pass (no
         full discovery); on failure nothing moves and the batched findings
         are persisted (``run.resume_rejected``) and raised. On success the
-        reservation is rebalanced to the resumed set (never a new
-        reservation -- exactly once), a fresh lease generation is minted
-        per resumed task, the time budget continues (unfrozen), frozen
-        reversible resources are restored, dispatch is enabled
-        (``PAUSED -> RESUMING -> BUILDING``) and the resume event is
-        persisted => ``BUILDING``.
+        reservation is rebalanced to the resumed set against the PINNED
+        checkpoint universe (never a new reservation -- exactly once; a
+        resumed task whose retained money OR rate booking was lost while
+        paused is a broken ledger and fails closed), a fresh lease
+        generation is minted per resumed task, the time budget continues
+        (unfrozen), frozen reversible resources are restored, dispatch is
+        enabled (``PAUSED -> RESUMING -> BUILDING``) and the resume event
+        is persisted => ``BUILDING``. The whole mutation phase is one
+        guarded block: any failure rolls every effect back (minted leases
+        fenced, started clocks refrozen, restored resources re-frozen),
+        persists ``run.resume_failed`` and raises
+        :class:`ResumeMutationError` -- the run stays PAUSED and the next
+        resume retries from a clean ledger.
         """
         now = _as_utc(now if now is not None else datetime.now(timezone.utc), "now")
         record = self.store.load_run(self.run_id)
@@ -1180,51 +1376,93 @@ class PauseCoordinator:
             )
             raise ResumeRevalidationError(revalidation)
 
-        # Rebalance the reservation: nothing outside the resumed set stays
-        # booked (never a new reservation -- exactly once), and a resumed
-        # task whose retained booking was lost while paused is a broken
-        # ledger (fail closed, no silent re-reserve).
+        # -- guarded mutation phase: rebalance, restore, mint, unfreeze,
+        # dispatch. A failure at ANY point is all-or-nothing: the run stays
+        # PAUSED, every effect is rolled back (minted leases fenced, started
+        # clocks refrozen, restored resources re-frozen), the abort is
+        # persisted as ``run.resume_failed`` and the retry starts from a
+        # clean ledger -- never a lease conflict with a leaked live lease.
+        # Pinned fail-closed rejections (lost/altered booking, frozen
+        # resources that cannot be restored) raise BEFORE any mutation and
+        # propagate as :class:`PauseError` directly.
+        state_by_task = {task.task_id: task for task in checkpoint.tasks}
+        fresh_leases: list[Lease] = []
+        started_clocks: list[str] = []
+        restored_resources: list[str] = []
         released: list[str] = []
-        for task_id in self._reservation_universe():
-            if task_id not in resumed_tasks:
-                self._release_reservation(task_id)
-                released.append(task_id)
-        for task_id in resumed_tasks:
-            if task_id not in self.budget.reservations:
-                raise PauseError(
-                    f"task {task_id!r} lost its retained reservation while "
-                    "paused; refusing to re-reserve (exactly once)"
-                )
-
-        # Restore reversible resources frozen at pause (the resumed tasks
-        # only; a frozen set with no freezer is a broken pause contract).
-        if self._resources is not None:
-            for task in checkpoint.tasks:
-                if task.resources_frozen:
-                    if task.task_id not in resumed_tasks:
+        try:
+            # Pinned preconditions (pure reads): a resumed task whose
+            # retained booking was lost or altered while paused is a broken
+            # ledger and fails closed on BOTH money and rate; the frozen
+            # resource set must be restorable for the resumed set.
+            for task_id in resumed_tasks:
+                state = state_by_task[task_id]
+                if state.reserved_money is not None:
+                    if self.budget.reservations.get(task_id) != Decimal(
+                        state.reserved_money
+                    ):
+                        raise PauseError(
+                            f"task {task_id!r} lost its retained reservation "
+                            "while paused; refusing to re-reserve (exactly once)"
+                        )
+                if state.reserved_rate is not None:
+                    pinned_demand = RateDemand(
+                        state.reserved_rate.provider_key,
+                        state.reserved_rate.units,
+                    )
+                    if self.rate.reservations.get(task_id) != pinned_demand:
+                        raise PauseError(
+                            f"task {task_id!r} lost its retained rate "
+                            "reservation while paused; refusing to re-reserve "
+                            "(exactly once)"
+                        )
+            if self._resources is not None:
+                for task in checkpoint.tasks:
+                    if task.resources_frozen and task.task_id not in resumed_tasks:
                         raise PauseError(
                             f"task {task.task_id!r} has frozen resources but "
                             "is not resumed"
                         )
-                    self._resources.unfreeze(task.task_id)
-        elif any(task.resources_frozen for task in checkpoint.tasks):
-            raise PauseError(
-                "the paused checkpoint froze resources but no resource "
-                "freezer is available to restore them"
-            )
+            elif any(task.resources_frozen for task in checkpoint.tasks):
+                raise PauseError(
+                    "the paused checkpoint froze resources but no resource "
+                    "freezer is available to restore them"
+                )
 
-        # Mint a fresh lease generation and unfreeze the time budget
-        # (the SAME clock continues: pause consumed the elapsed time only).
-        fresh_leases = tuple(
-            self.leases.claim(self.run_id, task_id, now=now)
-            for task_id in resumed_tasks
-        )
-        for task_id in resumed_tasks:
-            self.clocks[task_id].start(now)
+            # Rebalance the reservation against the PINNED universe: every
+            # booking the pause recorded (including reserved-but-not-running
+            # bookings) plus any booking that appeared while paused, that
+            # does not belong to a resumed task, is released -- never a new
+            # reservation (exactly once). A later abort keeps these releases
+            # applied: a retry re-runs the same deterministic rebalance.
+            pinned_universe = set(checkpoint.reserved_task_ids)
+            current_universe = set(self._reservation_universe())
+            for task_id in sorted(
+                (pinned_universe | current_universe) - set(resumed_tasks)
+            ):
+                if task_id in current_universe:
+                    self._release_reservation(task_id)
+                    released.append(task_id)
 
-        # Enable dispatch and persist the resume event => BUILDING.
-        completed_leases = tuple(lease.lease_id for lease in fresh_leases)
-        try:
+            # Restore reversible resources frozen at pause (the resumed tasks
+            # only; the precondition was validated above).
+            if self._resources is not None:
+                for task in checkpoint.tasks:
+                    if task.resources_frozen:
+                        self._resources.unfreeze(task.task_id)
+                        restored_resources.append(task.task_id)
+
+            # Mint a fresh lease generation and unfreeze the time budget
+            # (the SAME clock continues: pause consumed the elapsed time only).
+            for task_id in resumed_tasks:
+                fresh_leases.append(
+                    self.leases.claim(self.run_id, task_id, now=now)
+                )
+            for task_id in resumed_tasks:
+                self.clocks[task_id].start(now)
+                started_clocks.append(task_id)
+
+            # Enable dispatch (the durable transitions close the attempt).
             self.store.transition(
                 self.run_id,
                 LifecycleState.PAUSED,
@@ -1237,22 +1475,31 @@ class PauseCoordinator:
                 LifecycleState.BUILDING,
                 "autopilot resumed",
             )
-        except Exception:
-            # Fail closed: with dispatch still disabled, the fresh leases
-            # are not usable -- close them and re-freeze the clocks so the
-            # next pause/resume cycle re-derives attempt identity from a
-            # clean ledger (no leaked live lease, no running clock).
-            for lease in fresh_leases:
-                try:
-                    self.leases.fence(lease.lease_id)
-                except Exception:
-                    pass
-            for task_id in resumed_tasks:
-                try:
-                    self.clocks[task_id].freeze(now)
-                except Exception:
-                    pass
+        except PauseError:
+            # Expected fail-closed rejection: nothing was mutated yet.
             raise
+        except Exception as exc:
+            cleanup = self._rollback_resume(
+                fresh_leases, started_clocks, restored_resources, now
+            )
+            self._emit(
+                "run.resume_failed",
+                {
+                    "phase": "mutation",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "minted_lease_ids": [
+                        lease.lease_id for lease in fresh_leases
+                    ],
+                    "released_tasks": list(released),
+                    "fenced_lease_ids": cleanup["fenced_lease_ids"],
+                    "refrozen_clocks": cleanup["refrozen_clocks"],
+                    "refrozen_resources": cleanup["refrozen_resources"],
+                },
+                now,
+            )
+            raise ResumeMutationError(cleanup) from exc
+
+        completed_leases = tuple(lease.lease_id for lease in fresh_leases)
         self._emit(
             "run.resumed",
             {
@@ -1270,7 +1517,7 @@ class PauseCoordinator:
         return ResumeOutcome(
             run_id=self.run_id,
             revalidation=revalidation,
-            fresh_leases=fresh_leases,
+            fresh_leases=tuple(fresh_leases),
             released=tuple(released),
             resumed=resumed_tasks,
         )
@@ -1288,6 +1535,54 @@ class PauseCoordinator:
             self.budget.release(task_id)
         if task_id in self.rate.reservations:
             self.rate.release(task_id)
+
+    def _rollback_resume(
+        self,
+        fresh_leases: Sequence[Lease],
+        started_clocks: Sequence[str],
+        restored_resources: Sequence[str],
+        now: datetime,
+    ) -> dict[str, list[str]]:
+        """Roll back every effect of a failed resume (best effort, fail closed).
+
+        Every effect of the aborted mutation phase is reverted so the next
+        resume starts from the clean pause state: the minted leases are
+        fenced (a live lease under a PAUSED run would wedge the next claim),
+        the started clocks are refrozen (the budget continues from the pause
+        checkpoint) and the restored resources are re-frozen (the checkpoint
+        still records them frozen). Returns the applied-cleanup report for
+        the persisted ``run.resume_failed`` audit event.
+        """
+        fenced_lease_ids: list[str] = []
+        for lease in fresh_leases:
+            try:
+                self.leases.fence(lease.lease_id)
+                fenced_lease_ids.append(lease.lease_id)
+            except Exception:
+                pass  # an unfenceable ledger is already broken; the audit event records it
+        refrozen_clocks: list[str] = []
+        for task_id in started_clocks:
+            try:
+                self.clocks[task_id].freeze(now)
+                refrozen_clocks.append(task_id)
+            except Exception:
+                pass
+        refrozen_resources: list[str] = []
+        for task_id in restored_resources:
+            try:
+                if (
+                    self._resources is not None
+                    and self._resources.freeze_authorized(task_id)
+                ):
+                    self._resources.freeze(task_id)
+                    refrozen_resources.append(task_id)
+            except Exception:
+                pass
+        return {
+            "fenced_lease_ids": fenced_lease_ids,
+            "refrozen_clocks": refrozen_clocks,
+            "refrozen_resources": refrozen_resources,
+        }
 
     def _running_lease(self, task_id: str, now: datetime) -> Lease | None:
         """The task's live lease at ``now`` (``None`` = not in flight)."""

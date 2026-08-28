@@ -41,6 +41,22 @@ Prescribed scenarios under test:
 * **resume revalidates / new lease / unfreezes** -- the resumed run
   revalidates the locked contract surface, mints generation + 1, restarts
   the clock (continuing the same budget) and returns to BUILDING.
+
+Fix-round-1 regression scenarios (review findings):
+
+* a resume that aborts **mid-lease-mint** rolls the mutation phase back
+  (fenced leases, refrozen clocks, re-frozen resources), persists
+  ``run.resume_failed`` and leaves the run resumable -- a later resume
+  succeeds instead of wedging on an abandoned live lease;
+* a **drain adapter failure** mid-pause still persists the best-effort
+  checkpoint (unresolved workers fenced as hung): never PAUSED without
+  durable pause state;
+* the checkpoint **pins the reservation universe** (including
+  reserved-but-not-running bookings) and the resume validates BOTH the
+  retained money AND rate bookings exactly (a lost or altered booking
+  fails closed -- never a silent re-reserve);
+* the contract-bounded resource freezer is a state machine (freeze /
+  unfreeze / frozen-set observable), not a policy-only stub.
 """
 
 from __future__ import annotations
@@ -50,6 +66,7 @@ from decimal import Decimal
 
 import pytest
 
+from kcc_autobuild import pause as pause_module
 from kcc_autobuild.budget import BudgetLedger
 from kcc_autobuild.contract import (
     AuthorityEnvelope,
@@ -62,7 +79,7 @@ from kcc_autobuild.contract import (
     lock_contract,
 )
 from kcc_autobuild.controller import TaskTimeBudget
-from kcc_autobuild.leases import LeaseLedger, LeaseStatus
+from kcc_autobuild.leases import LeaseConflict, LeaseLedger, LeaseStatus
 from kcc_autobuild.models import DependencyStatus, LifecycleState, ReadinessStatus, RunRecord
 from kcc_autobuild.pause import (
     ContractResourceFreezer,
@@ -276,6 +293,60 @@ class _Freezer:
 
     def unfreeze(self, task_id: str) -> None:
         self.unfrozen.append(task_id)
+
+
+class _FlakyLeaseLedger(LeaseLedger):
+    """LeaseLedger whose ``claim`` raises for one task until ``healed``.
+
+    Drives the resume abort-mid-mint path: the first resumed task mints a
+    live lease, the second raises, and the coordinator must clean up the
+    already-minted lease and keep the run resumable.
+    """
+
+    def __init__(self, *, fail_on: str = "T2") -> None:
+        super().__init__()
+        self.fail_on = fail_on
+        self.failing = True
+
+    def claim(self, run_id, task_id, *, now=None, workspace_id=None):
+        if self.failing and task_id == self.fail_on:
+            raise LeaseConflict(
+                f"simulated mint conflict on task {task_id!r}"
+            )
+        return super().claim(
+            run_id, task_id, now=now, workspace_id=workspace_id
+        )
+
+
+class _ExplodingDrain:
+    """CheckpointDrain whose ``signal`` or ``poll`` raises (adapter failure).
+
+    ``explode_on_signal`` raises on the first signal; otherwise
+    ``explode_at_poll`` raises once that many polls happened (0 = first
+    poll), so a test can break the drain before any stable observation.
+    """
+
+    def __init__(
+        self,
+        *,
+        explode_on_signal: bool = False,
+        explode_at_poll: int | None = None,
+    ) -> None:
+        self.explode_on_signal = explode_on_signal
+        self.explode_at_poll = explode_at_poll
+        self.signals: list[str] = []
+        self.poll_count = 0
+
+    def signal(self, task_id: str) -> None:
+        if self.explode_on_signal:
+            raise RuntimeError("signal adapter exploded")
+        self.signals.append(task_id)
+
+    def poll(self, task_id: str, now: datetime) -> DrainStatus:
+        if self.explode_at_poll is not None and self.poll_count >= self.explode_at_poll:
+            raise RuntimeError("poll adapter exploded")
+        self.poll_count += 1
+        return DrainStatus.STABLE
 
 
 def _make_store(tmp_path, *, state: LifecycleState = LifecycleState.BUILDING) -> RunStore:
@@ -1005,3 +1076,251 @@ def test_evaluate_light_revalidation_missing_observations_fail_closed():
         locked_hash=contract.contract_hash,
         now=LOCK_AT + timedelta(hours=1),
     ) == revalidation
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: a resume that aborts INSIDE its guarded mutation phase (e.g.
+# mid-lease-mint) must not leak live leases, must persist a durable failure
+# event, and must leave the run resumable -- a later resume succeeds instead
+# of wedging on the abandoned lease (review Important finding).
+# ---------------------------------------------------------------------------
+
+
+def test_resume_abort_mid_lease_mint_cleans_up_and_later_resume_succeeds(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ScriptedDrain(default=DrainStatus.STABLE)
+    leases = _FlakyLeaseLedger(fail_on="T2")
+    leases.failing = False  # setup claims work; the resume mint is flaky
+    coordinator = _make_coordinator(
+        store,
+        _locked_contract(),
+        drain,
+        leases=leases,
+        clocks={
+            "T1": TaskTimeBudget("T1", TIME_BUDGET),
+            "T2": TaskTimeBudget("T2", TIME_BUDGET),
+        },
+        task_providers={"T1": ("provider-a",), "T2": ("provider-a",)},
+    )
+    _start_running(coordinator, task_id="T1", started_at=T0)
+    _start_running(coordinator, task_id="T2", started_at=T0)
+    coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+    resume_at = PAUSE_AT + timedelta(hours=1)
+    leases.failing = True
+
+    # The SECOND lease mint fails: T1's fresh lease is LIVE, then the
+    # mutation phase aborts -- the coordinator must roll it back.
+    with pytest.raises(pause_module.ResumeMutationError) as excinfo:
+        coordinator.resume(now=resume_at)
+    assert "LEASE-RUN-001-T1-2" in str(excinfo.value.cleanup["fenced_lease_ids"])
+
+    # No live lease survives the abort (the abandoned T1 lease is fenced),
+    # so a later resume does not wedge on a lease conflict.
+    assert not coordinator.leases.lease_is_live(
+        "LEASE-RUN-001-T1-2", "RUN-001", now=resume_at
+    )
+    assert (
+        coordinator.leases.lease_status("LEASE-RUN-001-T1-2")
+        is LeaseStatus.FENCED
+    )
+    # No clock was left running: the budget stays frozen until resume.
+    assert coordinator.clocks["T1"].frozen
+    assert coordinator.clocks["T2"].frozen
+    # Fail closed: the run is still PAUSED and a durable failure event was
+    # persisted (the controller sees the abort, not silence).
+    assert store.load_run("RUN-001").state is LifecycleState.PAUSED
+    assert "run.resumed" not in [e.kind for e in store.list_events("RUN-001")]
+    failed = [e for e in store.list_events("RUN-001") if e.kind == "run.resume_failed"]
+    assert len(failed) == 1
+    assert failed[0].payload["phase"] == "mutation"
+    assert "LeaseConflict" in failed[0].payload["error"]
+    assert failed[0].payload["minted_lease_ids"] == ["LEASE-RUN-001-T1-2"]
+    assert failed[0].payload["fenced_lease_ids"] == ["LEASE-RUN-001-T1-2"]
+    assert failed[0].payload["refrozen_clocks"] == []
+
+    # Once the ledger heals, the SAME paused run resumes cleanly: fresh
+    # generations (T1 gen 3 -- the abandoned gen 2 is fenced, never reused),
+    # no reservation re-reserve, and BUILDING.
+    leases.failing = False
+    outcome = coordinator.resume(now=resume_at)
+    assert outcome.resumed == ("T1", "T2")
+    assert outcome.fresh_leases[0].lease_id == "LEASE-RUN-001-T1-3"
+    assert outcome.fresh_leases[1].lease_id == "LEASE-RUN-001-T2-2"
+    assert store.load_run("RUN-001").state is LifecycleState.BUILDING
+    assert coordinator.budget.reservations == {
+        "T1": Decimal("3.00"),
+        "T2": Decimal("3.00"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: an adapter failure DURING the drain must not strand the run
+# PAUSED without a persisted checkpoint (review minor finding). The pause
+# stops dispatch durably first; the unresolved workers are fenced fail-closed
+# and the best-effort checkpoint is still persisted.
+# ---------------------------------------------------------------------------
+
+
+def test_pause_drain_adapter_failure_still_persists_checkpoint(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ExplodingDrain(explode_at_poll=0)
+    coordinator = _make_coordinator(store, _locked_contract(), drain)
+    _start_running(coordinator, started_at=T0)
+    lease = coordinator.leases.current_lease("T1")
+
+    with pytest.raises(pause_module.PauseDrainAdapterError) as excinfo:
+        coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+
+    # The durable PAUSED transition happened FIRST and the best-effort
+    # checkpoint IS persisted: never PAUSED without durable pause state.
+    assert store.load_run("RUN-001").state is LifecycleState.PAUSED
+    checkpoint = excinfo.value.checkpoint
+    assert checkpoint is not None
+    assert coordinator.checkpoint() == checkpoint
+    task = checkpoint.tasks[0]
+    assert task.hung is True  # unobserved => fenced fail-closed
+    assert task.fenced is True
+    assert task.reservation_retained is True
+    assert coordinator.leases.lease_status(lease.lease_id) is LeaseStatus.FENCED
+    assert coordinator.clocks["T1"].frozen
+
+    # Healed drain: the paused run resumes (not stuck Paused-without-resume).
+    resumed = PauseCoordinator(
+        run_id="RUN-001",
+        store=store,
+        leases=coordinator.leases,
+        budget=coordinator.budget,
+        rate=coordinator.rate,
+        clocks=coordinator.clocks,
+        contract=coordinator.contract,
+        drain=_ScriptedDrain(default=DrainStatus.STABLE),
+        probe=_Probe(),
+        resources=None,
+        task_providers={"T1": ("provider-a",)},
+        poll_interval=DRAIN_INTERVAL,
+    ).resume(now=PAUSE_AT + timedelta(hours=1))
+    assert resumed.resumed == ("T1",)
+    assert store.load_run("RUN-001").state is LifecycleState.BUILDING
+
+
+def test_pause_signal_adapter_failure_still_persists_checkpoint(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ExplodingDrain(explode_on_signal=True)
+    coordinator = _make_coordinator(store, _locked_contract(), drain)
+    _start_running(coordinator, started_at=T0)
+
+    with pytest.raises(pause_module.PauseDrainAdapterError):
+        coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+
+    assert store.load_run("RUN-001").state is LifecycleState.PAUSED
+    assert coordinator.checkpoint() is not None
+    assert coordinator.checkpoint().tasks[0].hung is True
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: the pause checkpoint PINS the reservation universe (including
+# reserved-but-not-running bookings) so the resume rebalance reconciles a
+# deterministic set instead of silently releasing an unpinned booking
+# (review minor finding).
+# ---------------------------------------------------------------------------
+
+
+def test_pause_checkpoint_pins_reservation_universe_for_resume_rebalance(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ScriptedDrain(default=DrainStatus.STABLE)
+    coordinator = _make_coordinator(store, _locked_contract(), drain)
+    _start_running(coordinator, started_at=T0)
+    # Reserved but NOT running at pause: the booking is retained by default
+    # and the checkpoint must pin it for the resume rebalance.
+    coordinator.budget.reserve("T2", Decimal("2.00"))
+    coordinator.rate.reserve("T2", RateDemand("api"))
+
+    outcome = coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+
+    assert outcome.checkpoint.reserved_task_ids == ["T1", "T2"]
+    # The retained bookings are pinned per ledger (amount + demand), and
+    # the pins survive a reload from durable run state (spec 22).
+    task = outcome.checkpoint.tasks[0]
+    assert task.reserved_money == "3.00"
+    assert task.reserved_rate.provider_key == "api"
+    assert task.reserved_rate.units == 1
+    reloaded = coordinator.checkpoint()
+    assert reloaded.reserved_task_ids == ["T1", "T2"]
+    assert reloaded.tasks[0].reserved_money == "3.00"
+    assert reloaded.tasks[0].reserved_rate.provider_key == "api"
+    # A booking that appeared while paused (ledger drift) is reconciled too.
+    coordinator.budget.reserve("T-ORPHAN", Decimal("1.50"))
+    resumed = coordinator.resume(now=PAUSE_AT + timedelta(hours=1))
+    assert resumed.released == ("T-ORPHAN", "T2")
+    assert coordinator.budget.reservations == {"T1": Decimal("3.00")}
+    assert coordinator.rate.reservations == {"T1": RateDemand("api")}
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: resume validates the RETAINED rate booking too -- a lost rate
+# reservation is as broken a ledger as a lost money one (exactly once), and
+# must fail closed instead of resuming without capacity (review minor).
+# ---------------------------------------------------------------------------
+
+
+def test_resume_fails_closed_when_rate_booking_was_lost(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ScriptedDrain(default=DrainStatus.UNRESPONSIVE)
+    coordinator = _make_coordinator(store, _locked_contract(), drain)
+    _start_running(coordinator, started_at=T0)
+    coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+    # The rate booking disappears while paused (money booking kept).
+    coordinator.rate.release("T1")
+
+    with pytest.raises(PauseError, match="rate reservation"):
+        coordinator.resume(now=PAUSE_AT + timedelta(hours=1))
+
+    assert store.load_run("RUN-001").state is LifecycleState.PAUSED
+    assert coordinator.leases.current_generation("T1") == 1
+    assert coordinator.clocks["T1"].frozen
+
+
+def test_resume_fails_closed_when_money_booking_amount_changed(tmp_path):
+    store = _make_store(tmp_path)
+    drain = _ScriptedDrain(default=DrainStatus.UNRESPONSIVE)
+    coordinator = _make_coordinator(store, _locked_contract(), drain)
+    _start_running(coordinator, started_at=T0)
+    coordinator.pause(now=PAUSE_AT, drain_timeout=DRAIN_TIMEOUT)
+    # The booking was re-created with a DIFFERENT amount while paused: the
+    # pin records what the pause retained, so the ledger must match exactly.
+    coordinator.budget.release("T1")
+    coordinator.budget.reserve("T1", Decimal("7.00"))
+
+    with pytest.raises(PauseError, match="retained reservation"):
+        coordinator.resume(now=PAUSE_AT + timedelta(hours=1))
+
+    assert store.load_run("RUN-001").state is LifecycleState.PAUSED
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: the contract-bounded resource freezer is a state machine, not
+# a policy stub -- freeze records the frozen resource set, unfreeze restores
+# it, and the frozen set is observable (review minor finding).
+# ---------------------------------------------------------------------------
+
+
+def test_contract_resource_freezer_tracks_frozen_state():
+    contract = _contract(
+        destructive_policy=[
+            DestructiveOperationRule(
+                operation="suspend-staging",
+                classification=DestructiveAction.REVERSIBLE_AUTONOMOUS,
+            ),
+        ]
+    )
+    freezer = ContractResourceFreezer(contract, {"T1": ("suspend-staging",)})
+    assert not freezer.is_frozen("T1")
+    assert freezer.frozen_resources("T1") == ()
+
+    assert freezer.freeze("T1") == ("suspend-staging",)
+    assert freezer.is_frozen("T1")
+    assert freezer.frozen_resources("T1") == ("suspend-staging",)
+
+    freezer.unfreeze("T1")
+    assert not freezer.is_frozen("T1")
+    assert freezer.frozen_resources("T1") == ()
