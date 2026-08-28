@@ -48,7 +48,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict, deque
 from enum import Enum
-from typing import Literal
+from typing import Literal, Mapping
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
@@ -285,6 +285,80 @@ class ExecutionReport(StrictModel):
                 f"{self.status.value} reports must carry a failure classification"
             )
         return self
+
+
+# ---------------------------------------------------------------------------
+# Task 4 -- harness metadata normalization (Plan 08, Task 4).
+#
+# A harness worker's raw report document may carry harness-metadata
+# fields next to the canonical ExecutionReport fields (invocation facts,
+# model names, durations, captured output).  The adapter normalizes the
+# document by removing harness metadata ONLY: every other field is
+# preserved and still validated against the strict ExecutionReport
+# schema, so a non-metadata extra field fails closed instead of being
+# dropped.
+# ---------------------------------------------------------------------------
+
+HARNESS_METADATA_FIELDS: frozenset[str] = frozenset(
+    {
+        "harness",
+        "harness_id",
+        "harness_metadata",
+        "worker",
+        "worker_id",
+        "session_id",
+        "profile",
+        "dsh",
+        "model",
+        "provider",
+        "invocation",
+        "invoked_at",
+        "started_at",
+        "finished_at",
+        "duration_ms",
+        "duration_seconds",
+        "exit_code",
+        "stdout",
+        "stderr",
+        "final_message",
+        "raw_output",
+        "tool_calls",
+        "tools",
+        "log",
+        "logs",
+        "banner",
+        "kcc_dsh_status",
+    }
+)
+"""Harness-metadata field names a raw worker report may carry.
+
+These describe the harness invocation/environment only -- never task
+evidence -- so they are the only fields
+:func:`normalize_harness_metadata` removes.  Lease identity, acceptance
+criteria, Test IDs, usage, deviations, policy trace and evidence fields
+are never treated as harness metadata.
+"""
+
+
+def normalize_harness_metadata(document: Mapping[str, object]) -> dict[str, object]:
+    """Remove harness-metadata fields from a raw worker report document.
+
+    The normalized document keeps every non-metadata field untouched --
+    including fields that are not part of the ExecutionReport schema,
+    which then still fail the strict model validation (fail closed).
+    Non-string keys and non-mapping documents are rejected rather than
+    guessed.
+    """
+    if not isinstance(document, Mapping):
+        raise TypeError("ExecutionReport document must be a mapping")
+    normalized: dict[str, object] = {}
+    for key, value in document.items():
+        if not isinstance(key, str):
+            raise TypeError("ExecutionReport document keys must be strings")
+        if key in HARNESS_METADATA_FIELDS:
+            continue
+        normalized[key] = value
+    return normalized
 
 
 # ---------------------------------------------------------------------------

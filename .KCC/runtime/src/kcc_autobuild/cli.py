@@ -13,6 +13,13 @@ are never swallowed into exit 0.  The kind map includes
 ``execution-report`` (Plan 03, Task 4): the bounded execution skill's
 final gate is ``kcc-autobuild validate-model execution-report <path>``,
 so the bridge's terminal report model must be a real schema kind.
+
+Plan 08, Task 4 adds the ``harness`` group: ``harness probe dsh``
+features-probes the DeepSeek Harness adapter and ``harness doctor dsh``
+(preflight, or ``--live`` proof) validates the effective hardened
+profile/guard of the disposable ``kcc-autobuild`` profile before
+``approval_mode=NEVER`` + ``mutation_enforcement=KCC_POLICY_GATE`` can
+ever be granted.
 """
 
 from __future__ import annotations
@@ -36,6 +43,12 @@ from kcc_autobuild.store import RunStore
 from kcc_autobuild.trace import TraceGraph
 
 app = typer.Typer(no_args_is_help=True)
+
+harness_app = typer.Typer(
+    no_args_is_help=True,
+    help="Probe and doctor a fitted harness adapter (Plan 08).",
+)
+app.add_typer(harness_app, name="harness")
 
 MODEL_KINDS: dict[str, type] = {
     "trace": TraceGraph,
@@ -210,3 +223,120 @@ def _validate_model_error(kind: str, path: Path, errors: list[str]) -> None:
         err=True,
     )
     raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# Plan 08 -- harness probe/doctor CLI (adapter-specific capability levels).
+# ---------------------------------------------------------------------------
+
+
+def _require_dsh(harness: str) -> None:
+    """Only the dsh adapter is fitted by this CLI so far (fail closed)."""
+    if harness != "dsh":
+        typer.echo(
+            json.dumps(
+                {"harness": harness, "error": f"no adapter fitted for harness {harness!r}"},
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@harness_app.command("probe")
+def harness_probe(
+    harness: str,
+    repo_root: Path = typer.Option(
+        Path.cwd(), help="Repository root that holds the dsh workspace"
+    ),
+    dsh_bin: str = typer.Option(
+        "dsh", help="The dsh CLI command/executable to feature-probe"
+    ),
+    dsh_home: str | None = typer.Option(
+        None, help="DSH home directory (default: $DSH_HOME or ~/.dsh)"
+    ),
+    profile: str = typer.Option(
+        "headless", help="The installed headless profile to probe"
+    ),
+    timeout: float = typer.Option(
+        30.0, help="Time budget (seconds) of each feature-probe subprocess"
+    ),
+) -> None:
+    """Feature-probe a harness adapter and print its capability report.
+
+    The probe is feature-based (never an exact-version gate) and reports
+    ONLY proven capabilities: native ``AGENTS.md`` + generated
+    ``.dsh/skills`` packages, dsh CLI boot, installed headless profile
+    (fresh/parallel workers) and the passed live doctor proof
+    (``approval_mode=NEVER`` + ``kcc-policy-gate``) when fed one.
+    """
+    _require_dsh(harness)
+    from kcc_autobuild.harnesses.dsh import DshHarnessAdapter
+
+    adapter = DshHarnessAdapter(
+        dsh_bin=dsh_bin,
+        workspace=repo_root,
+        dsh_home=Path(dsh_home) if dsh_home else None,
+        profile=profile,
+        timeout_seconds=timeout,
+    )
+    probe = adapter.probe()
+    typer.echo(
+        json.dumps(probe.model_dump(mode="json"), sort_keys=True)
+    )
+
+
+@harness_app.command("doctor")
+def harness_doctor(
+    harness: str,
+    repo_root: Path = typer.Option(
+        Path.cwd(), help="Repository root that holds the dsh workspace"
+    ),
+    dsh_bin: str = typer.Option(
+        "dsh", help="The dsh CLI command/executable to run"
+    ),
+    dsh_home: str | None = typer.Option(
+        None, help="DSH home directory (default: $DSH_HOME or ~/.dsh)"
+    ),
+    profile: str = typer.Option(
+        "kcc-autobuild", help="Name of the disposable profile the doctor boots"
+    ),
+    template: str = typer.Option(
+        "headless", help="Installed profile the disposable profile is templated from"
+    ),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Run the live doctor (disposable worker invokes kcc_harness_status)",
+    ),
+    timeout: float = typer.Option(
+        600.0, help="Time budget (seconds) of the live worker probe"
+    ),
+) -> None:
+    """Doctor the dsh harness against the effective profile/guard.
+
+    Without ``--live`` this is a read-only preflight of the disposable
+    ``kcc-autobuild`` profile (installed template, CLI boot, profile
+    boot) -- its outcome is never a proof.  With ``--live`` the doctor
+    boots the disposable profile, invokes ``kcc_harness_status`` exactly
+    once and accepts exactly one ``KCC_DSH_STATUS:`` JSON line proving
+    sandbox ``workspace-write``, approval ``never`` and the
+    ``kcc-policy-gate`` guard; any extra/missing/prompt/error fails.
+    """
+    _require_dsh(harness)
+    from kcc_autobuild.harnesses.dsh import dsh_doctor
+
+    outcome = dsh_doctor(
+        live=live,
+        dsh_bin=dsh_bin,
+        workspace=repo_root,
+        dsh_home=Path(dsh_home) if dsh_home else None,
+        profile=profile,
+        template=template,
+        timeout_seconds=timeout,
+    )
+    typer.echo(
+        json.dumps(outcome.model_dump(mode="json"), sort_keys=True)
+    )
+    if not outcome.passed:
+        raise typer.Exit(code=1)
