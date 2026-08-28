@@ -27,6 +27,21 @@ Lock gating (Design Spec v1.2 sections 14.1-14.5, 15):
   require a rollback path and ``IRREVERSIBLE_WHITELISTED`` require a
   verified backup safeguard;
 * plaintext credentials are rejected (secret references only).
+
+Round 2 (post-review hardening, review feedback of 3030691):
+
+* the R6 core gate branch is tested directly: a *whitelisted* fallback
+  provider with no validated readiness fallback entry blocks lock, and
+  a validated fallback for a different provider cannot stand in;
+* ``AUTO_PROVISION_AUTHORIZED`` must also be bounded to approved
+  accounts (spec §14.3) — recorded and enforced at lock;
+* the canonical hash is insensitive to Tier-1 list insertion order;
+* a locked contract is not forgeable: the stored lock hashes must
+  match the contract content or construction is rejected;
+* the §15 AUTONOMY row ``auto-debug`` authorization is recorded on the
+  authority envelope (a Tier-1 invariant);
+* the §14.6 resume protocol sources of truth are modeled (execution
+  state, excluded from both canonical hashes).
 """
 
 from __future__ import annotations
@@ -45,13 +60,14 @@ from kcc_autobuild.contract import (
     DestructiveOperationRule,
     MoneyPolicy,
     ProviderEntry,
+    ResumeProtocol,
     Tier1Invariants,
     Tier2Details,
     lock_contract,
     tier1_canonical_hash,
     tier2_digest,
 )
-from kcc_autobuild.models import DependencyStatus, ReadinessStatus
+from kcc_autobuild.models import DependencyStatus, LifecycleState, ReadinessStatus
 from kcc_autobuild.readiness import (
     EvidenceRecord,
     FallbackEntry,
@@ -110,7 +126,15 @@ def _item(
         provider=provider,
         status=ReadinessStatus.READY,
         required_kinds=["identity"],
-        evidence=[EvidenceRecord(kind="identity", result="pass", checked_at=NOW)],
+        evidence=[
+            EvidenceRecord(
+                kind="identity",
+                result="pass",
+                checked_at=NOW,
+                resource_ids=["resource-1"],
+                scopes=["scopes:read"],
+            )
+        ],
         fallbacks=[] if fallbacks is None else fallbacks,
         evidence_ttl=TTL,
     )
@@ -253,11 +277,13 @@ def test_build_contract_rejects_naive_locked_at() -> None:
 
 def test_build_contract_normalizes_locked_at_to_utc() -> None:
     """Aware ``locked_at`` values are normalized to UTC (R7)."""
-    contract = BuildContract(
-        tier1=_tier1(),
+    twin = _contract()
+    contract = _contract(
         locked_at=datetime(
             2026, 1, 2, 17, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=30))
         ),
+        contract_hash=tier1_canonical_hash(twin),
+        tier2_hash=tier2_digest(twin),
     )
     assert contract.locked_at == NOW
     assert contract.locked_at.utcoffset() == timedelta(0)
@@ -372,6 +398,142 @@ def test_canonical_hash_is_order_independent() -> None:
         )
     )
     assert tier1_canonical_hash(first) == tier1_canonical_hash(second)
+
+
+def test_canonical_hash_is_insensitive_to_tier1_list_order() -> None:
+    """Reordering Tier-1 list fields must not change the canonical hash.
+
+    Tier-1 list fields are semantically sets (whitelists, journeys,
+    policies); incidental insertion order is not a contract revision.
+    """
+
+    def tier1(reversed_order: bool) -> Tier1Invariants:
+        def pick(values: list[object]) -> list[object]:
+            return list(reversed(values)) if reversed_order else list(values)
+
+        return _tier1(
+            non_goals=pick(["no public API", "no authz"]),
+            primary_user_journeys=pick(["j1", "j2"]),
+            provider_whitelist=pick(
+                [
+                    ProviderEntry(provider="provider-a", paid=True),
+                    ProviderEntry(provider="provider-b"),
+                ]
+            ),
+            fallback_whitelist=pick(["provider-a", "provider-b"]),
+            security_constraints=pick(["c1", "c2"]),
+            destructive_policy=pick(
+                [
+                    DestructiveOperationRule(
+                        operation="op:one",
+                        classification=DestructiveAction.REVERSIBLE_AUTONOMOUS,
+                    ),
+                    DestructiveOperationRule(
+                        operation="op:two",
+                        classification=DestructiveAction.REVERSIBLE_AUTONOMOUS,
+                    ),
+                ]
+            ),
+        )
+
+    assert tier1_canonical_hash(_contract(tier1=tier1(False))) == (
+        tier1_canonical_hash(_contract(tier1=tier1(True)))
+    )
+
+
+# ---------------------------------------------------------------------------
+# Locked-state integrity (a locked contract cannot be forged)
+# ---------------------------------------------------------------------------
+
+
+def test_locked_at_without_hashes_is_rejected() -> None:
+    """A lock time without its lock hashes is not a valid locked state."""
+    with pytest.raises(ValidationError):
+        _contract(locked_at=NOW)
+
+
+def test_lock_hashes_without_locked_at_are_rejected() -> None:
+    """Lock hashes without a lock time are not a valid locked state."""
+    with pytest.raises(ValidationError):
+        _contract(contract_hash="0" * 64, tier2_hash="0" * 64)
+
+
+def test_locked_state_requires_matching_canonical_hash() -> None:
+    """A forged lock hash inconsistent with the Tier-1 content is rejected."""
+    with pytest.raises(ValidationError):
+        _contract(
+            locked_at=NOW,
+            contract_hash="0" * 64,
+            tier2_hash="0" * 64,
+        )
+
+
+def test_locked_state_round_trips_through_validation() -> None:
+    """A legitimately locked contract revalidates with identical hashes."""
+    locked = lock_contract(_contract(), now=NOW)
+    rebuilt = BuildContract.model_validate(locked.model_dump())
+    assert rebuilt.contract_hash == locked.contract_hash
+    assert rebuilt.tier2_hash == locked.tier2_hash
+    assert rebuilt.locked_at == locked.locked_at
+
+
+# ---------------------------------------------------------------------------
+# §14.6 — resume protocol sources of truth
+# ---------------------------------------------------------------------------
+
+
+def test_resume_protocol_defaults_to_empty_sources_of_truth() -> None:
+    """The resume protocol starts empty; nothing is presumed completed."""
+    protocol = ResumeProtocol()
+    assert protocol.lifecycle_state is None
+    assert protocol.current_task is None
+    assert protocol.completed_task_commits == []
+    assert protocol.test_results == []
+    assert protocol.review_state is None
+    assert protocol.outstanding_findings == []
+    assert protocol.attempt_counters == {}
+    assert protocol.spend_so_far == {}
+    assert protocol.deviations == []
+    assert protocol.contract_version is None
+
+
+def test_contract_records_resume_sources_of_truth() -> None:
+    """The §14.6 restart/resume sources of truth are modeled on the contract."""
+    contract = _contract(
+        resume=ResumeProtocol(
+            lifecycle_state=LifecycleState.BUILDING,
+            current_task="implement T03",
+            completed_task_commits=["ab" * 20],
+            test_results=["unit: 63 passed"],
+            review_state="clean",
+            outstanding_findings=["one minor finding"],
+            attempt_counters={"task-retries": 1},
+            spend_so_far={"provider-a": 5000},
+            deviations=["staging_provider selected"],
+            contract_version="1.0",
+        )
+    )
+    assert contract.resume.lifecycle_state is LifecycleState.BUILDING
+    assert contract.resume.current_task == "implement T03"
+    assert contract.resume.completed_task_commits == ["ab" * 20]
+    assert contract.resume.spend_so_far == {"provider-a": 5000}
+    assert contract.resume.contract_version == "1.0"
+
+
+def test_resume_state_does_not_affect_canonical_lock_hashes() -> None:
+    """Resume state is execution state, not a locked hash decision (R7)."""
+    first = _contract()
+    second = _contract(resume=ResumeProtocol(current_task="resumed mid-build"))
+    assert tier1_canonical_hash(first) == tier1_canonical_hash(second)
+    assert tier2_digest(first) == tier2_digest(second)
+
+
+def test_resume_rejects_negative_counters_and_spend() -> None:
+    """Attempt counters and spend-so-far cannot be negative."""
+    with pytest.raises(ValidationError):
+        ResumeProtocol(attempt_counters={"task-retries": -1})
+    with pytest.raises(ValidationError):
+        ResumeProtocol(spend_so_far={"provider-a": -1})
 
 
 # ---------------------------------------------------------------------------
@@ -611,13 +773,49 @@ def test_destructive_action_values_pinned() -> None:
 
 
 def test_r6_fallback_whitelist_requires_validated_entry() -> None:
-    """An approved fallback cannot exist only on paper (R6)."""
+    """An approved fallback cannot exist only on paper (R6).
+
+    ``provider-b`` is on the approved provider whitelist, so the lock
+    must reach the R6 core gate: a whitelisted fallback provider with
+    no validated readiness fallback entry blocks lock.
+    """
     reasons = _lock_reasons(
-        _contract(tier1=_tier1(fallback_whitelist=["provider-b"])),
+        _contract(
+            tier1=_tier1(
+                fallback_whitelist=["provider-b"],
+                provider_whitelist=[
+                    ProviderEntry(provider="provider-a", paid=True),
+                    ProviderEntry(provider="provider-b"),
+                ],
+            )
+        ),
         now=NOW,
     )
     assert any(
-        "provider-b" in reason and "fallback" in reason.lower()
+        "provider-b" in reason
+        and "no validated readiness fallback entry" in reason
+        for reason in reasons
+    )
+
+
+def test_r6_fallback_for_other_provider_does_not_satisfy_whitelist() -> None:
+    """A validated fallback for a different provider cannot stand in (R6)."""
+    reasons = _lock_reasons(
+        _contract(
+            tier1=_tier1(
+                fallback_whitelist=["provider-b"],
+                provider_whitelist=[
+                    ProviderEntry(provider="provider-a", paid=True),
+                    ProviderEntry(provider="provider-b"),
+                ],
+            ),
+            readiness=_pack(items=[_item(fallbacks=[_fallback("provider-a")])]),
+        ),
+        now=NOW,
+    )
+    assert any(
+        "provider-b" in reason
+        and "no validated readiness fallback entry" in reason
         for reason in reasons
     )
 
@@ -693,6 +891,7 @@ def test_auto_provision_authorized_requires_whitelisted_providers() -> None:
                 authority=_authority(
                     auto_provision_status=DependencyStatus.AUTO_PROVISION_AUTHORIZED,
                     auto_provision_providers=["not-approved-provider"],
+                    approved_accounts=["acme-prod"],
                 )
             )
         ),
@@ -701,18 +900,62 @@ def test_auto_provision_authorized_requires_whitelisted_providers() -> None:
     assert any("whitelist" in reason for reason in reasons)
 
 
+def test_auto_provision_authorized_requires_approved_accounts() -> None:
+    """AUTO_PROVISION_AUTHORIZED must be bounded to approved accounts
+    (spec §14.3 auto-provisioning within approved accounts/providers).
+    """
+    reasons = _lock_reasons(
+        _contract(
+            tier1=_tier1(
+                authority=_authority(
+                    auto_provision_status=DependencyStatus.AUTO_PROVISION_AUTHORIZED,
+                    auto_provision_providers=["provider-a"],
+                )
+            )
+        ),
+        now=NOW,
+    )
+    assert any("approved accounts" in reason for reason in reasons)
+
+
 def test_auto_provision_authorized_within_whitelist_locks() -> None:
-    """Auto-provision bounded to whitelisted providers is lockable."""
+    """Auto-provision bounded to whitelisted providers/accounts is lockable."""
     contract = _contract(
         tier1=_tier1(
             authority=_authority(
                 auto_provision_status=DependencyStatus.AUTO_PROVISION_AUTHORIZED,
                 auto_provision_providers=["provider-a"],
+                approved_accounts=["acme-prod"],
             )
         )
     )
     locked = lock_contract(contract, now=NOW)
     assert locked.contract_hash == tier1_canonical_hash(contract)
+
+
+# ---------------------------------------------------------------------------
+# §15 AUTONOMY row — auto-debug authorization
+# ---------------------------------------------------------------------------
+
+
+def test_authority_auto_debug_defaults_to_not_authorized() -> None:
+    """The §15 ``auto-debug authorized`` row starts fail-closed."""
+    assert AuthorityEnvelope().auto_debug is False
+
+
+def test_auto_debug_authorization_is_recorded_on_lock() -> None:
+    """The §15 AUTONOMY LOCK row is representable on a locked contract."""
+    contract = _contract(tier1=_tier1(authority=_authority(auto_debug=True)))
+    locked = lock_contract(contract, now=NOW)
+    assert locked.tier1.authority.auto_debug is True
+    assert locked.contract_hash == tier1_canonical_hash(contract)
+
+
+def test_auto_debug_authorization_is_a_tier1_invariant() -> None:
+    """Toggling auto-debug authorization revises a Tier-1 decision."""
+    first = _contract()
+    second = _contract(tier1=_tier1(authority=_authority(auto_debug=True)))
+    assert tier1_canonical_hash(first) != tier1_canonical_hash(second)
 
 
 # ---------------------------------------------------------------------------
@@ -804,3 +1047,4 @@ def test_lock_reports_all_gating_failures_at_once() -> None:
     assert any("rollback path" in reason for reason in reasons)
     assert any("provider-b" in reason for reason in reasons)
     assert any("approved providers" in reason for reason in reasons)
+    assert any("approved accounts" in reason for reason in reasons)

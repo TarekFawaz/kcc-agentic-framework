@@ -22,8 +22,9 @@ locked decision — including the authority envelope, money policy and
 destructive-action policy of sections 14.3-14.5 — while
 :class:`Tier2Details` holds the autonomous engineering detail that may
 change without user interruption.  The locked contract additionally
-carries the validated trace graph and readiness evidence pack that the
-final LOCK decision depends on (sections 13, 15).
+carries the validated trace graph, readiness evidence pack and the
+§14.6 resume protocol sources of truth that the final LOCK decision
+depends on (sections 13, 15).
 
 :func:`lock_contract` is the only path to a locked contract: it
 re-checks trace/readiness gating, authority/budget/destructive
@@ -40,10 +41,11 @@ import json
 import re
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
-from kcc_autobuild.models import DependencyStatus, StrictModel
+from kcc_autobuild.models import DependencyStatus, LifecycleState, StrictModel
 from kcc_autobuild.readiness import (
     SECRET_REF_PATTERN,
     ReadinessPack,
@@ -91,13 +93,15 @@ class ProviderEntry(StrictModel):
 
 
 class AuthorityEnvelope(StrictModel):
-    """Explicit authorization granted by the contract (spec 14.3).
+    """Explicit authorization granted by the contract (spec 14.3, 15).
 
     Everything defaults to *not* authorized (fail-closed).  The
     auto-provision classification uses the canonical repository enum
     (R4): ``AUTO_PROVISION_AUTHORIZED`` grants bounded auto-provision
-    inside the approved providers/accounts, while
-    ``USER_MUST_PROVIDE`` keeps it on the user.
+    inside the approved providers *and* approved accounts (both are
+    enforced at lock), while ``USER_MUST_PROVIDE`` keeps it on the
+    user.  ``auto_debug`` records the AUTONOMY ``auto-debug
+    authorized`` row of the section 15 LOCK surface.
 
     Credential references only: raw secrets are rejected (spec section
     24; ``vault://``, ``env://`` or ``keychain://``).
@@ -119,6 +123,7 @@ class AuthorityEnvelope(StrictModel):
     monitoring_setup: bool = False
     secret_reference_usage: bool = False
     bounded_spend: bool = False
+    auto_debug: bool = False
 
     @field_validator("auto_provision_providers", "approved_accounts")
     @classmethod
@@ -273,6 +278,57 @@ class Tier2Details(StrictModel):
         return value
 
 
+class ResumeProtocol(StrictModel):
+    """Restart/resume source of truth (spec §14.6).
+
+    A resumed session continues from this durable state instead of
+    repeating completed work from conversational memory.  It is
+    execution state, not a locked decision: it starts empty, is updated
+    by the runtime after lock, and is excluded from both the Tier-1
+    canonical hash (R7) and the Tier-2 digest.
+    """
+
+    lifecycle_state: LifecycleState | None = None
+    current_task: str | None = None
+    completed_task_commits: list[str] = Field(default_factory=list)
+    test_results: list[str] = Field(default_factory=list)
+    review_state: str | None = None
+    outstanding_findings: list[str] = Field(default_factory=list)
+    attempt_counters: dict[str, int] = Field(default_factory=dict)
+    spend_so_far: dict[str, int] = Field(default_factory=dict)
+    deviations: list[str] = Field(default_factory=list)
+    contract_version: str | None = None
+
+    @field_validator("current_task", "review_state", "contract_version")
+    @classmethod
+    def _optional_text(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
+        if value is not None:
+            _require_nonempty(value, info.field_name)
+        return value
+
+    @field_validator(
+        "completed_task_commits", "test_results", "outstanding_findings", "deviations"
+    )
+    @classmethod
+    def _detail_entries(
+        cls, value: list[str], info: ValidationInfo
+    ) -> list[str]:
+        return _require_nonempty_strings(value, info.field_name)
+
+    @field_validator("attempt_counters", "spend_so_far")
+    @classmethod
+    def _non_negative_amounts(
+        cls, value: dict[str, int], info: ValidationInfo
+    ) -> dict[str, int]:
+        for key, amount in value.items():
+            _require_nonempty(key, f"{info.field_name} key")
+            if amount < 0:
+                raise ValueError(f"{info.field_name} values must not be negative")
+        return value
+
+
 class Tier1Invariants(StrictModel):
     """Locked Tier-1 invariants (spec 14.1).
 
@@ -362,7 +418,11 @@ class BuildContract(StrictModel):
 
     ``locked_at`` must be timezone-aware and is normalized to UTC (R7);
     ``contract_hash`` is the canonical Tier-1 hash and ``tier2_hash``
-    the Tier-2 digest, both stored by :func:`lock_contract`.
+    the Tier-2 digest, both stored by :func:`lock_contract`.  ``resume``
+    carries the §14.6 restart/resume sources of truth; it is execution
+    state and is not part of either hash.  A locked contract is only
+    constructible with hashes matching its content — the stored hash
+    set cannot be forged by a direct constructor call.
     """
 
     contract_version: str = "1.0"
@@ -370,6 +430,7 @@ class BuildContract(StrictModel):
     tier2: Tier2Details = Field(default_factory=Tier2Details)
     trace: TraceGraph = Field(default_factory=TraceGraph)
     readiness: ReadinessPack = Field(default_factory=ReadinessPack)
+    resume: ResumeProtocol = Field(default_factory=ResumeProtocol)
     locked_at: datetime | None = None
     contract_hash: str | None = None
     tier2_hash: str | None = None
@@ -397,6 +458,32 @@ class BuildContract(StrictModel):
             raise ValueError(f"{info.field_name} must be a 64-char hex sha256")
         return value
 
+    @model_validator(mode="after")
+    def _locked_state_must_be_consistent(self) -> "BuildContract":
+        """A locked contract is only constructible with matching lock hashes.
+
+        Prevents forging a locked contract with hand-picked hashes: the
+        stored Tier-1 hash must equal the canonical hash of the locked
+        Tier-1 invariants and the Tier-2 hash must equal the Tier-2
+        digest.  :func:`lock_contract` is the only path that stores a
+        consistent hash set.
+        """
+        if self.locked_at is None:
+            if self.contract_hash is not None or self.tier2_hash is not None:
+                raise ValueError(
+                    "lock hashes require a lock time (locked_at is not set)"
+                )
+            return self
+        if self.contract_hash is None or self.tier2_hash is None:
+            raise ValueError("a locked contract must store both lock hashes")
+        if self.contract_hash != tier1_canonical_hash(self):
+            raise ValueError(
+                "contract_hash does not match the canonical Tier-1 hash"
+            )
+        if self.tier2_hash != tier2_digest(self):
+            raise ValueError("tier2_hash does not match the Tier-2 digest")
+        return self
+
 
 class ContractLockError(ValueError):
     """Raised when :func:`lock_contract` refuses to lock a contract.
@@ -410,10 +497,26 @@ class ContractLockError(ValueError):
         super().__init__("; ".join(self.reasons))
 
 
+def _canonicalize(value: Any) -> Any:
+    """Normalize a JSON-safe value for canonical hashing.
+
+    Dict keys are sorted and list order is discarded (contract list
+    fields are semantically sets), so the canonical hash is insensitive
+    to incidental insertion order and identical across processes.
+    """
+    if isinstance(value, dict):
+        return {key: _canonicalize(item) for key, item in sorted(value.items())}
+    if isinstance(value, list):
+        return sorted((_canonicalize(item) for item in value), key=json.dumps)
+    return value
+
+
 def _canonical_json(model: BaseModel) -> str:
-    """Deterministic JSON: sorted keys, compact separators, JSON-safe types."""
+    """Deterministic JSON: sorted keys, normalized list order, compact separators."""
     return json.dumps(
-        model.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        _canonicalize(model.model_dump(mode="json")),
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 
@@ -466,14 +569,18 @@ def _check_authority(contract: BuildContract) -> list[str]:
     authority = contract.tier1.authority
     if authority.auto_provision_status != DependencyStatus.AUTO_PROVISION_AUTHORIZED:
         return []
+    reasons: list[str] = []
     if not authority.auto_provision_providers:
-        return ["auto-provision is authorized without approved providers"]
+        reasons.append("auto-provision is authorized without approved providers")
+    if not authority.approved_accounts:
+        reasons.append("auto-provision is authorized without approved accounts")
     whitelist = {entry.provider for entry in contract.tier1.provider_whitelist}
-    return [
+    reasons.extend(
         f"auto-provision provider '{provider}' is not on the provider whitelist"
         for provider in authority.auto_provision_providers
         if provider not in whitelist
-    ]
+    )
+    return reasons
 
 
 def _check_money(contract: BuildContract) -> list[str]:
@@ -549,7 +656,8 @@ def lock_contract(
     * readiness is evidence-backed and ready (current pass evidence;
       no declared blockers; no open red-team findings);
     * ``AUTO_PROVISION_AUTHORIZED`` auto-provision is bounded by the
-      approved provider whitelist (R4);
+      approved provider whitelist and the approved accounts (R4,
+      spec §14.3);
     * every paid whitelist provider has a positive spend cap;
     * production deployment authority names a production target;
     * ``REVERSIBLE_WITH_ROLLBACK_REQUIRED`` operations define a
@@ -581,7 +689,10 @@ def lock_contract(
     if reasons:
         raise ContractLockError(reasons)
 
-    contract.locked_at = now_utc
-    contract.contract_hash = tier1_canonical_hash(contract)
-    contract.tier2_hash = tier2_digest(contract)
+    # The lock fields form one atomic, mutually-consistent set; the
+    # after-model validator (re-run per field because StrictModel
+    # enables validate_assignment) only ever sees the complete set.
+    object.__setattr__(contract, "locked_at", now_utc)
+    object.__setattr__(contract, "contract_hash", tier1_canonical_hash(contract))
+    object.__setattr__(contract, "tier2_hash", tier2_digest(contract))
     return contract
