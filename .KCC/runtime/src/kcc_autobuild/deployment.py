@@ -2,9 +2,12 @@
 
 Plan 05, Task 3 (Staging/production deployment + rollback contract): a
 production deployment is an authorized, policy-classified external
-data-mutation operation (spec 20: deployment only where authorized;
-spec 14.5/24: destructive/mutating operations must be policy-classified
-before execution), and the global contract requires every
+data-mutation operation (spec 14.3: production deployment and rollback
+are recorded in the contract's explicit authority envelope; spec 14.5:
+destructive/mutating operations must be policy-classified before
+execution; spec 20.2: production completion requires the
+contract-defined smoke/E2E validation; spec 21: production deployment
+succeeds where authorized), and the global contract requires every
 external/data-mutation operation (deploy, migration, rollback) to route
 through ``PolicyToolGate.call(Operation(...), args)`` -- DENIED never
 calls the executor; AMBIGUOUS raises back to KCC machine interpretation
@@ -13,13 +16,14 @@ calls the executor; AMBIGUOUS raises back to KCC machine interpretation
 The behavioral contract is owned by
 :file:`.KCC/runtime/tests/test_deployment.py`:
 
-- :class:`RolloutClass` is the canonical rollout vocabulary locked into
-  the contract: ``CANARY`` (validate in production before full exposure)
-  and ``DIRECT``. Only the LOCKED class may be used: an explicit
-  ``requested_rollout`` that differs from the lock raises
-  :class:`RolloutMismatchError` -- an attempt to overrule the lock fails
-  closed before any gate call or mutation (the prescribed "direct
-  rejected when canary locked" case).
+- :class:`RolloutClass` is the canonical rollout vocabulary owned by
+  the contract model (:class:`~kcc_autobuild.contract.Tier1Invariants`)
+  and locked into the contract: ``CANARY`` (validate in production
+  before full exposure) and ``DIRECT``. Only the LOCKED class may be
+  used: an explicit ``requested_rollout`` that differs from the lock
+  raises :class:`RolloutMismatchError` -- an attempt to overrule the
+  lock fails closed before any gate call or mutation (the prescribed
+  "direct rejected when canary locked" case).
 - :class:`DeploymentAdapter` is the target-system view (duck-typed, no
   policy authority, no raw client handed to KCC): ``data_class`` is the
   data sensitivity classification of the production target,
@@ -53,26 +57,18 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Mapping, Protocol, runtime_checkable
 
+from kcc_autobuild.contract import RolloutClass
 from kcc_autobuild.policy import Operation
 
 DEPLOY_OPERATION = "deploy"
-"""Canonical policy verb for the production deploy operation (spec 20.2)."""
+"""Canonical policy verb for the production deploy operation
+(spec 14.3: production deployment is part of the explicit authority
+envelope; the operation is evaluated by the policy gate)."""
 
 ROLLBACK_OPERATION = "rollback"
-"""Canonical policy verb for the rollback of the same production target."""
-
-
-class RolloutClass(str, Enum):
-    """The rollout class locked into the Build Contract (tier-1).
-
-    ``CANARY`` -- deploy to production through a canary gate: the
-    post-deploy health check decides between DEPLOYED and an immediate
-    rollback. ``DIRECT`` -- expose directly to production (still
-    health-checked; on failure the same rollback path applies).
-    """
-
-    CANARY = "CANARY"
-    DIRECT = "DIRECT"
+"""Canonical policy verb for the rollback of the same production target
+(spec 14.3: rollback is part of the explicit authority envelope;
+spec 14.5: rollback-path safeguard for destructive operations)."""
 
 
 class DeploymentOutcome(str, Enum):
@@ -107,6 +103,17 @@ class DeploymentContractError(DeploymentError):
     ``tier1.production_target`` is missing/blank: deployment never runs
     against an unlocked or incomplete lock, and no gate call or mutation
     happens.
+    """
+
+
+class DeploymentConfigError(DeploymentError):
+    """The deployment target view is misconfigured (fail closed).
+
+    Raised when the adapter's ``data_class`` is missing, blank or not
+    text: without a real data-sensitivity classification the policy gate
+    cannot authorize the production operation, so nothing is deployed or
+    rolled back.  It is a :class:`DeploymentError` subclass -- never a
+    raw :class:`ValueError`/:class:`TypeError`.
     """
 
 
@@ -260,9 +267,7 @@ class DeploymentCoordinator:
                 "contract.tier1.production_target"
             )
 
-        data_class = _require_nonempty_text(
-            self._adapter.data_class, "adapter data_class"
-        )
+        data_class = self._adapter_data_class()
 
         if requested_rollout is not None:
             requested = _coerce_rollout_class(requested_rollout, "requested_rollout")
@@ -271,7 +276,8 @@ class DeploymentCoordinator:
         rollout = locked
 
         # Production deploy: one policy-classified operation on the exact
-        # production target (spec 20.2; global contract: via the gate).
+        # production target (spec 14.3 production deployment authority;
+        # global contract: via the gate).
         self._gate.call(
             Operation(
                 operation=DEPLOY_OPERATION,
@@ -283,8 +289,9 @@ class DeploymentCoordinator:
 
         if not self._adapter.health(target):
             # Health failed: rollback the SAME target through the gate
-            # (fail closed -- a DENIED rollback propagates rather than
-            # reporting a recovery that never happened).
+            # (spec 14.3 rollback authority / spec 14.5 rollback-path
+            # safeguard; fail closed -- a DENIED rollback propagates
+            # rather than reporting a recovery that never happened).
             self._gate.call(
                 Operation(
                     operation=ROLLBACK_OPERATION,
@@ -295,3 +302,18 @@ class DeploymentCoordinator:
             )
             return DeploymentOutcome.ROLLED_BACK
         return DeploymentOutcome.DEPLOYED
+
+    def _adapter_data_class(self) -> str:
+        """The adapter's data-sensitivity classification, fail closed.
+
+        A blank/missing/non-text ``data_class`` is a misconfigured
+        target view (:class:`DeploymentConfigError`): without it the
+        policy gate cannot classify the production operation, so no
+        mutation is ever routed.
+        """
+        try:
+            return _require_nonempty_text(
+                self._adapter.data_class, "adapter data_class"
+            )
+        except (TypeError, ValueError) as exc:
+            raise DeploymentConfigError(str(exc)) from exc

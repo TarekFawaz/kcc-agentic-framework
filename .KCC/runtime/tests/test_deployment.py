@@ -6,9 +6,12 @@ contract, in
 ``.superpowers/bootstrap/plans/2026-08-27-05-resume-deploy-validation.task-contracts.md``).
 
 A production deployment is an authorized, policy-classified, external
-data-mutation operation (spec 20: deployment only where authorized;
-spec 14.5: destructive operations classified before execution; global
-contract: deploy and rollback MUST route through
+data-mutation operation (spec 14.3: production deployment and rollback
+are recorded in the contract's explicit authority envelope; spec 14.5:
+destructive operations classified before execution; spec 20.2:
+production completion requires the contract-defined smoke/E2E
+validation; spec 21: production deployment succeeds where authorized;
+global contract: deploy and rollback MUST route through
 ``PolicyToolGate.call(Operation(...), args)`` -- DENIED never calls the
 executor; AMBIGUOUS raises back to KCC machine interpretation, never a
 direct user prompt; ruling R10: no extra approval gates). The
@@ -39,20 +42,32 @@ immediately gates a rollback of the same production target.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
 
+from kcc_autobuild.contract import (
+    AuthorityEnvelope,
+    BuildContract,
+    MoneyPolicy,
+    RolloutClass as ContractRolloutClass,
+    Tier1Invariants,
+    lock_contract,
+)
 from kcc_autobuild.deployment import (
     DEPLOY_OPERATION,
     ROLLBACK_OPERATION,
     DeploymentAdapter,
+    DeploymentConfigError,
     DeploymentContractError,
     DeploymentCoordinator,
+    DeploymentError,
     DeploymentOutcome,
     RolloutClass,
     RolloutMismatchError,
 )
+from kcc_autobuild.models import ReadinessStatus
 from kcc_autobuild.policy import (
     Operation,
     PolicyDecision,
@@ -60,7 +75,9 @@ from kcc_autobuild.policy import (
     PolicyRule,
     sign_policy_bundle,
 )
+from kcc_autobuild.readiness import EvidenceRecord, ReadinessItem, ReadinessPack
 from kcc_autobuild.tool_gate import AmbiguousPolicy, PolicyDenied, PolicyToolGate
+from kcc_autobuild.trace import TraceEdge, TraceGraph, TraceNode
 
 SECRET = "unit-test-deployment-secret"
 
@@ -316,9 +333,33 @@ def test_contract_with_blank_production_target_is_rejected():
 
 
 def test_coordinator_rejects_blank_adapter_data_class():
+    # A misconfigured target view (no data sensitivity classification)
+    # is a DeploymentError subclass, never a raw ValueError/TypeError:
+    # without a real data_class the policy gate cannot authorize the
+    # production operation, so nothing may be routed.
     adapter = _FakeDeploymentAdapter(data_class="")
+    gate = _CountingGate()
+    coordinator = DeploymentCoordinator(adapter=adapter, gate=gate)
+    with pytest.raises(DeploymentConfigError) as excinfo:
+        coordinator.deploy(_contract())
+    assert isinstance(excinfo.value, DeploymentError)
+    assert "data_class" in str(excinfo.value)
+    assert gate.calls == []
+    assert adapter.deploys == []
+    assert adapter.rollbacks == []
+
+
+def test_coordinator_rejects_none_adapter_data_class():
+    adapter = _FakeDeploymentAdapter(data_class=None)  # type: ignore[arg-type]
     coordinator = DeploymentCoordinator(adapter=adapter, gate=_CountingGate())
-    with pytest.raises(ValueError):
+    with pytest.raises(DeploymentConfigError):
+        coordinator.deploy(_contract())
+
+
+def test_coordinator_rejects_non_string_adapter_data_class():
+    adapter = _FakeDeploymentAdapter(data_class=42)  # type: ignore[arg-type]
+    coordinator = DeploymentCoordinator(adapter=adapter, gate=_CountingGate())
+    with pytest.raises(DeploymentConfigError):
         coordinator.deploy(_contract())
 
 
@@ -570,3 +611,205 @@ def test_executor_receives_the_policy_audit_tokens():
     # token its gate decision logged BEFORE invoking the executor.
     assert adapter.deploys[0][2] == gate.gate.audits[0].token
     assert adapter.rollbacks[0][1] == gate.gate.audits[1].token
+
+
+# --- Real locked BuildContract integration -----------------------------------
+# The coordinator must be operable against the ACTUAL contract model: the
+# rollout class and production target are Tier-1 locked invariants on
+# :class:`~kcc_autobuild.contract.Tier1Invariants` (StrictModel forbids
+# extra fields), so the duck-typed fakes above cannot hide a gap between
+# the coordinator and a genuinely locked BuildContract.  These tests lock
+# a real contract via :func:`~kcc_autobuild.contract.lock_contract` and
+# run the full deploy + rollback path against it.
+
+
+REAL_NOW = datetime(2026, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
+EVIDENCE_TTL = timedelta(hours=4)
+
+
+def _real_trace() -> TraceGraph:
+    """A trace where REQ-001 reaches both AC and PROD coverage."""
+    return TraceGraph(
+        nodes=[
+            TraceNode(id="REQ-001", kind="requirement"),
+            TraceNode(id="IMPL-01", kind="implementation"),
+            TraceNode(id="AC-001", kind="acceptance"),
+            TraceNode(id="PROD-001", kind="production_validation"),
+        ],
+        edges=[
+            TraceEdge(source="REQ-001", target="IMPL-01"),
+            TraceEdge(source="IMPL-01", target="AC-001"),
+            TraceEdge(source="IMPL-01", target="PROD-001"),
+        ],
+    )
+
+
+def _real_readiness() -> ReadinessPack:
+    """Evidence-backed ready pack so the fixture is lockable."""
+    return ReadinessPack(
+        items=[
+            ReadinessItem(
+                id="IT-001",
+                provider="provider-a",
+                status=ReadinessStatus.READY,
+                required_kinds=["identity"],
+                evidence=[
+                    EvidenceRecord(
+                        kind="identity",
+                        result="pass",
+                        checked_at=REAL_NOW,
+                        resource_ids=["resource-1"],
+                        scopes=["scopes:read"],
+                    )
+                ],
+                evidence_ttl=EVIDENCE_TTL,
+            )
+        ]
+    )
+
+
+def _locked_real_contract(
+    *,
+    rollout_class: object = RolloutClass.CANARY,
+    production_target: object = PRODUCTION_TARGET,
+    production_deployment: bool = True,
+) -> BuildContract:
+    """A genuinely locked BuildContract carrying the Tier-1 rollout lock.
+
+    ``rollout_class`` is a real Tier-1 field -- the lock only succeeds
+    (and the hash covers it) because the contract model owns it.
+    """
+    contract = BuildContract(
+        tier1=Tier1Invariants(
+            product_scope="internal CLI analysis tool",
+            non_goals=["no public API"],
+            primary_user_journeys=["run one analysis end to end"],
+            authority=AuthorityEnvelope(
+                production_deployment=production_deployment,
+                rollback=production_deployment,
+            ),
+            money=MoneyPolicy(),
+            production_target=production_target,
+            rollout_class=rollout_class,
+            definition_of_done=(
+                "analysis output is produced end to end and validated in staging"
+            ),
+        ),
+        trace=_real_trace(),
+        readiness=_real_readiness(),
+    )
+    return lock_contract(contract, now=REAL_NOW)
+
+
+def test_deployment_uses_the_contract_model_rollout_vocabulary():
+    # ONE canonical rollout vocabulary: the enum the coordinator consumes
+    # IS the enum locked into Tier1Invariants, never a parallel copy that
+    # could diverge from what the contract model validates.
+    assert RolloutClass is ContractRolloutClass
+
+
+def test_real_locked_canary_contract_deploys_through_the_gate():
+    # The full happy path against a genuinely locked BuildContract: the
+    # locked tier1.rollout_class drives the deploy operation, the locked
+    # production_target is the exact policy resource, and the post-deploy
+    # health check passes => DEPLOYED.
+    adapter = _FakeDeploymentAdapter(healthy=True)
+    gate = _allowed_gate(adapter)
+    contract = _locked_real_contract()
+    outcome = DeploymentCoordinator(adapter=adapter, gate=gate).deploy(contract)
+    assert outcome is DeploymentOutcome.DEPLOYED
+    assert contract.tier1.rollout_class is RolloutClass.CANARY
+    assert gate.calls == [
+        (
+            Operation(
+                operation=DEPLOY_OPERATION,
+                resource=PRODUCTION_TARGET,
+                data_class=DATA_CLASS,
+            ),
+            {"target": PRODUCTION_TARGET, "rollout_class": "CANARY"},
+        )
+    ]
+    assert adapter.deploys == [
+        (PRODUCTION_TARGET, RolloutClass.CANARY, "dep-tok-1")
+    ]
+    assert adapter.rollbacks == []
+    assert adapter.health_checks == [PRODUCTION_TARGET]
+
+
+def test_real_locked_canary_health_failure_auto_rolls_back():
+    # Prescribed scenario against a real locked contract: the canary
+    # deploy lands, health fails, and the coordinator gates a rollback of
+    # the same locked production target => ROLLED_BACK.
+    adapter = _FakeDeploymentAdapter(healthy=False)
+    gate = _allowed_gate(adapter)
+    outcome = DeploymentCoordinator(adapter=adapter, gate=gate).deploy(
+        _locked_real_contract()
+    )
+    assert outcome is DeploymentOutcome.ROLLED_BACK
+    assert gate.calls[0][0] == Operation(
+        operation=DEPLOY_OPERATION,
+        resource=PRODUCTION_TARGET,
+        data_class=DATA_CLASS,
+    )
+    assert gate.calls[1][0] == Operation(
+        operation=ROLLBACK_OPERATION,
+        resource=PRODUCTION_TARGET,
+        data_class=DATA_CLASS,
+    )
+    assert gate.calls[1][1] == {"target": PRODUCTION_TARGET}
+    assert adapter.deploys == [
+        (PRODUCTION_TARGET, RolloutClass.CANARY, "dep-tok-1")
+    ]
+    assert adapter.rollbacks == [(PRODUCTION_TARGET, "dep-tok-2")]
+    assert adapter.health_checks == [PRODUCTION_TARGET]
+
+
+def test_real_locked_canary_rejects_direct_request():
+    # "direct rejected when canary locked" against a real locked
+    # BuildContract: the Tier-1 lock wins and nothing is routed.
+    adapter = _FakeDeploymentAdapter()
+    gate = _allowed_gate(adapter)
+    coordinator = DeploymentCoordinator(adapter=adapter, gate=gate)
+    with pytest.raises(RolloutMismatchError) as excinfo:
+        coordinator.deploy(_locked_real_contract(), RolloutClass.DIRECT)
+    assert excinfo.value.locked is RolloutClass.CANARY
+    assert excinfo.value.requested is RolloutClass.DIRECT
+    assert gate.calls == []
+    assert adapter.deploys == []
+    assert adapter.rollbacks == []
+    assert adapter.health_checks == []
+
+
+def test_real_contract_uses_its_locked_production_target():
+    # The exact production_target locked into Tier 1 is the policy
+    # resource of the operation -- not a default and not the adapter's.
+    target = "prod/app-internal"
+    adapter = _FakeDeploymentAdapter()
+    gate = _allowed_gate(adapter, target=target)
+    outcome = DeploymentCoordinator(adapter=adapter, gate=gate).deploy(
+        _locked_real_contract(production_target=target)
+    )
+    assert outcome is DeploymentOutcome.DEPLOYED
+    assert gate.calls[0][0].resource == target
+    assert gate.calls[0][1] == {"target": target, "rollout_class": "CANARY"}
+    assert adapter.deploys == [(target, RolloutClass.CANARY, "dep-tok-1")]
+    assert adapter.health_checks == [target]
+
+
+def test_real_locked_contract_without_rollout_lock_refuses_deployment():
+    # A genuinely locked contract that never authorized production
+    # deployment carries no locked rollout class; deploying against it
+    # must fail closed before any gate call, even though the contract
+    # itself is legitimately locked.
+    contract = _locked_real_contract(
+        production_deployment=False, rollout_class=None
+    )
+    assert contract.locked_at is not None
+    assert contract.contract_hash is not None
+    gate = _CountingGate()
+    coordinator = DeploymentCoordinator(
+        adapter=_FakeDeploymentAdapter(), gate=gate
+    )
+    with pytest.raises(DeploymentContractError):
+        coordinator.deploy(contract)
+    assert gate.calls == []

@@ -61,6 +61,7 @@ from kcc_autobuild.contract import (
     MoneyPolicy,
     ProviderEntry,
     ResumeProtocol,
+    RolloutClass,
     Tier1Invariants,
     Tier2Details,
     lock_contract,
@@ -671,13 +672,51 @@ def test_lock_requires_production_target_when_authorized() -> None:
     assert any("production target" in reason for reason in reasons)
 
 
+def test_lock_requires_locked_rollout_class_when_authorized() -> None:
+    """Production deployment authority requires the locked rollout class.
+
+    The rollout strategy (canary vs direct) is a material production
+    decision locked into Tier 1 (spec 14.1 deployment authority; spec
+    14.3 authority envelope: production deployment / rollback): a
+    contract that may deploy to production must lock which class it
+    uses, otherwise the deployment coordinator could never run against
+    the real locked contract.
+    """
+    reasons = _lock_reasons(
+        _contract(
+            tier1=_tier1(
+                authority=_authority(production_deployment=True),
+                rollout_class=None,
+            )
+        ),
+        now=NOW,
+    )
+    assert any("rollout class" in reason for reason in reasons)
+
+
+def test_tier1_rollout_class_must_be_canonical() -> None:
+    """Only the canonical rollout vocabulary may lock into Tier 1."""
+    with pytest.raises(ValidationError):
+        _tier1(rollout_class="bluegreen")
+
+
+def test_tier1_rollout_class_accepts_canonical_string() -> None:
+    """The canonical string form normalizes to the enum member."""
+    tier1 = _tier1(rollout_class="CANARY")
+    assert tier1.rollout_class is RolloutClass.CANARY
+
+
 def test_lock_succeeds_with_production_target() -> None:
-    """With a target in place, production deployment authority locks."""
+    """With a target and a locked rollout class, production authority locks."""
     contract = _contract(
-        tier1=_tier1(authority=_authority(production_deployment=True))
+        tier1=_tier1(
+            authority=_authority(production_deployment=True),
+            rollout_class=RolloutClass.CANARY,
+        )
     )
     locked = lock_contract(contract, now=NOW)
     assert locked.contract_hash == tier1_canonical_hash(contract)
+    assert locked.tier1.rollout_class is RolloutClass.CANARY
 
 
 # ---------------------------------------------------------------------------

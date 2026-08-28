@@ -18,8 +18,10 @@ final LOCK surface of section 15, with the binding plan rulings:
   Tier-2 engineering detail may evolve without invalidating the lock.
 
 Structure (two-tier, section 14): :class:`Tier1Invariants` holds every
-locked decision — including the authority envelope, money policy and
-destructive-action policy of sections 14.3-14.5 — while
+locked decision — including the authority envelope, money policy,
+destructive-action policy of sections 14.3-14.5 and the production
+deployment surface (``production_target`` plus the locked
+:class:`RolloutClass` the deployment coordinator must use) — while
 :class:`Tier2Details` holds the autonomous engineering detail that may
 change without user interruption.  The locked contract additionally
 carries the validated trace graph, readiness evidence pack and the
@@ -230,6 +232,29 @@ class DestructiveOperationRule(StrictModel):
         return value
 
 
+class RolloutClass(str, Enum):
+    """The rollout class locked into Tier 1 for production deployment.
+
+    The strategy a production deployment may use is a material
+    production decision (spec 14.1 locked invariant ``deployment
+    authority``; spec 14.3 authority envelope: ``production
+    deployment`` / ``rollback``), so the contract locks it into Tier 1:
+
+    ``CANARY`` -- deploy to production through a canary gate: the
+    post-deploy health check decides between DEPLOYED and an immediate
+    rollback.  ``DIRECT`` -- expose directly to production (still
+    health-checked; on failure the same rollback path applies).
+
+    The deployment coordinator and the deployment adapter of Plan 05
+    Task 3 consume exactly this vocabulary (see
+    :mod:`kcc_autobuild.deployment`) -- the contract model owns the
+    canonical members, never a parallel copy.
+    """
+
+    CANARY = "CANARY"
+    DIRECT = "DIRECT"
+
+
 class Tier2Details(StrictModel):
     """Autonomous engineering detail (spec 14.2).
 
@@ -354,6 +379,7 @@ class Tier1Invariants(StrictModel):
         default_factory=list
     )
     production_target: str | None = None
+    rollout_class: RolloutClass | None = None
     definition_of_done: str
 
     @field_validator("product_scope", "definition_of_done")
@@ -400,6 +426,18 @@ class Tier1Invariants(StrictModel):
     def _production_target_not_blank(cls, value: str | None) -> str | None:
         if value is not None:
             _require_nonempty(value, "production_target")
+        return value
+
+    @field_validator("rollout_class")
+    @classmethod
+    def _rollout_class_is_canonical(
+        cls, value: RolloutClass | None
+    ) -> RolloutClass | None:
+        if value is not None and not isinstance(value, RolloutClass):
+            raise ValueError(
+                "rollout_class must be a canonical rollout class "
+                "(CANARY or DIRECT)"
+            )
         return value
 
     @field_validator("destructive_policy")
@@ -601,6 +639,17 @@ def _check_production_target(contract: BuildContract) -> list[str]:
     return []
 
 
+def _check_rollout_class(contract: BuildContract) -> list[str]:
+    if (
+        contract.tier1.authority.production_deployment
+        and contract.tier1.rollout_class is None
+    ):
+        return [
+            "production deployment is authorized without a locked rollout class"
+        ]
+    return []
+
+
 def _check_destructive_policy(contract: BuildContract) -> list[str]:
     reasons: list[str] = []
     for rule in contract.tier1.destructive_policy:
@@ -660,6 +709,9 @@ def lock_contract(
       spec §14.3);
     * every paid whitelist provider has a positive spend cap;
     * production deployment authority names a production target;
+    * production deployment authority locks the rollout class
+      (``CANARY`` / ``DIRECT``) the deployment must use (spec 14.1 /
+      14.3; consumed by the deployment coordinator);
     * ``REVERSIBLE_WITH_ROLLBACK_REQUIRED`` operations define a
       rollback path and ``IRREVERSIBLE_WHITELISTED`` operations define
       the verified backup safeguard;
@@ -684,6 +736,7 @@ def lock_contract(
     reasons.extend(_check_authority(contract))
     reasons.extend(_check_money(contract))
     reasons.extend(_check_production_target(contract))
+    reasons.extend(_check_rollout_class(contract))
     reasons.extend(_check_destructive_policy(contract))
     reasons.extend(_check_fallback_whitelist(contract))
     if reasons:
