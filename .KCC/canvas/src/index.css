@@ -89,3 +89,194 @@ body {
   font-weight: 700;
   letter-spacing: 0.06em;
 }
+
+/* ---------------------------------------------------------------------------
+ * Discovery canvas components (Plan 06 Task 4): prototype, readiness,
+ * contract and LOCK & BUILD surfaces.  The panels are stacked below the
+ * timeline and trace graph; the LOCK bar is the final command surface.
+ * ------------------------------------------------------------------------- */
+
+.canvas-shell__run {
+  margin: 0 0 0.5rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.canvas-shell__empty {
+  padding: 1rem;
+  border: 1px dashed color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 0.5rem;
+  opacity: 0.7;
+}
+
+.canvas-shell__error {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #b91c1c;
+  border-radius: 0.375rem;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 0.9rem;
+}
+
+.prototype-panel,
+.readiness-panel,
+.contract-panel,
+.lock-bar {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.5rem;
+}
+
+.prototype-panel h2,
+.readiness-panel h2,
+.contract-panel h2,
+.lock-bar h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+}
+
+.prototype-panel__frame {
+  display: block;
+  width: 100%;
+  height: 30rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.375rem;
+  background: #fff;
+}
+
+.prototype-panel__empty,
+.contract-panel__empty {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+.readiness-panel__verdict {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.readiness-panel__verdict[data-ready="true"] {
+  color: #15803d;
+}
+
+.readiness-panel__verdict[data-ready="false"] {
+  color: #b91c1c;
+}
+
+.readiness-panel__coverage,
+.readiness-panel__blocker-count,
+.readiness-panel__stale,
+.contract-panel__credentials {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+}
+
+.readiness-panel__stale {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.readiness-panel__blocker-list,
+.readiness-panel__finding-list,
+.readiness-panel__items,
+.contract-panel__journeys,
+.lock-bar__reasons {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.readiness-panel__item {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.contract-panel__summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.contract-panel__summary dt {
+  opacity: 0.65;
+}
+
+.contract-panel__summary dd {
+  margin: 0;
+}
+
+.contract-panel__tier1-hash {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.lock-bar {
+  border-width: 2px;
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.lock-bar__stale-notice {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.lock-bar__reasons {
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
+.lock-bar__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.lock-bar__button,
+.lock-bar__pause,
+.lock-bar__resume {
+  padding: 0.55rem 1.1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.lock-bar__button:disabled,
+.lock-bar__pause:disabled,
+.lock-bar__resume:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lock-bar__button {
+  border-color: #15803d;
+  background: #15803d;
+  color: #fff;
+}
+
+.lock-bar__button:disabled {
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+  background: transparent;
+  color: inherit;
+}
+
+.lock-bar__error {
+  margin: 0.6rem 0 0;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
