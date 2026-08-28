@@ -1,0 +1,416 @@
+{
+  "contract": {
+    "contract_hash": null,
+    "contract_version": "1.0",
+    "locked_at": null,
+    "readiness": {
+      "items": [
+        {
+          "evidence": [
+            {
+              "checked_at": "2026-01-02T12:00:00Z",
+              "kind": "identity",
+              "mode": "sandbox",
+              "principal": "acct-042",
+              "quota": "sandbox: 50 runs/day",
+              "resource_ids": [
+                "acct-042"
+              ],
+              "result": "pass",
+              "scopes": [
+                "api.read",
+                "deploy.read"
+              ],
+              "shared_account": false
+            }
+          ],
+          "evidence_ttl": "PT4H",
+          "fallbacks": [],
+          "id": "IT-001",
+          "provider": "provider-a",
+          "required_kinds": [
+            "identity"
+          ],
+          "status": "READY"
+        },
+        {
+          "evidence": [
+            {
+              "checked_at": "2026-01-02T12:00:00Z",
+              "kind": "permissions",
+              "mode": "sandbox",
+              "principal": "acct-042",
+              "quota": null,
+              "resource_ids": [
+                "staging-project"
+              ],
+              "result": "pass",
+              "scopes": [
+                "deploy.write",
+                "env.create"
+              ],
+              "shared_account": false
+            },
+            {
+              "checked_at": "2026-01-02T12:00:00Z",
+              "kind": "quota",
+              "mode": "sandbox",
+              "principal": "acct-042",
+              "quota": "staging: 1 concurrent deploy",
+              "resource_ids": [
+                "provider-a quota"
+              ],
+              "result": "pass",
+              "scopes": [
+                "quota.read"
+              ],
+              "shared_account": false
+            },
+            {
+              "checked_at": "2026-01-02T12:00:00Z",
+              "kind": "smoke_probe",
+              "mode": "sandbox",
+              "principal": "acct-042",
+              "quota": null,
+              "resource_ids": [
+                "smoke-target"
+              ],
+              "result": "pass",
+              "scopes": [
+                "probe.run"
+              ],
+              "shared_account": false
+            }
+          ],
+          "evidence_ttl": "PT4H",
+          "fallbacks": [],
+          "id": "IT-002",
+          "provider": "provider-a",
+          "required_kinds": [
+            "permissions",
+            "quota",
+            "smoke_probe"
+          ],
+          "status": "READY"
+        }
+      ],
+      "red_team_findings": [
+        {
+          "disposition": "RESOLVED",
+          "id": "RT-001",
+          "related_item_id": "IT-002",
+          "summary": "Provider sandbox mode confirmed; no production write during discovery"
+        }
+      ]
+    },
+    "resume": {
+      "attempt_counters": {},
+      "completed_task_commits": [],
+      "contract_version": null,
+      "current_task": null,
+      "deviations": [],
+      "lifecycle_state": null,
+      "outstanding_findings": [],
+      "review_state": null,
+      "spend_so_far": {},
+      "test_results": []
+    },
+    "tier1": {
+      "auth_model": "protected by the control-plane session token",
+      "authority": {
+        "approved_accounts": [
+          "acct-042"
+        ],
+        "approved_dns_zones": [],
+        "auto_debug": true,
+        "auto_provision_providers": [],
+        "auto_provision_status": "NOT_REQUIRED",
+        "bounded_spend": true,
+        "cicd_configuration": true,
+        "credential_refs": [
+          "vault://postgres/summary-db",
+          "env://deploy/credentials"
+        ],
+        "database_migration": true,
+        "dependency_installation": true,
+        "dns_changes": false,
+        "environment_creation": true,
+        "monitoring_setup": true,
+        "production_deployment": true,
+        "rollback": true,
+        "secret_reference_usage": true,
+        "staging_deployment": true
+      },
+      "core_data_entities": [
+        "analysis_run",
+        "finding",
+        "source_file"
+      ],
+      "definition_of_done": "the summary is produced end to end from a real upload and validated in staging, and producing it costs less than the locked one-time build budget",
+      "definition_of_done_ids": [
+        "PROD-001"
+      ],
+      "destructive_policy": [
+        {
+          "backup_required": false,
+          "classification": "REVERSIBLE_AUTONOMOUS",
+          "operation": "staging re-deploy",
+          "rollback_path": null
+        }
+      ],
+      "fallback_whitelist": [],
+      "money": {
+        "currency": "USD",
+        "hard_limits": true,
+        "model_token_cap": 2000000,
+        "monthly_infrastructure_cap": 25000,
+        "one_time_build_budget": 95000,
+        "per_provider_caps": {
+          "provider-a": 50000
+        }
+      },
+      "non_goals": [
+        "no public API",
+        "no native mobile apps"
+      ],
+      "primary_user_journeys": [
+        "upload a PDF and receive an analysis summary",
+        "open the summary and navigate to a finding"
+      ],
+      "product_scope": "A web app that turns PDF uploads into a concise, reviewable analysis summary",
+      "production_target": "https://summary.app.internal.example.com",
+      "prototype_ref": "/prototype/index.html",
+      "provider_whitelist": [
+        {
+          "paid": true,
+          "provider": "provider-a"
+        }
+      ],
+      "requires_rollback_evidence": true,
+      "rollout_class": "CANARY",
+      "security_constraints": [
+        "uploads are stored temporarily and deleted after the summary is produced"
+      ],
+      "ux_direction": "single-column review flow, high contrast, keyboard navigable"
+    },
+    "tier2": {
+      "component_boundaries": [
+        "frontend",
+        "upload-service",
+        "summary-engine"
+      ],
+      "css_layout_detail": "single column, 720px reading width",
+      "db_indexes": [
+        "runs (status, created_at)"
+      ],
+      "error_wording": "summary unavailable \u2014 retry in a moment",
+      "helper_libraries": [
+        "pdf-text extractor",
+        "summary renderer"
+      ],
+      "internal_api_shapes": [
+        "POST /runs/{id}/summary"
+      ],
+      "internal_refactors": [
+        "extract upload validation"
+      ],
+      "minor_dependency_changes": [
+        "pin pdf extractor minor version"
+      ],
+      "observability_thresholds": [
+        "summary p95 < 60s"
+      ],
+      "staging_provider": "provider-a",
+      "test_organization": [
+        "unit",
+        "integration",
+        "e2e"
+      ]
+    },
+    "tier2_hash": null,
+    "trace": {
+      "edges": [
+        {
+          "source": "REQ-001",
+          "target": "IMPL-01"
+        },
+        {
+          "source": "IMPL-01",
+          "target": "AC-001"
+        },
+        {
+          "source": "IMPL-01",
+          "target": "PROD-001"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "REQ-001",
+          "kind": "requirement"
+        },
+        {
+          "id": "IMPL-01",
+          "kind": "implementation"
+        },
+        {
+          "id": "AC-001",
+          "kind": "acceptance"
+        },
+        {
+          "id": "PROD-001",
+          "kind": "production_validation"
+        }
+      ],
+      "run_id": "RUN-001"
+    }
+  },
+  "meta": {
+    "evidence_ttl": "PT4H",
+    "id": "canvas_ready_run",
+    "now": "2026-01-02T12:00:00+00:00",
+    "purpose": "Ready CONTRACT_REVIEW autobuild run for the deterministic Plan 06 Task 5 canvas E2E: zero readiness blockers, current evidence, lockable two-tier Build Contract with the clickable prototype reference (H2 walkthrough target) and the canonical Tier-1 hash the canvas proves at LOCK."
+  },
+  "readiness": {
+    "items": [
+      {
+        "evidence": [
+          {
+            "checked_at": "2026-01-02T12:00:00Z",
+            "kind": "identity",
+            "mode": "sandbox",
+            "principal": "acct-042",
+            "quota": "sandbox: 50 runs/day",
+            "resource_ids": [
+              "acct-042"
+            ],
+            "result": "pass",
+            "scopes": [
+              "api.read",
+              "deploy.read"
+            ],
+            "shared_account": false
+          }
+        ],
+        "evidence_ttl": "PT4H",
+        "fallbacks": [],
+        "id": "IT-001",
+        "provider": "provider-a",
+        "required_kinds": [
+          "identity"
+        ],
+        "status": "READY"
+      },
+      {
+        "evidence": [
+          {
+            "checked_at": "2026-01-02T12:00:00Z",
+            "kind": "permissions",
+            "mode": "sandbox",
+            "principal": "acct-042",
+            "quota": null,
+            "resource_ids": [
+              "staging-project"
+            ],
+            "result": "pass",
+            "scopes": [
+              "deploy.write",
+              "env.create"
+            ],
+            "shared_account": false
+          },
+          {
+            "checked_at": "2026-01-02T12:00:00Z",
+            "kind": "quota",
+            "mode": "sandbox",
+            "principal": "acct-042",
+            "quota": "staging: 1 concurrent deploy",
+            "resource_ids": [
+              "provider-a quota"
+            ],
+            "result": "pass",
+            "scopes": [
+              "quota.read"
+            ],
+            "shared_account": false
+          },
+          {
+            "checked_at": "2026-01-02T12:00:00Z",
+            "kind": "smoke_probe",
+            "mode": "sandbox",
+            "principal": "acct-042",
+            "quota": null,
+            "resource_ids": [
+              "smoke-target"
+            ],
+            "result": "pass",
+            "scopes": [
+              "probe.run"
+            ],
+            "shared_account": false
+          }
+        ],
+        "evidence_ttl": "PT4H",
+        "fallbacks": [],
+        "id": "IT-002",
+        "provider": "provider-a",
+        "required_kinds": [
+          "permissions",
+          "quota",
+          "smoke_probe"
+        ],
+        "status": "READY"
+      }
+    ],
+    "red_team_findings": [
+      {
+        "disposition": "RESOLVED",
+        "id": "RT-001",
+        "related_item_id": "IT-002",
+        "summary": "Provider sandbox mode confirmed; no production write during discovery"
+      }
+    ]
+  },
+  "run": {
+    "contract_hash": null,
+    "created_at": "2026-01-02T12:00:00Z",
+    "run_id": "RUN-001",
+    "state": "CONTRACT_REVIEW",
+    "title": "PDF upload and summary \u2014 discovery run"
+  },
+  "tier1_hash": "cf96cd1f719db92aa6cf9d741dcbc9bbf1dc1623623c4563504cf05cceb77eeb",
+  "trace": {
+    "edges": [
+      {
+        "source": "REQ-001",
+        "target": "IMPL-01"
+      },
+      {
+        "source": "IMPL-01",
+        "target": "AC-001"
+      },
+      {
+        "source": "IMPL-01",
+        "target": "PROD-001"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "REQ-001",
+        "kind": "requirement"
+      },
+      {
+        "id": "IMPL-01",
+        "kind": "implementation"
+      },
+      {
+        "id": "AC-001",
+        "kind": "acceptance"
+      },
+      {
+        "id": "PROD-001",
+        "kind": "production_validation"
+      }
+    ],
+    "run_id": "RUN-001"
+  }
+}

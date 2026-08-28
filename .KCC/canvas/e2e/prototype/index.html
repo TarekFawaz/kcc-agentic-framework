@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Clickable prototype — PDF upload and summary</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c2430;
+        --accent: #1f6feb;
+        --muted: #5b6472;
+        --line: #d7dce3;
+        --paper: #ffffff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--ink);
+        background: var(--paper);
+      }
+      main { max-width: 620px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+      h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+      p { color: var(--muted); line-height: 1.5; }
+      button {
+        display: inline-block;
+        margin-top: 0.75rem;
+        padding: 0.6rem 1.1rem;
+        font: inherit;
+        font-weight: 600;
+        color: #ffffff;
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover { filter: brightness(0.95); }
+      ul { padding-left: 1.15rem; color: var(--muted); }
+      li { margin: 0.5rem 0; }
+      .proto-note {
+        margin-top: 1.5rem;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.85rem;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f6f8fa;
+      }
+      [data-screen="upload"] { min-height: 180px; }
+      .progress {
+        height: 10px;
+        border-radius: 5px;
+        background: #e9edf1;
+        overflow: hidden;
+        margin: 1rem 0;
+      }
+      .progress > span {
+        display: block;
+        width: 62%;
+        height: 100%;
+        border-radius: 5px;
+        background: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- H2 walkthrough: entry screen (prototype-manifest primary journey start) -->
+      <section id="screen-landing" data-screen="landing">
+        <h1>Upload analysis</h1>
+        <p>
+          Drop a PDF and receive a concise, reviewable analysis summary —
+          this prototype walks the primary journey end to end.
+        </p>
+        <form id="start-form" aria-label="Start the upload flow">
+          <button type="submit" id="start-upload">Start upload</button>
+        </form>
+      </section>
+
+      <!-- H2 walkthrough: processing screen -->
+      <section id="screen-upload" data-screen="upload" hidden>
+        <h1>Upload in progress</h1>
+        <p>analysis-run-042.pdf is being processed…</p>
+        <div class="progress" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100">
+          <span></span>
+        </div>
+        <button type="button" id="process-file">Process file</button>
+      </section>
+
+      <!-- H2 walkthrough: exit screen -->
+      <section id="screen-result" data-screen="result" hidden>
+        <h1>Analysis summary</h1>
+        <ul>
+          <li>The upload flow misses an explicit error state.</li>
+          <li>The summary should name the source page of each finding.</li>
+          <li>The exit screen should offer the follow-up action.</li>
+        </ul>
+        <p class="proto-note">
+          Prototype only — not production implementation.  Validated by the
+          H2 prototype walkthrough before LOCK &amp; BUILD.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      "use strict";
+      function showScreen(id) {
+        for (const screen of document.querySelectorAll("[data-screen]")) {
+          screen.hidden = screen.id !== id;
+        }
+      }
+      document
+        .getElementById("start-form")
+        .addEventListener("submit", function (event) {
+          event.preventDefault();
+          showScreen("screen-upload");
+        });
+      document
+        .getElementById("process-file")
+        .addEventListener("click", function () {
+          showScreen("screen-result");
+        });
+    </script>
+  </body>
+</html>
