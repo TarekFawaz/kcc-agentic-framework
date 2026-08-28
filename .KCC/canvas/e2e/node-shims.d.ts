@@ -21,7 +21,7 @@ declare module "node:http" {
 
   export interface ServerResponse {
     writeHead(status: number, headers?: Record<string, string>): void;
-    end(body?: string): void;
+    end(body?: string | Uint8Array): void;
   }
 
   export interface Server {
@@ -37,7 +37,10 @@ declare module "node:http" {
 }
 
 declare module "node:fs" {
+  /** Text read: the UTF-8 decode is explicit at the call site. */
   export function readFileSync(path: string, encoding: string): string;
+  /** Byte-exact read: binary assets must never round-trip a string. */
+  export function readFileSync(path: string): Uint8Array;
   export function existsSync(path: string): boolean;
 }
 

@@ -44,10 +44,12 @@ import type {
   CommandResult,
   ContractProjection,
   LifecycleState,
+  NodeKind,
   ReadinessItemProjection,
   ReadinessProjection,
   ReadinessStatus,
   RunProjection,
+  TraceCoverageResult,
   TraceProjection,
 } from "../src/types";
 
@@ -306,18 +308,69 @@ class FixtureControlPlane implements FixtureServer {
     };
   }
 
+  /**
+   * Mirror of the runtime reachability rule
+   * (``kcc_autobuild.trace.validate_trace_coverage``, Design Spec v1.2
+   * sections 10 / 10.3): a requirement is covered only when forward
+   * traversal reaches BOTH an ``acceptance`` node and a
+   * ``production_validation`` node through forward edges; otherwise it
+   * is an orphan requirement and blocks LOCK.
+   *
+   * The mirror must behave exactly like the runtime — the canvas
+   * renders this server-owned coverage (orphans get the BLOCKER badge)
+   * and the ready fixture must show zero orphans.  In particular a
+   * requirement is NOT classified by its direct edge targets (REQ-001
+   * -> IMPL-01 arrives at AC-001 / PROD-001 transitively), so coverage
+   * is the same forward-transitive BFS the runtime performs.
+   */
+  private traceCoverage(): TraceCoverageResult {
+    const trace = this.fixture.trace;
+    const adjacency = new Map<string, string[]>();
+    for (const edge of trace.edges) {
+      const children = adjacency.get(edge.source) ?? [];
+      children.push(edge.target);
+      adjacency.set(edge.source, children);
+    }
+    const kindById = new Map(trace.nodes.map((node) => [node.id, node.kind]));
+    const covered: string[] = [];
+    const orphans: string[] = [];
+    for (const node of trace.nodes) {
+      if (node.kind !== "requirement") {
+        continue;
+      }
+      const reached = new Set<NodeKind>([node.kind]);
+      const seen = new Set<string>([node.id]);
+      const queue: string[] = [node.id];
+      while (queue.length > 0) {
+        const current = queue.shift() as string;
+        for (const child of adjacency.get(current) ?? []) {
+          if (seen.has(child)) {
+            continue;
+          }
+          seen.add(child);
+          const kind = kindById.get(child);
+          if (kind !== undefined) {
+            reached.add(kind);
+          }
+          queue.push(child);
+        }
+      }
+      if (reached.has("acceptance") && reached.has("production_validation")) {
+        covered.push(node.id);
+      } else {
+        orphans.push(node.id);
+      }
+    }
+    return { covered: covered.sort(), orphans: orphans.sort() };
+  }
+
   private traceProjection(): TraceProjection {
     const trace = this.fixture.trace;
-    const targets = new Set(trace.edges.map((edge) => edge.target));
-    const requirements = trace.nodes.filter((node) => node.kind === "requirement");
     return {
       run_id: trace.run_id,
       nodes: trace.nodes,
       edges: trace.edges,
-      coverage: {
-        covered: requirements.filter((node) => targets.has(node.id)).map((node) => node.id).sort(),
-        orphans: requirements.filter((node) => !targets.has(node.id)).map((node) => node.id).sort(),
-      },
+      coverage: this.traceCoverage(),
     };
   }
 
@@ -609,9 +662,12 @@ class FixtureControlPlane implements FixtureServer {
       this.writeJson(response, 404, { error: "NOT_FOUND", detail: `no file ${filePath}` });
       return;
     }
+    // Byte-exact: text MIME types are declared with a charset, but
+    // binary assets (png/woff/woff2/ttf/ico) must not pass through a
+    // UTF-8 decode — a string round-trip would corrupt them.
     const mime = MIME_TYPES[extname(filePath)] ?? "application/octet-stream";
     response.writeHead(200, { "Content-Type": mime, "Cache-Control": "no-store" });
-    response.end(readFileSync(filePath, "utf8"));
+    response.end(readFileSync(filePath));
   }
 }
 

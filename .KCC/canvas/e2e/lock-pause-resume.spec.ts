@@ -18,7 +18,13 @@
  *    0 blocker(s) and current evidence, the Build Contract panel shows
  *    the canonical Tier-1 hash the canvas proves at LOCK, and the
  *    clickable prototype is embedded with EXACTLY
- *    ``allow-forms allow-scripts`` (never same-origin).
+ *    ``allow-forms allow-scripts`` (never same-origin).  The server's
+ *    trace coverage mirrors the runtime reachability rule
+ *    (``kcc_autobuild.trace.validate_trace_coverage``, Design Spec v1.2
+ *    sections 10 / 10.3): REQ-001 reaches both an acceptance and a
+ *    production validation (REQ-001 -> IMPL-01 -> AC-001 / PROD-001),
+ *    so the trace graph shows it covered and carries NO orphan BLOCKER
+ *    badge on this ready run.
  * 2. **H2 — prototype walkthrough** — the user walks the prototype's
  *    primary journey inside the sandboxed frame (entry screen -> upload
  *    -> result), i.e. the H2 validation step of the approved autobuild
@@ -60,6 +66,7 @@ test.describe("autobuild canvas lock/pause/resume", () => {
 
   test("H2 walkthrough, then LOCK & BUILD with no approval dialog, then PAUSE and RESUME", async ({
     page,
+    request,
   }) => {
     const dialogs: string[] = [];
     const pageErrors: string[] = [];
@@ -106,6 +113,31 @@ test.describe("autobuild canvas lock/pause/resume", () => {
     await expect(pause).toBeDisabled();
     await expect(resume).toBeDisabled();
     await expect(page.locator(".lock-bar__reasons")).toHaveCount(0);
+
+    // -- trace coverage mirrors the runtime reachability rule ------------
+    // The trace projection is server-owned (Design Spec v1.2 sections
+    // 10 / 10.3): a requirement is covered only when forward traversal
+    // reaches BOTH an acceptance node and a production_validation node
+    // (kcc_autobuild.trace.validate_trace_coverage — the same rule the
+    // fixture server must mirror).  On this ready run
+    // REQ-001 -> IMPL-01 -> AC-001 / PROD-001 is covered, so the graph
+    // must show REQ-001 covered and NO orphan BLOCKER badge.
+    const traceResponse = await request.get(`${server.baseUrl}/api/trace`);
+    expect(traceResponse.ok()).toBe(true);
+    expect(await traceResponse.json()).toMatchObject({
+      coverage: { covered: ["REQ-001"], orphans: [] },
+    });
+    await expect(page.locator(".trace-node-card")).toHaveCount(4);
+    await expect(page.locator(".trace-node-id")).toHaveText([
+      "REQ-001",
+      "IMPL-01",
+      "AC-001",
+      "PROD-001",
+    ]);
+    await expect(
+      page.locator('.trace-node-card[data-orphan="true"]'),
+    ).toHaveCount(0);
+    await expect(page.locator(".trace-orphan-badge")).toHaveCount(0);
 
     // -- H2: prototype walkthrough inside the sandboxed frame ------------
     const prototype = page.locator("iframe.prototype-panel__frame");
