@@ -291,17 +291,25 @@ class LeaseStore:
         if lease_ttl is not None and lease_ttl <= timedelta(0):
             raise ValueError("lease_ttl must be positive when set")
         self.lease_ttl = lease_ttl
-        self._store = store
         self._conn = store.conn
         self._ensure_migrations()
 
     def _ensure_migrations(self) -> None:
-        """Apply migration 002 once (idempotent) on this database."""
-        exists = self._conn.execute(
-            "SELECT name FROM sqlite_master"
-            " WHERE type = 'table' AND name = 'tasks'"
-        ).fetchone()
-        if exists is None:
+        """Apply migration 002 once (idempotent) on this database.
+
+        Probes both tables so a partially migrated database (only one of
+        ``tasks`` / ``task_leases`` present after a crash mid-migration)
+        is healed by re-running the idempotent script rather than being
+        silently left unloadable.
+        """
+        present = {
+            row["name"]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master"
+                " WHERE type = 'table' AND name IN ('tasks', 'task_leases')"
+            )
+        }
+        if not {"tasks", "task_leases"}.issubset(present):
             self._conn.executescript(MIGRATION_002.read_text(encoding="utf-8"))
 
     @staticmethod
@@ -457,8 +465,9 @@ class LeaseStore:
         """Persistently sweep live leases whose TTL has lapsed.
 
         Returns the newly expired :class:`Lease` objects in lease id
-        order so the controller can release their reservations exactly
-        once; the expired status is durable.
+        order, each already carrying the persisted ``expired`` status so
+        a status-guarded controller release fires exactly once per swept
+        lease; the expired status is durable.
         """
         now = _as_utc(now if now is not None else datetime.now(timezone.utc), "now")
         rows = self._conn.execute(
@@ -477,7 +486,9 @@ class LeaseStore:
                     "UPDATE task_leases SET status = ? WHERE lease_id = ?",
                     (LeaseStatus.EXPIRED.value, row["lease_id"]),
                 )
-        return tuple(self._load(row) for row in rows)
+        return tuple(
+            replace(self._load(row), status=LeaseStatus.EXPIRED) for row in rows
+        )
 
     def fence(self, lease_id: str) -> Lease:
         """Persistently revoke one lease (``KeyError`` unknown)."""

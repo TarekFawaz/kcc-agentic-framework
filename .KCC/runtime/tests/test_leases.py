@@ -104,7 +104,12 @@ def test_prescribed_scenario_persisted_through_runstore(tmp_path):
     store, leases = _make_store(tmp_path, lease_ttl=timedelta(seconds=30))
     first = leases.claim("RUN-001", "T1", now=T0)
     assert leases.lease_is_live(first.lease_id, "RUN-001", now=T0) is True
-    leases.expire_stale(now=T0 + timedelta(seconds=31))
+    expired = leases.expire_stale(now=T0 + timedelta(seconds=31))
+    # The sweep returns the newly expired leases already marked EXPIRED
+    # (the release-exactly-once contract: a status-guarded controller
+    # release must fire for every returned lease).
+    assert [lease.lease_id for lease in expired] == [first.lease_id]
+    assert expired[0].status is LeaseStatus.EXPIRED
     assert leases.lease_is_live(
         first.lease_id, "RUN-001", now=T0 + timedelta(seconds=31)
     ) is False
@@ -243,8 +248,10 @@ def test_expire_stale_only_touches_live_expired_leases():
     l3 = ledger.claim("RUN-001", "T3", now=T0 + timedelta(seconds=5))
     expired = ledger.expire_stale(now=T0 + timedelta(seconds=11))
     # T1 lapsed (issued at T0); fenced T2 stays fenced; T3 (issued later,
-    # still inside its TTL) is untouched. Deterministic order by lease id.
+    # still inside its TTL) is untouched. Deterministic order by lease id,
+    # and the returned leases carry the persisted (EXPIRED) status.
     assert [lease.lease_id for lease in expired] == [l1.lease_id]
+    assert expired[0].status is LeaseStatus.EXPIRED
     assert ledger.lease_status(l1.lease_id) is LeaseStatus.EXPIRED
     assert ledger.lease_status(l2.lease_id) is LeaseStatus.FENCED
     assert ledger.lease_status(l3.lease_id) is LeaseStatus.LIVE
@@ -427,6 +434,45 @@ def test_persisted_expiry_is_durable(tmp_path):
     assert reopened.lease_status(first.lease_id) is LeaseStatus.EXPIRED
     second = reopened.claim("RUN-001", "T1", now=T0 + timedelta(seconds=31))
     assert second.generation == first.generation + 1
+    reopened_store.close()
+    store.close()
+
+
+def test_expire_stale_returns_expired_status_from_the_store(tmp_path):
+    store, leases = _make_store(tmp_path, lease_ttl=timedelta(seconds=30))
+    first = leases.claim("RUN-001", "T1", now=T0)
+    other = leases.claim("RUN-001", "T2", now=T0)
+    leases.fence(other.lease_id)
+    expired = leases.expire_stale(now=T0 + timedelta(seconds=31))
+    # Every returned lease is the just-persisted EXPIRED lease (never a
+    # stale LIVE snapshot): a status-guarded release fires exactly once.
+    assert [lease.lease_id for lease in expired] == [first.lease_id]
+    assert expired[0].status is LeaseStatus.EXPIRED
+    assert expired[0].status == leases.lease_status(first.lease_id)
+    # A second sweep returns nothing (no double release).
+    assert leases.expire_stale(now=T0 + timedelta(seconds=32)) == ()
+    store.close()
+
+
+def test_partial_migration_heal_recreates_the_missing_lease_table(tmp_path):
+    store, leases = _make_store(tmp_path)
+    # Simulate a migration 002 crash between its two CREATE TABLEs: only
+    # the tasks table survived.
+    store.conn.execute("DROP TABLE task_leases")
+    store.conn.commit()
+    reopened_store = RunStore(tmp_path / "run.db")
+    healed = LeaseStore(reopened_store)
+    tables = {
+        row["name"]
+        for row in reopened_store.conn.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE type = 'table' AND name IN ('tasks', 'task_leases')"
+        )
+    }
+    assert tables == {"tasks", "task_leases"}
+    # Claims work end to end through the healed database.
+    lease = healed.claim("RUN-001", "T1", now=T0)
+    assert healed.lease_is_live(lease.lease_id, "RUN-001", now=T0) is True
     reopened_store.close()
     store.close()
 
