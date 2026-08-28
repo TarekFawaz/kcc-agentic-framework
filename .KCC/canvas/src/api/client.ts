@@ -58,6 +58,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The default fetch implementation, called through the global receiver.
+ *
+ * ``fetch`` is a WebIDL-bound global: extracting it from the window (as
+ * a default parameter would) and calling it with another receiver
+ * throws "Illegal invocation" in browsers.  The fixture-backed canvas
+ * E2E (Plan 06, Task 5) exercises the real client in Chromium, so the
+ * default is a wrapper that always invokes the global function with its
+ * own receiver.
+ */
+const DEFAULT_FETCH: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
 const DEFAULT_BASE_URL: string = import.meta.env.VITE_CONTROL_PLANE_URL ?? "/api";
 
 /**
@@ -71,7 +83,7 @@ export class CanvasClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(baseUrl: string = DEFAULT_BASE_URL, fetchImpl: typeof fetch = fetch) {
+  constructor(baseUrl: string = DEFAULT_BASE_URL, fetchImpl: typeof fetch = DEFAULT_FETCH) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.fetchImpl = fetchImpl;
   }
