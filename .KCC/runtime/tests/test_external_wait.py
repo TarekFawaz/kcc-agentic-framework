@@ -5,10 +5,10 @@ Framework Plan 05, Task 5: EXTERNAL_WAIT polling / rejection routing, in
 ``.superpowers/bootstrap/plans/2026-08-27-05-resume-deploy-validation.task-contracts.md``).
 
 Spec 20.2: external waiting states such as app-store review or third-party
-manual approval are modeled as external waits rather than falsely reported
-as completed autonomous work. Spec 19: EXTERNAL_WAIT is a side state of
-the lifecycle; spec 18.1: multiple contract-external blockers are batched
-into a single consolidated decision request. Spec 22: durable state is
+manual approval are modeled as external waits (the runtime's
+EXTERNAL_WAIT) rather than falsely reported as completed autonomous
+work. Spec 18.1: multiple contract-external blockers are batched into a
+single consolidated decision request. Spec 22: durable state is
 mandatory -- the pending-review poll schedule is persisted, never kept in
 conversation memory.
 
@@ -30,13 +30,18 @@ The behavioral contract:
   poll time (``next_check_at``) and the BUG attempt count captured when
   the wait began.
 * :class:`ExternalWaitStore` persists that state through
-  :class:`~kcc_autobuild.store.RunStore` SQLite (one row per run, created
-  idempotently), so ``next_check_at`` survives process restarts.
+  :class:`~kcc_autobuild.store.RunStore` SQLite (one row per run in the
+  ``external_wait_state`` table of the repo migration
+  ``migrations/003_external_wait_state.sql``, schema version 3), so
+  ``next_check_at`` survives process restarts.
 * :class:`ExternalWaitCoordinator` is the combined route + persist
   action: it records a review outcome, persists the wait state
   (``next_check_at = now + poll_interval`` while waiting), and **never
   increments BUG attempts** -- elapsed waiting time is not a failure, so
   the count captured at wait entry is preserved across every poll.
+  Entering a wait requires the authoritative BUG attempt count (a
+  silently defaulted 0 could launder attempts), and the poll schedule is
+  monotonic: a poll before the persisted ``next_check_at`` is rejected.
 """
 
 from __future__ import annotations
@@ -223,13 +228,21 @@ def test_external_wait_state_rejects_blank_run_id():
         ExternalWaitState(run_id="  ", review=_review())
 
 
-# --- Durability of the wait state --------------------------------------------
+def test_external_wait_state_rejects_run_id_not_matching_pattern():
+    """run_id is canonical run identity: it must match RUN_ID_PATTERN."""
+    with pytest.raises(ValidationError):
+        ExternalWaitState(run_id="run-001", review=_review())
+    with pytest.raises(ValidationError):
+        ExternalWaitState(run_id="RUN 001", review=_review())
+
+
+# --- Durable wait state -------------------------------------------------------
 
 
 def test_pending_review_persists_next_check_at_in_durable_run_state(tmp_path):
     coordinator = _make_coordinator(tmp_path)
     verdict = coordinator.record_review(
-        "RUN-001", _review(ReviewStatus.PENDING), now=T0
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=0
     )
     assert verdict.route is LifecycleState.EXTERNAL_WAIT
     state = coordinator.state("RUN-001")
@@ -248,7 +261,7 @@ def test_next_check_at_survives_store_reopen(tmp_path):
         RunRecord(run_id="RUN-001", title="external review demo", created_at=T0)
     )
     ExternalWaitCoordinator(ExternalWaitStore(run_store)).record_review(
-        "RUN-001", _review(ReviewStatus.PENDING), now=T0
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=0
     )
     # A fresh store over the same database (process restart) sees it.
     reopened = ExternalWaitStore(RunStore(db_path))
@@ -264,11 +277,63 @@ def test_load_unknown_run_returns_none(tmp_path):
     assert store.load("RUN-001") is None
 
 
+def test_load_rejects_run_id_not_matching_pattern(tmp_path):
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError):
+        store.load("run-001")
+
+
 def test_save_requires_an_existing_run(tmp_path):
     """Wait state is per-run: an unknown run fails closed (FK)."""
     store = _make_store(tmp_path)
     with pytest.raises(sqlite3.IntegrityError):
         store.save(ExternalWaitState(run_id="RUN-999", review=_review()), now=T0)
+
+
+# --- The wait-state table comes from the repo migration convention -----------
+
+
+def test_migration_003_creates_the_table_and_records_schema_version(tmp_path):
+    """external_wait_state lives in migrations/003_external_wait_state.sql:
+    the store applies the repo migration and records schema version 3
+    (never a bare inline CREATE TABLE that skips schema_version)."""
+    run_store = RunStore(tmp_path / "migration.db")
+    run_store.create_run(
+        RunRecord(run_id="RUN-001", title="external review demo", created_at=T0)
+    )
+    ExternalWaitStore(run_store)
+    table = run_store.conn.execute(
+        "SELECT name FROM sqlite_master"
+        " WHERE type = 'table' AND name = 'external_wait_state'"
+    ).fetchone()
+    assert table is not None
+    assert run_store.conn.execute(
+        "SELECT MAX(version) FROM schema_version"
+    ).fetchone()[0] == 3
+
+
+def test_reopen_records_version_three_for_legacy_inline_table(tmp_path):
+    """A database created by the inline-DDL era (table present, no version
+    row) converges to schema version 3 when the migration-aware store
+    opens it, so the version never silently understates the schema."""
+    db_path = tmp_path / "legacy.db"
+    run_store = RunStore(db_path)
+    run_store.create_run(
+        RunRecord(run_id="RUN-001", title="external review demo", created_at=T0)
+    )
+    with run_store.conn:
+        run_store.conn.execute(
+            "CREATE TABLE external_wait_state ("
+            " run_id TEXT PRIMARY KEY, review_json TEXT NOT NULL,"
+            " waiting_since TEXT, next_check_at TEXT,"
+            " bug_attempts INTEGER NOT NULL DEFAULT 0"
+            " CHECK (bug_attempts >= 0),"
+            " updated_at TEXT NOT NULL)"
+        )
+    ExternalWaitStore(run_store)
+    assert run_store.conn.execute(
+        "SELECT MAX(version) FROM schema_version"
+    ).fetchone()[0] == 3
 
 
 # --- The coordinator: waiting time never increments BUG attempts -------------
@@ -295,7 +360,9 @@ def test_waiting_time_does_not_increment_bug_attempts(tmp_path):
 
 def test_approved_review_resolves_the_wait_and_clears_next_check_at(tmp_path):
     coordinator = _make_coordinator(tmp_path)
-    coordinator.record_review("RUN-001", _review(ReviewStatus.PENDING), now=T0)
+    coordinator.record_review(
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=3
+    )
     verdict = coordinator.record_review(
         "RUN-001", _review(ReviewStatus.APPROVED), now=T0 + timedelta(hours=6)
     )
@@ -305,12 +372,14 @@ def test_approved_review_resolves_the_wait_and_clears_next_check_at(tmp_path):
     assert state.next_check_at is None
     # The wait history stays: when the wait began is preserved.
     assert state.waiting_since == T0
-    assert state.bug_attempts == 0
+    assert state.bug_attempts == 3
 
 
 def test_rejected_tier1_persists_batched_reasons_and_halts(tmp_path):
     coordinator = _make_coordinator(tmp_path)
-    coordinator.record_review("RUN-001", _review(ReviewStatus.PENDING), now=T0)
+    coordinator.record_review(
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=1
+    )
     verdict = coordinator.record_review(
         "RUN-001",
         _review(
@@ -379,6 +448,49 @@ def test_record_review_rejects_bad_bug_attempts(tmp_path):
             now=T0,
             bug_attempts=-3,
         )
+
+
+def test_wait_entry_requires_the_authoritative_bug_attempt_count(tmp_path):
+    """Entering a wait must record the real BUG count from the run: a
+    silently defaulted 0 could launder attempts that did happen."""
+    coordinator = _make_coordinator(tmp_path)
+    with pytest.raises(ValueError):
+        coordinator.record_review(
+            "RUN-001", _review(ReviewStatus.PENDING), now=T0
+        )
+
+
+def test_poll_before_scheduled_check_is_rejected(tmp_path):
+    """next_check_at is monotonic: a poll earlier than the persisted
+    schedule would move the clock backwards, so it fails closed."""
+    coordinator = _make_coordinator(tmp_path)
+    coordinator.record_review(
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=1
+    )
+    with pytest.raises(ValueError):
+        coordinator.record_review(
+            "RUN-001",
+            _review(ReviewStatus.PENDING),
+            now=T0 + timedelta(minutes=30),
+            bug_attempts=2,
+        )
+
+
+def test_poll_at_the_scheduled_check_keeps_next_check_at_monotonic(tmp_path):
+    coordinator = _make_coordinator(tmp_path)
+    coordinator.record_review(
+        "RUN-001", _review(ReviewStatus.PENDING), now=T0, bug_attempts=1
+    )
+    coordinator.record_review(
+        "RUN-001",
+        _review(ReviewStatus.PENDING),
+        now=T0 + DEFAULT_POLL_INTERVAL,
+        bug_attempts=5,
+    )
+    state = coordinator.state("RUN-001")
+    assert state.next_check_at == T0 + 2 * DEFAULT_POLL_INTERVAL
+    # The count captured at wait entry is preserved across the poll.
+    assert state.bug_attempts == 1
 
 
 def test_poll_interval_must_be_positive(tmp_path):

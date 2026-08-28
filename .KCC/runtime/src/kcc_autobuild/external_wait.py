@@ -24,50 +24,50 @@ The behavioral contract is owned by
   ``BUILDING`` (the run resumes within the locked contract); REJECTED
   with Tier-1 impact => ``HALTED`` with the review reasons carried as
   the consolidated batch; any other status (a still-pending review) =>
-  ``EXTERNAL_WAIT`` (the run stays on the side state of spec 19).
+  ``EXTERNAL_WAIT`` (the run stays on the external wait of spec 20.2).
 - :class:`ExternalWaitState` is the durable per-run wait state: the
   review outcome, when the wait began, the next poll time
   (``next_check_at``) and the ``bug_attempts`` count captured when the
   wait began -- the state kept on disk, never in conversational memory
   (spec 22).
 - :class:`ExternalWaitStore` persists exactly that state through
-  :class:`~kcc_autobuild.store.RunStore` SQLite (one row per run, table
-  created idempotently inline so the store is self-contained; the run
-  row must exist -- a wait state for an unknown run is a caller bug and
-  fails closed on the foreign key).
+  :class:`~kcc_autobuild.store.RunStore` SQLite (one row per run in the
+  ``external_wait_state`` table created by the repo migration
+  :file:`.KCC/runtime/migrations/003_external_wait_state.sql`, schema
+  version 3; the run row must exist -- a wait state for an unknown run
+  is a caller bug and fails closed on the foreign key).
 - :class:`ExternalWaitCoordinator` is the combined route + persist
   action: ``record_review`` persists the new state -- ``next_check_at``
   advanced by the poll interval while the review is still pending, and
   cleared once the wait resolves -- and **never increments BUG
   attempts**: elapsed waiting time is not a failure, so the count
   captured when the wait began is preserved across every poll, and is
-  recaptured only when the run enters a fresh wait.
+  recaptured only when the run enters a fresh wait. Entering a fresh
+  wait requires the caller's authoritative BUG attempt count (fail
+  closed -- a silent 0 could launder attempts), the poll schedule is
+  monotonic (a poll before the persisted ``next_check_at`` is rejected),
+  and ``run_id`` must be canonical run identity (``RUN_ID_PATTERN``).
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from pathlib import Path
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
-from kcc_autobuild.models import LifecycleState, StrictModel
+from kcc_autobuild.models import RUN_ID_PATTERN, LifecycleState, StrictModel
 from kcc_autobuild.store import RunStore
 
 DEFAULT_POLL_INTERVAL = timedelta(hours=1)
 """Default delay between checks of a pending external review."""
 
-_EXTERNAL_WAIT_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS external_wait_state (
-    run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
-    review_json TEXT NOT NULL,
-    waiting_since TEXT,
-    next_check_at TEXT,
-    bug_attempts INTEGER NOT NULL DEFAULT 0 CHECK (bug_attempts >= 0),
-    updated_at TEXT NOT NULL
+MIGRATION_003 = (
+    Path(__file__).resolve().parents[2] / "migrations" / "003_external_wait_state.sql"
 )
-"""
-"""Durable per-run external-wait state row (created idempotently)."""
+"""Migration creating ``external_wait_state`` on the RunStore database."""
 
 
 class ReviewStatus(str, Enum):
@@ -76,8 +76,8 @@ class ReviewStatus(str, Enum):
     ``APPROVED`` resolves the wait to production validation; ``REJECTED``
     sends the run back to the build when the locked Tier-1 contract is
     unaffected and halts it (with batched reasons) when it is impacted;
-    ``PENDING`` is the still-outstanding case that keeps the run on
-    ``EXTERNAL_WAIT`` (spec 19, 20.2).
+    ``PENDING`` is the still-outstanding case that keeps the run on the
+    external wait of spec 20.2.
     """
 
     APPROVED = "APPROVED"
@@ -85,9 +85,20 @@ class ReviewStatus(str, Enum):
     PENDING = "PENDING"
 
 
-def _require_nonempty(value: str, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
+def _require_run_id(value: object, name: str = "run_id") -> str:
+    """Require canonical run identity (``RUN_ID_PATTERN``).
+
+    A run id must start with ``RUN-`` followed by an alphanumeric
+    character; separators and traversal paths are rejected before any
+    coordination artifact exists (the same identity rule every other
+    runtime model enforces).
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{name} must be a string, got {type(value).__name__}"
+        )
+    if re.fullmatch(RUN_ID_PATTERN, value) is None:
+        raise ValueError(f"{name} must match {RUN_ID_PATTERN}, got {value!r}")
     return value
 
 
@@ -227,8 +238,8 @@ class ExternalWaitState(StrictModel):
 
     @field_validator("run_id")
     @classmethod
-    def _run_id_not_blank(cls, value: str) -> str:
-        return _require_nonempty(value, "run_id")
+    def _run_id_is_canonical_identity(cls, value: str) -> str:
+        return _require_run_id(value)
 
     @field_validator("waiting_since", "next_check_at")
     @classmethod
@@ -253,10 +264,12 @@ class ExternalWaitStore:
     """SQLite persistence of the durable external-wait state.
 
     One row per run in ``external_wait_state`` on the
-    :class:`~kcc_autobuild.store.RunStore` database (table created
-    idempotently, so the store is self-contained). The row references
-    ``runs(run_id)``: persisting wait state for an unknown run fails
-    closed on the foreign key instead of silently inventing run state.
+    :class:`~kcc_autobuild.store.RunStore` database, created by the repo
+    migration :file:`.KCC/runtime/migrations/003_external_wait_state.sql`
+    (schema version 3) which the store applies idempotently. The row
+    references ``runs(run_id)``: persisting wait state for an unknown run
+    fails closed on the foreign key instead of silently inventing run
+    state.
     """
 
     def __init__(self, store: RunStore) -> None:
@@ -265,10 +278,27 @@ class ExternalWaitStore:
                 f"store must be a RunStore, got {type(store).__name__}"
             )
         self._conn = store.conn
-        self._ensure_table()
+        self._ensure_migrations()
 
-    def _ensure_table(self) -> None:
-        self._conn.execute(_EXTERNAL_WAIT_TABLE_DDL)
+    def _ensure_migrations(self) -> None:
+        """Apply migration 003 once (idempotent) on this database.
+
+        Probes the table so a partially migrated database is healed by
+        re-running the idempotent script rather than being silently left
+        unloadable. A database created before this migration existed
+        (table present, no schema_version row) only needs the version
+        bookkeeping recorded, so it is recorded explicitly.
+        """
+        present = self._conn.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE type = 'table' AND name = 'external_wait_state'"
+        ).fetchone()
+        if present is None:
+            self._conn.executescript(MIGRATION_003.read_text(encoding="utf-8"))
+        else:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO schema_version(version) VALUES (3)"
+            )
 
     def save(self, state: ExternalWaitState, *, now: datetime | None = None) -> None:
         """Persist one run's wait state (upsert, transactionally).
@@ -316,7 +346,7 @@ class ExternalWaitStore:
 
     def load(self, run_id: str) -> ExternalWaitState | None:
         """The persisted wait state for one run (``None`` if unrecorded)."""
-        run_id = _require_nonempty(run_id, "run_id")
+        run_id = _require_run_id(run_id)
         row = self._conn.execute(
             "SELECT run_id, review_json, waiting_since, next_check_at,"
             " bug_attempts FROM external_wait_state WHERE run_id = ?",
@@ -356,7 +386,12 @@ class ExternalWaitCoordinator:
       names the resulting lifecycle state;
     * BUG attempts are captured only when a wait begins and are never
       incremented while waiting: elapsed waiting time is not a failure,
-      so a poll always preserves the count recorded at wait entry.
+      so a poll always preserves the count recorded at wait entry. The
+      count is REQUIRED when a wait begins (fail closed -- a silently
+      defaulted 0 could launder attempts that did happen);
+    * the poll schedule is monotonic: a poll earlier than the persisted
+      ``next_check_at`` is rejected instead of moving the schedule
+      backwards.
     """
 
     def __init__(
@@ -400,6 +435,12 @@ class ExternalWaitCoordinator:
         lifecycle state from it (``PRODUCTION_VALIDATED`` / ``BUILDING``
         / ``HALTED``) or keeps waiting (``EXTERNAL_WAIT`` with the
         persisted ``next_check_at``).
+
+        Entering a fresh wait requires ``bug_attempts`` (the run's
+        authoritative BUG count -- never silently defaulted to 0), and a
+        poll of an ongoing wait must not be earlier than the persisted
+        ``next_check_at`` (the schedule is monotonic). ``run_id`` must be
+        canonical run identity (``RUN_ID_PATTERN``).
         """
         now = _as_utc(
             now if now is not None else datetime.now(timezone.utc), "now"
@@ -410,15 +451,28 @@ class ExternalWaitCoordinator:
             if previous is None or previous.next_check_at is None:
                 # Entering (or re-entering) the wait: capture the attempt
                 # count now -- elapsed waiting time never increments it.
+                if bug_attempts is None:
+                    raise ValueError(
+                        "bug_attempts is required when a wait begins so "
+                        "the BUG count at wait entry is the run's "
+                        "authoritative count, never a silent 0"
+                    )
                 state = ExternalWaitState(
                     run_id=run_id,
                     review=review,
                     waiting_since=now,
                     next_check_at=now + self.poll_interval,
-                    bug_attempts=0 if bug_attempts is None else bug_attempts,
+                    bug_attempts=bug_attempts,
                 )
             else:
                 # A poll of the same wait: preserve the entry bookkeeping.
+                if now < previous.next_check_at:
+                    raise ValueError(
+                        f"poll at {now.isoformat()} is before the persisted "
+                        f"next_check_at "
+                        f"({previous.next_check_at.isoformat()}); the poll "
+                        "schedule must be monotonic"
+                    )
                 state = ExternalWaitState(
                     run_id=run_id,
                     review=review,
