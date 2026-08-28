@@ -11,6 +11,10 @@
  * * a present contract renders the contract version, the canonical
  *   Tier-1 hash (the value the canvas proves at LOCK), the Tier-1
  *   product scope and Definition of Done;
+ * * the spec-15 conceptual view is complete: explicit non-goals of the
+ *   Tier-1 product scope and the BUDGET block (hard limits, one-time
+ *   build budget, per-provider spend caps, monthly infrastructure cap,
+ *   model/token cap) are rendered;
  * * the canonical ``AUTO_PROVISION_AUTHORIZED`` authority enum value
  *   is rendered verbatim, never renamed (plan Global Constraint).
  */
@@ -129,6 +133,20 @@ describe("ContractPanel present contract", () => {
   it("renders every primary user journey", () => {
     expect(html).toContain("Review readiness evidence");
     expect(html).toContain("Approve LOCK &amp; BUILD");
+  });
+
+  it("renders the explicit non-goals of the Tier-1 product scope", () => {
+    expect(html).toContain("contract-panel__non-goals");
+    expect(html).toContain("no automatic deployment");
+  });
+
+  it("renders the BUDGET block: hard limits, per-provider caps and build caps", () => {
+    expect(html).toContain("Budget");
+    expect(html).toContain("hard limits enforced");
+    expect(html).toContain("example-provider: 5000");
+    expect(html).toContain("one-time build budget: not defined");
+    expect(html).toContain("monthly infrastructure cap: not defined");
+    expect(html).toContain("model/token cap: not defined");
   });
 
   it("renders the canonical AUTO_PROVISION_AUTHORIZED authority enum verbatim", () => {

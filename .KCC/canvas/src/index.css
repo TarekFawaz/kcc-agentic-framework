@@ -120,6 +120,18 @@ body {
   font-size: 0.9rem;
 }
 
+/* The trace graph is display-only: its failure never blanks the LOCK
+   surface, but it is reported distinctly in the graph area. */
+.canvas-shell__trace-error {
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid #b45309;
+  border-radius: 0.5rem;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.9rem;
+}
+
 .prototype-panel,
 .readiness-panel,
 .contract-panel,

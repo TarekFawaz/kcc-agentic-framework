@@ -19,11 +19,20 @@
  *   LOCK again;
  * * a successful command updates the run projection through the
  *   returned ``CommandResult`` without any refetch;
- * * a non-409 failure surfaces as an error without refetching.
+ * * a non-409 failure surfaces as an error without refetching;
+ * * ``CanvasSession`` is the App's wiring holder: the initial load
+ *   fetches run/readiness/contract and the trace graph independently
+ *   (a trace failure never blanks the LOCK surface), a stale command
+ *   publishes the refreshed projection set and the ``staleRefreshed``
+ *   flag to exactly the state the surface renders, and LOCK is never
+ *   auto-retried.
  *
  * The orchestration helpers are pure async functions over a minimal
- * command/projection source interface, exercised with fakes; the
- * surface is rendered to static markup with ``react-dom/server``.
+ * command/projection source interface, exercised with fakes; ``App``
+ * is a thin component over ``CanvasSession``, so the wiring tests
+ * drive the session and render the exact state through
+ * ``CanvasSurfaces`` (the DOM-free presentation contract). The
+ * surfaces are rendered to static markup with ``react-dom/server``.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -39,6 +48,7 @@ import type {
 } from "./types";
 import { ApiError, StaleProjectionError } from "./api/client";
 import {
+  CanvasSession,
   CanvasSurfaces,
   fetchProjections,
   submitLock,
@@ -299,6 +309,169 @@ describe("submitPause / submitResume", () => {
   });
 });
 
+describe("CanvasSession stale-refresh wiring (integrated)", () => {
+  it("load() populates run/readiness/contract and the trace graph from the client", async () => {
+    const client = fakeClient();
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    const state = session.getState();
+    expect(state.run?.run_id).toBe("RUN-042");
+    expect(state.run?.state).toBe("CONTRACT_REVIEW");
+    expect(state.readiness?.ready).toBe(true);
+    expect(state.contract?.tier1_hash).toBe(TIER1_HASH);
+    expect(state.trace?.nodes).toHaveLength(2);
+    expect(state.busy).toBe(false);
+    expect(state.error).toBeNull();
+    expect(state.traceError).toBeNull();
+    expect(state.staleRefreshed).toBe(false);
+    expect(client.getRun).toHaveBeenCalledTimes(1);
+    expect(client.getReadiness).toHaveBeenCalledTimes(1);
+    expect(client.getContract).toHaveBeenCalledTimes(1);
+    expect(client.getTrace).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the LOCK surface when only the trace graph fails to load", async () => {
+    const client = fakeClient();
+    client.getTrace.mockRejectedValue(new Error("trace service down"));
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    const state = session.getState();
+    // The projections still arrive: the canvas is never blanked by a
+    // display-only trace failure.
+    expect(state.run?.state).toBe("CONTRACT_REVIEW");
+    expect(state.readiness).toBeTruthy();
+    expect(state.contract).toBeTruthy();
+    expect(state.trace).toBeNull();
+    expect(state.traceError).toContain("trace service down");
+    expect(state.error).toBeNull();
+
+    // The user still sees the readiness/contract/LOCK surface, with a
+    // distinct trace error in the graph area.
+    const html = renderToStaticMarkup(
+      <CanvasSurfaces
+        run={state.run}
+        trace={state.trace}
+        readiness={state.readiness}
+        contract={state.contract}
+        busy={state.busy}
+        error={state.error}
+        staleRefreshed={state.staleRefreshed}
+        traceError={state.traceError}
+        onLock={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(html).toContain("canvas-shell__trace-error");
+    expect(html).toContain("trace service down");
+    expect(html).toContain('data-ready="true"');
+    expect(html).toContain("Canvas readiness and lock review surface");
+    expect(html).toContain("LOCK &amp; BUILD");
+  });
+
+  it("refreshes run/readiness/contract on a stale LOCK and never auto-retries", async () => {
+    const client = fakeClient();
+    client.lock.mockRejectedValue(
+      new StaleProjectionError(409, "STALE_STATE", "run is BUILDING, expected CONTRACT_REVIEW"),
+    );
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    await session.lock(TIER1_HASH);
+
+    const state = session.getState();
+    expect(state.staleRefreshed).toBe(true);
+    expect(state.busy).toBe(false);
+    expect(state.error).toBeNull();
+    // Exactly one LOCK request: stale is failed fast, never retried.
+    expect(client.lock).toHaveBeenCalledTimes(1);
+    expect(client.lock).toHaveBeenCalledWith({
+      expected_state: "CONTRACT_REVIEW",
+      tier1_hash: TIER1_HASH,
+    });
+    // The refresh is the LOCK surface only: run/readiness/contract, no trace.
+    expect(client.getRun).toHaveBeenCalledTimes(2);
+    expect(client.getReadiness).toHaveBeenCalledTimes(2);
+    expect(client.getContract).toHaveBeenCalledTimes(2);
+    expect(client.getTrace).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders exactly the refreshed lock surface before the user can re-enable LOCK", async () => {
+    const client = fakeClient();
+    // Initial load sees CONTRACT_REVIEW; the post-stale refresh reveals
+    // that the server has already moved the run to BUILDING.
+    client.getRun.mockResolvedValueOnce({ ...RUN });
+    client.getRun.mockResolvedValueOnce({ ...RUN, state: "BUILDING" });
+    client.lock.mockRejectedValue(
+      new StaleProjectionError(409, "STALE_STATE", "run is BUILDING"),
+    );
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    await session.lock(TIER1_HASH);
+
+    const state = session.getState();
+    expect(state.run?.state).toBe("BUILDING");
+    const html = renderToStaticMarkup(
+      <CanvasSurfaces
+        run={state.run}
+        trace={state.trace}
+        readiness={state.readiness}
+        contract={state.contract}
+        busy={state.busy}
+        error={state.error}
+        staleRefreshed={state.staleRefreshed}
+        traceError={state.traceError}
+        onLock={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(html).toContain("lock-bar__stale-notice");
+    expect(html).toContain("LOCK expects CONTRACT_REVIEW (current: BUILDING)");
+    expect(
+      (/<button class="lock-bar__button"[^>]*>/.exec(html)?.[0] ?? "").includes("disabled"),
+    ).toBe(true);
+    // The refreshed run is BUILDING, so PAUSE is re-enabled on the
+    // surface the user now reviews.
+    expect(
+      (/<button class="lock-bar__pause"[^>]*>/.exec(html)?.[0] ?? "").includes("disabled"),
+    ).toBe(false);
+  });
+
+  it("applies an accepted LOCK result without refetching anything", async () => {
+    const client = fakeClient();
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    await session.lock(TIER1_HASH);
+
+    const state = session.getState();
+    expect(state.run?.state).toBe("LOCKED");
+    expect(state.staleRefreshed).toBe(false);
+    expect(state.busy).toBe(false);
+    expect(state.error).toBeNull();
+    expect(client.getRun).toHaveBeenCalledTimes(1);
+    expect(client.getReadiness).toHaveBeenCalledTimes(1);
+    expect(client.getContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a non-409 command failure without refetching", async () => {
+    const client = fakeClient();
+    client.lock.mockRejectedValue(
+      new ApiError(400, "LOCK_DENIED", "readiness blockers: PROVIDER-B"),
+    );
+    const session = new CanvasSession(client, () => {});
+    await session.load();
+    await session.lock(TIER1_HASH);
+
+    const state = session.getState();
+    expect(state.error).toContain("LOCK_DENIED");
+    expect(state.staleRefreshed).toBe(false);
+    expect(state.run?.state).toBe("CONTRACT_REVIEW");
+    expect(client.getRun).toHaveBeenCalledTimes(1);
+    expect(client.getReadiness).toHaveBeenCalledTimes(1);
+    expect(client.getContract).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("CanvasSurfaces renders the refreshed Lock surface", () => {
   function surfacesHtml(
     run: RunProjection,
@@ -388,5 +561,28 @@ describe("CanvasSurfaces renders the refreshed Lock surface", () => {
     expect(html).toContain("canvas-shell__error");
     expect(html).toContain('role="alert"');
     expect(html).toContain("failed to load run");
+  });
+
+  it("renders a distinct trace error without hiding the LOCK surface", () => {
+    const html = renderToStaticMarkup(
+      <CanvasSurfaces
+        run={RUN}
+        trace={null}
+        readiness={READINESS}
+        contract={CONTRACT}
+        busy={false}
+        error={null}
+        staleRefreshed={false}
+        traceError="the trace graph could not be loaded: trace service down"
+        onLock={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(html).toContain("canvas-shell__trace-error");
+    expect(html).toContain("trace service down");
+    expect(html).not.toContain("Trace graph is being loaded");
+    expect(html).toContain('data-ready="true"');
+    expect(html).toContain("LOCK &amp; BUILD");
   });
 });

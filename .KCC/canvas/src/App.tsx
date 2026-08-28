@@ -8,19 +8,24 @@
  *   contract) and the server-owned trace graph, and renders the
  *   discovery timeline, the trace graph, the prototype / readiness /
  *   contract panels and the gated LOCK bar;
+ * * :class:`CanvasSession` is the App's wiring holder: ``load()``
+ *   fetches run/readiness/contract and the trace graph independently,
+ *   so a trace failure never blanks the LOCK surface (the trace graph
+ *   is server-owned display data; the failure is reported in the
+ *   graph area instead);
  * * every command (LOCK / PAUSE / RESUME) is single-shot.  When the
  *   control plane answers HTTP 409 (:class:`StaleProjectionError`),
- *   :func:`submitLock` / :func:`submitPause` / :func:`submitResume`
- *   FAIL FAST and the App refetches exactly run, readiness and
- *   contract (:func:`fetchProjections`) before re-rendering the
- *   surface — the user sees the refreshed Lock surface (with the
- *   stale-refresh notice and the current gating reasons) and presses
- *   LOCK again explicitly.  LOCK is NEVER auto-retried anywhere;
- * * :func:`CanvasSurfaces` is the presentational surface: given
- *   projections it renders the full canvas, so a refreshed projection
- *   set is exactly what the user sees.
+ *   the command FAILS FAST and the session refetches exactly run,
+ *   readiness and contract (:func:`fetchProjections`) and publishes
+ *   the refreshed projection set with ``staleRefreshed`` set — the
+ *   user sees the refreshed Lock surface (with the stale-refresh
+ *   notice and the current gating reasons) and presses LOCK again
+ *   explicitly.  LOCK is NEVER auto-retried anywhere;
+ * * :func:`CanvasSurfaces` is the presentational surface: given the
+ *   session state it renders the full canvas, so a refreshed
+ *   projection set is exactly what the user sees.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   CommandRequest,
@@ -157,6 +162,144 @@ export function submitResume(client: CommandClient): Promise<CommandOutcome> {
   );
 }
 
+/** The renderable canvas state — exactly what the surface consumes. */
+export interface CanvasState {
+  run: RunProjection | null;
+  trace: TraceProjection | null;
+  readiness: ReadinessProjection | null;
+  contract: ContractProjection | null;
+  busy: boolean;
+  error: string | null;
+  staleRefreshed: boolean;
+  /** Trace-only failure: the graph could not be loaded (LOCK surface stays). */
+  traceError: string | null;
+}
+
+/** Empty canvas state before the first load completes. */
+export const INITIAL_CANVAS_STATE: CanvasState = {
+  run: null,
+  trace: null,
+  readiness: null,
+  contract: null,
+  busy: false,
+  error: null,
+  staleRefreshed: false,
+  traceError: null,
+};
+
+/**
+ * The App's wiring holder: load the canvas once, apply single-shot
+ * commands, and on a stale projection refetch run/readiness/contract
+ * so the user re-reviews the refreshed Lock surface before pressing
+ * LOCK again.  Every state change is published through ``onState``
+ * (the React setter); ``getState`` exposes the current snapshot for
+ * tests and rendering.
+ *
+ * ``cancel`` invalidates in-flight work when the App unmounts or the
+ * client changes (StrictMode effects mount twice in development, so
+ * in-flight work is tracked by generation, not by a disposed flag).
+ */
+export class CanvasSession {
+  private state: CanvasState;
+  private generation = 0;
+
+  constructor(
+    private readonly client: CommandClient,
+    private readonly onState: (state: CanvasState) => void,
+  ) {
+    this.state = { ...INITIAL_CANVAS_STATE };
+  }
+
+  /** The current snapshot (also delivered through ``onState`` on every change). */
+  getState(): CanvasState {
+    return this.state;
+  }
+
+  /** Invalidate in-flight work (unmount or client change). */
+  cancel(): void {
+    this.generation += 1;
+  }
+
+  /**
+   * Initial canvas load. run/readiness/contract and the trace graph
+   * are fetched independently: a trace failure must never blank the
+   * LOCK surface — the projections render and the graph area reports
+   * the failure.
+   */
+  async load(): Promise<void> {
+    const generation = ++this.generation;
+    const [projections, trace] = await Promise.allSettled([
+      fetchProjections(this.client),
+      this.client.getTrace(),
+    ]);
+    if (generation !== this.generation) {
+      return;
+    }
+    const next: CanvasState = { ...this.state };
+    if (projections.status === "fulfilled") {
+      next.run = projections.value.run;
+      next.readiness = projections.value.readiness;
+      next.contract = projections.value.contract;
+    } else {
+      next.error = errorMessage(projections.reason);
+    }
+    if (trace.status === "fulfilled") {
+      next.trace = trace.value;
+    } else {
+      next.traceError = `the trace graph could not be loaded: ${errorMessage(trace.reason)}`;
+    }
+    this.publish(next);
+  }
+
+  /** LOCK & BUILD: single-shot, stale projects refresh, never retried. */
+  lock(tier1Hash: string): Promise<void> {
+    return this.runCommand(() => submitLock(this.client, tier1Hash));
+  }
+
+  /** PAUSE a BUILDING run (single-shot). */
+  pause(): Promise<void> {
+    return this.runCommand(() => submitPause(this.client));
+  }
+
+  /** RESUME a PAUSED run (single-shot). */
+  resume(): Promise<void> {
+    return this.runCommand(() => submitResume(this.client));
+  }
+
+  private async runCommand(submit: () => Promise<CommandOutcome>): Promise<void> {
+    const generation = this.generation;
+    this.publish({
+      ...this.state,
+      busy: true,
+      error: null,
+      staleRefreshed: false,
+    });
+    const outcome = await submit();
+    if (generation !== this.generation) {
+      return;
+    }
+    const next: CanvasState = { ...this.state, busy: false };
+    if (outcome.kind === "accepted") {
+      next.run = outcome.result.run;
+    } else if (outcome.kind === "stale") {
+      // The refreshed LOCK surface is what the user sees before
+      // pressing LOCK again — never an automatic re-issue.
+      next.run = outcome.projections.run;
+      next.readiness = outcome.projections.readiness;
+      next.contract = outcome.projections.contract;
+      next.staleRefreshed = true;
+    } else {
+      next.error = outcome.message;
+    }
+    this.publish(next);
+  }
+
+  private publish(next: CanvasState): void {
+    this.state = next;
+    this.onState(next);
+  }
+}
+
 export interface CanvasSurfacesProps {
   run: RunProjection | null;
   trace: TraceProjection | null;
@@ -165,6 +308,7 @@ export interface CanvasSurfacesProps {
   busy: boolean;
   error: string | null;
   staleRefreshed: boolean;
+  traceError?: string | null;
   onLock: (tier1Hash: string) => void;
   onPause: () => void;
   onResume: () => void;
@@ -196,6 +340,10 @@ export function CanvasSurfaces(props: CanvasSurfacesProps) {
       ) : null}
       {props.trace !== null ? (
         <TraceGraph projection={props.trace} />
+      ) : props.traceError !== null ? (
+        <p className="canvas-shell__trace-error" role="alert">
+          {props.traceError}
+        </p>
       ) : (
         <p className="canvas-shell__empty">Trace graph is being loaded…</p>
       )}
@@ -228,96 +376,34 @@ export function CanvasSurfaces(props: CanvasSurfacesProps) {
 }
 
 /**
- * The canvas App: loads the projections and trace graph once, applies
+ * The canvas App: a thin component over :class:`CanvasSession` — the
+ * session loads the projections and trace graph once, applies
  * single-shot commands, and on a stale projection refetches
  * run/readiness/contract so the user re-reviews the refreshed Lock
  * surface before pressing LOCK again.
  */
 export function App({ client = api }: { client?: CommandClient }) {
-  const [run, setRun] = useState<RunProjection | null>(null);
-  const [trace, setTrace] = useState<TraceProjection | null>(null);
-  const [readiness, setReadiness] = useState<ReadinessProjection | null>(null);
-  const [contract, setContract] = useState<ContractProjection | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [staleRefreshed, setStaleRefreshed] = useState(false);
+  const [state, setState] = useState<CanvasState>(INITIAL_CANVAS_STATE);
+  const session = useMemo(() => new CanvasSession(client, setState), [client]);
 
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [projections, traceProjection] = await Promise.all([
-          fetchProjections(client),
-          client.getTrace(),
-        ]);
-        if (!cancelled) {
-          setRun(projections.run);
-          setReadiness(projections.readiness);
-          setContract(projections.contract);
-          setTrace(traceProjection);
-        }
-      } catch (cause) {
-        if (!cancelled) {
-          setError(errorMessage(cause));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
-
-  function applyOutcome(outcome: CommandOutcome): void {
-    if (outcome.kind === "accepted") {
-      setRun(outcome.result.run);
-    } else if (outcome.kind === "stale") {
-      // The refreshed LOCK surface is what the user sees before
-      // pressing LOCK again — never an automatic re-issue.
-      setRun(outcome.projections.run);
-      setReadiness(outcome.projections.readiness);
-      setContract(outcome.projections.contract);
-      setStaleRefreshed(true);
-    } else {
-      setError(outcome.message);
-    }
-  }
-
-  async function handleLock(tier1Hash: string): Promise<void> {
-    setBusy(true);
-    setError(null);
-    setStaleRefreshed(false);
-    applyOutcome(await submitLock(client, tier1Hash));
-    setBusy(false);
-  }
-
-  async function handlePause(): Promise<void> {
-    setBusy(true);
-    setError(null);
-    setStaleRefreshed(false);
-    applyOutcome(await submitPause(client));
-    setBusy(false);
-  }
-
-  async function handleResume(): Promise<void> {
-    setBusy(true);
-    setError(null);
-    setStaleRefreshed(false);
-    applyOutcome(await submitResume(client));
-    setBusy(false);
-  }
+    void session.load();
+    return () => session.cancel();
+  }, [session]);
 
   return (
     <CanvasSurfaces
-      run={run}
-      trace={trace}
-      readiness={readiness}
-      contract={contract}
-      busy={busy}
-      error={error}
-      staleRefreshed={staleRefreshed}
-      onLock={handleLock}
-      onPause={handlePause}
-      onResume={handleResume}
+      run={state.run}
+      trace={state.trace}
+      readiness={state.readiness}
+      contract={state.contract}
+      busy={state.busy}
+      error={state.error}
+      staleRefreshed={state.staleRefreshed}
+      traceError={state.traceError}
+      onLock={(tier1Hash) => void session.lock(tier1Hash)}
+      onPause={() => void session.pause()}
+      onResume={() => void session.resume()}
     />
   );
 }

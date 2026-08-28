@@ -8,10 +8,13 @@
  * contract of :file:`src/components/LockBar.tsx`:
  *
  * * LOCK is enabled ONLY when the run state is exactly
- *   ``CONTRACT_REVIEW``, the readiness projection has zero blockers
- *   (``blocker_count = 0``) and its evidence is not stale — any other
- *   state, any blocker, or stale evidence disables the button and
- *   surfaces the reason;
+ *   ``CONTRACT_REVIEW``, the readiness projection is a READY verdict
+ *   (server parity with the ``lock_contract`` readiness gate: evidence
+ *   coverage exists, zero blockers, zero open red-team findings —
+ *   spec 13.1 "BLOCKERS = 0 is necessary but not by itself sufficient;
+ *   evidence coverage is required") and its evidence is not stale — any
+ *   other state, any blocker, incomplete coverage, an open finding, or
+ *   stale evidence disables the button and surfaces the reason;
  * * a missing Tier-1 contract hash also disables LOCK (the command
  *   must prove the hash, so no hash means no request to send);
  * * PAUSE is enabled only for a BUILDING run and RESUME only for a
@@ -93,6 +96,59 @@ const STALE_READINESS: ReadinessProjection = {
   ],
 };
 
+/** No evidence coverage at all: BLOCKERS = 0 is not sufficient (spec 13.1). */
+const NO_COVERAGE_READINESS: ReadinessProjection = {
+  ready: false,
+  coverage_ok: false,
+  blockers: [],
+  open_red_team_findings: [],
+  evidence_stale: false,
+  items: [],
+};
+
+/** Zero blockers but one open red-team finding (server gate rejects LOCK). */
+const OPEN_FINDINGS_READINESS: ReadinessProjection = {
+  ready: false,
+  coverage_ok: true,
+  blockers: [],
+  open_red_team_findings: ["RT-011"],
+  evidence_stale: false,
+  items: [
+    {
+      item_id: "PROVIDER-A",
+      status: "READY",
+      reasons: ["quota confirmed"],
+      evidence: [],
+      fallbacks: [],
+      evidence_current: true,
+    },
+  ],
+};
+
+/**
+ * The verdict is authoritative: even when no granular flag is tripped,
+ * a NOT READY verdict must disable LOCK (the server gate is derived
+ * from the same verdict, and the canvas must never offer a LOCK the
+ * control plane would answer 400 LOCK_DENIED).
+ */
+const NOT_READY_VERDICT_READINESS: ReadinessProjection = {
+  ready: false,
+  coverage_ok: true,
+  blockers: [],
+  open_red_team_findings: [],
+  evidence_stale: false,
+  items: [
+    {
+      item_id: "PROVIDER-A",
+      status: "READY",
+      reasons: ["quota confirmed"],
+      evidence: [],
+      fallbacks: [],
+      evidence_current: true,
+    },
+  ],
+};
+
 function lockButtonTag(html: string): string {
   return /<button class="lock-bar__button"[^>]*>/.exec(html)?.[0] ?? "";
 }
@@ -162,6 +218,42 @@ describe("lockGate blocker and evidence preconditions", () => {
     const gate = lockGate("CONTRACT_REVIEW", READY_READINESS, null);
     expect(gate.enabled).toBe(false);
     expect(gate.reasons.some((reason) => reason.includes("Tier-1 hash"))).toBe(true);
+  });
+});
+
+describe("lockGate evidence coverage and verdict (server gate parity, spec 13.1)", () => {
+  it("requires evidence coverage: BLOCKERS = 0 is necessary but not sufficient", () => {
+    const gate = lockGate("CONTRACT_REVIEW", NO_COVERAGE_READINESS, TIER1_HASH);
+    expect(gate.enabled).toBe(false);
+    expect(gate.reasons).toContain("readiness evidence coverage is incomplete");
+  });
+
+  it("disables LOCK while a red-team finding stays open", () => {
+    const gate = lockGate("CONTRACT_REVIEW", OPEN_FINDINGS_READINESS, TIER1_HASH);
+    expect(gate.enabled).toBe(false);
+    expect(
+      gate.reasons.some((reason) => reason.includes("open red-team") && reason.includes("RT-011")),
+    ).toBe(true);
+  });
+
+  it("disables LOCK when the readiness verdict is not READY even with no listed blocker", () => {
+    const gate = lockGate("CONTRACT_REVIEW", NOT_READY_VERDICT_READINESS, TIER1_HASH);
+    expect(gate.enabled).toBe(false);
+    expect(
+      gate.reasons.some((reason) => reason.includes("verdict") && reason.includes("NOT READY")),
+    ).toBe(true);
+  });
+
+  it("renders the coverage finding reason and a disabled button", () => {
+    const html = renderBar("CONTRACT_REVIEW", NO_COVERAGE_READINESS, TIER1_HASH);
+    expect(html).toContain("readiness evidence coverage is incomplete");
+    expect(lockButtonTag(html)).toContain("disabled");
+  });
+
+  it("renders open red-team findings as disabling reasons", () => {
+    const html = renderBar("CONTRACT_REVIEW", OPEN_FINDINGS_READINESS, TIER1_HASH);
+    expect(html).toContain("RT-011");
+    expect(lockButtonTag(html)).toContain("disabled");
   });
 });
 
