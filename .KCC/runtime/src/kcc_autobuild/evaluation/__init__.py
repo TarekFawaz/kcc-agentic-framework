@@ -8,6 +8,16 @@ catalog below is the durable contract for every later task: it must
 never be edited to make a scenario pass — the runtime is what passes.
 """
 
+from kcc_autobuild.evaluation.fake_world import (
+    BillingRecord,
+    CIResult,
+    FakeWorld,
+    MigrationCrashError,
+    MigrationResult,
+    ProviderCallResult,
+    StoreDecision,
+    WorldEvent,
+)
 from kcc_autobuild.evaluation.scenarios import (
     SCENARIOS_BY_ID,
     SCENARIO_CATALOG,
@@ -16,8 +26,16 @@ from kcc_autobuild.evaluation.scenarios import (
 )
 
 __all__ = [
+    "BillingRecord",
+    "CIResult",
+    "FakeWorld",
+    "MigrationCrashError",
+    "MigrationResult",
+    "ProviderCallResult",
     "SCENARIOS_BY_ID",
     "SCENARIO_CATALOG",
+    "StoreDecision",
+    "WorldEvent",
     "ProjectClass",
     "Scenario",
 ]
