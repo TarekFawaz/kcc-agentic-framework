@@ -12,8 +12,11 @@ Public surface of the harness-neutral capability model:
   parallel degrades to serial);
 * :class:`HarnessProbe`, :class:`HarnessTask` (consuming
   :class:`~kcc_autobuild.bridge.TaskHandoff` /
-  :class:`~kcc_autobuild.bridge.ExecutionReport`) and
-  :class:`HarnessError`;
+  :class:`~kcc_autobuild.bridge.ExecutionReport`),
+  :class:`HarnessSmokeEvidence` (the real smoke/evidence gate record
+  whose ``passed`` verdict is derived: all runs + status probe +
+  authorized mutation + denied direct mutation + zero prompts/secrets)
+  and :class:`HarnessError`;
 * the abstract :class:`HarnessAdapter` contract;
 * the capability registry (:class:`HarnessRegistry`,
   :class:`HarnessSelection`) whose ``register``/``get``/``probe_all``/
@@ -36,6 +39,7 @@ from kcc_autobuild.harnesses.models import (
     HarnessCapability,
     HarnessError,
     HarnessProbe,
+    HarnessSmokeEvidence,
     HarnessTask,
     MutationEnforcement,
 )
@@ -48,6 +52,7 @@ __all__ = [
     "HarnessCapability",
     "HarnessCapabilities",
     "HarnessProbe",
+    "HarnessSmokeEvidence",
     "HarnessTask",
     "HarnessError",
     "HarnessAdapter",

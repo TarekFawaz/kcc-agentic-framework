@@ -81,6 +81,19 @@ exactly that.
   `mutation_enforcement=KCC_POLICY_GATE`) is granted only after a
   passed **live doctor** proof against the effective hardened profile
   and guard. An offline doctor outcome is never a proof.
+- **Real smoke evidence** (`harness smoke dsh`) is the fresh live
+  proof beyond the doctor: disposable fresh workers must complete
+  read/code/test with no raw mutation, mutate only through the KCC
+  wrappers under the disposable allow policy, get the deliberate
+  built-in write/bash attempt guard-denied without a prompt, prove the
+  status and each emit a valid ExecutionReport; durable artifacts are
+  secret-scanned and
+  `coordination/autobuild/evaluations/dsh-smoke.json` carries the
+  `HarnessSmokeEvidence` verdict (`passed` requires all runs, status,
+  authorized mutation, denied direct mutation and zero
+  prompts/secrets). Plan 07 R3 consumes this fresh DSH smoke evidence
+  together with the parity contract before proposing production
+  authority, and generic CI never pretends live DSH exists.
 - **Skill generation alone is insufficient for Full Autopilot.** It
   documents the worker boundary; the policy-guard profile/plugin
   enforces it.

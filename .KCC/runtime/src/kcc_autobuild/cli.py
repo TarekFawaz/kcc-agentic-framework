@@ -21,6 +21,15 @@ profile/guard of the disposable ``kcc-autobuild`` profile before
 ``approval_mode=NEVER`` + ``mutation_enforcement=KCC_POLICY_GATE`` can
 ever be granted.
 
+Plan 08, Task 7 adds ``harness smoke dsh`` (the real smoke/evidence
+gate): ``--runs`` disposable fresh workers under a disposable hardened
+profile/workspace must prove status + authorized governed mutation +
+denied raw write/bash + zero prompts/secrets, every worker must emit a
+valid ExecutionReport, the durable artifacts are secret-scanned and
+``coordination/autobuild/evaluations/dsh-smoke.json`` is written -- exit
+0 only when the evaluation passed; the smoke never promotes a rollout
+(Plan 07 R3 consumes the fresh evidence).
+
 Plan 08, Task 5 adds the internal policy gate entry points
 ``gate-write`` / ``gate-exec``: the DSH Cordis wrappers
 (``kcc_policy_write`` / ``kcc_policy_exec``) call them with the
@@ -348,6 +357,109 @@ def harness_doctor(
         json.dumps(outcome.model_dump(mode="json"), sort_keys=True)
     )
     if not outcome.passed:
+        raise typer.Exit(code=1)
+
+
+@harness_app.command("smoke")
+def harness_smoke(
+    harness: str,
+    fixture: Path | None = typer.Option(
+        None,
+        help="The dsh-smoke fixture directory (AGENTS.md + input/); "
+        "default: the bundled repo fixture",
+    ),
+    runs: int = typer.Option(
+        3, min=1, help="Number of disposable fresh-worker smoke runs"
+    ),
+    repo_root: Path = typer.Option(
+        Path.cwd(), help="Repository root that holds the durable evaluation"
+    ),
+    dsh_bin: str = typer.Option(
+        "dsh", help="The dsh CLI command/executable to run"
+    ),
+    dsh_home: str | None = typer.Option(
+        None, help="DSH home directory (default: $DSH_HOME or ~/.dsh)"
+    ),
+    profile: str = typer.Option(
+        "kcc-autobuild", help="Name of the disposable hardened profile the smoke boots"
+    ),
+    template: str = typer.Option(
+        "kcc-autobuild",
+        help="Installed hardened profile the disposable one is templated from",
+    ),
+    timeout: float = typer.Option(
+        900.0, help="Time budget (seconds) of one disposable worker run"
+    ),
+    boot_timeout: float = typer.Option(
+        120.0, help="Time budget (seconds) of the CLI feature probe"
+    ),
+    temp_root: Path | None = typer.Option(
+        None, help="Temporary root for the disposable profile/workspace (tests)"
+    ),
+) -> None:
+    """Run the real dsh smoke/evidence gate and write the evaluation.
+
+    Each of the ``runs`` dispatches one fresh worker in a DISPOSABLE
+    hardened profile (temporary DSH_HOME, templated from the installed
+    hardened profile, disposable gate wiring + bounded allow policy) and
+    a DISPOSABLE workspace (private fixture copy): the worker must
+    read/code/test with no raw mutation, mutate ONLY through the KCC
+    wrappers, get its deliberate built-in write/bash attempt
+    guard-denied without a prompt, prove the status with exactly one
+    ``KCC_DSH_STATUS:`` line and emit a valid identity-bound
+    ExecutionReport.  The durable artifacts are secret-scanned and the
+    evaluation ``coordination/autobuild/evaluations/dsh-smoke.json`` is
+    written; the command exits 0 ONLY when the smoke passed.  It never
+    promotes a rollout itself -- Plan 07 R3 consumes the fresh evidence.
+    """
+    _require_dsh(harness)
+    from kcc_autobuild.harnesses.dsh import (
+        SMOKE_FIXTURE_AGENTS,
+        dsh_smoke,
+        smoke_evidence_document,
+        write_smoke_evaluation,
+    )
+
+    if fixture is None:
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "runtime"
+            / "tests"
+            / "harnesses"
+            / "fixtures"
+            / "dsh-smoke"
+        )
+    if fixture is None or not fixture.is_dir() or not (
+        fixture / SMOKE_FIXTURE_AGENTS
+    ).is_file():
+        typer.echo(
+            json.dumps(
+                {
+                    "fixture": str(fixture),
+                    "error": "smoke fixture must be a directory containing "
+                    f"{SMOKE_FIXTURE_AGENTS} and input/",
+                },
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    evidence = dsh_smoke(
+        fixture=fixture,
+        runs=runs,
+        dsh_bin=dsh_bin,
+        workspace=repo_root,
+        dsh_home=Path(dsh_home) if dsh_home else None,
+        profile=profile,
+        template=template,
+        timeout_seconds=timeout,
+        boot_timeout_seconds=boot_timeout,
+        temp_root=temp_root,
+        repo_root=repo_root,
+    )
+    write_smoke_evaluation(repo_root, evidence)
+    typer.echo(json.dumps(smoke_evidence_document(evidence), sort_keys=True))
+    if not evidence.passed:
         raise typer.Exit(code=1)
 
 

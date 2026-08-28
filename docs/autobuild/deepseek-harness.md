@@ -8,8 +8,8 @@ tags:
   - autobuild
   - harness/dsh
 created: 2026-08-28
-updated: 2026-08-28
-version: 1.0.0
+updated: 2026-08-29
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -135,6 +135,67 @@ kcc-autobuild harness doctor dsh --live
 granted **only after a passed live doctor**. An offline doctor outcome,
 a failed doctor, or raw skill files never grant hardened capabilities -
 skill generation alone is insufficient for Full Autopilot.
+
+## Real smoke/evidence gate
+
+Beyond the doctor's single status probe, the real smoke gate runs
+complete disposable fresh workers end to end:
+
+```bash
+# 3 disposable fresh workers (default):
+kcc-autobuild harness smoke dsh \
+  --fixture .KCC/runtime/tests/harnesses/fixtures/dsh-smoke \
+  --runs 3
+
+# more runs, explicit disposable temp root:
+kcc-autobuild harness smoke dsh \
+  --fixture .KCC/runtime/tests/harnesses/fixtures/dsh-smoke \
+  --runs 3 --temp-root /tmp/kcc-smoke
+```
+
+Every run is one fresh worker in a **disposable hardened profile** (a
+temporary `DSH_HOME` templated from the installed `kcc-autobuild`
+profile; config files copied, `node_modules` symlinked, the gate wiring
+re-rendered to disposable paths with a **bounded disposable allow
+policy** - exactly the two governed outputs, one report path per run and
+the single `python3` exec) and a **disposable workspace** holding a
+private copy of the fixture (`AGENTS.md` + `input/`). The worker must:
+
+1. read/code/test with **no raw mutation** - native read/glob/grep only;
+2. mutate **only through `kcc_policy_write` / `kcc_policy_exec`** under
+   the disposable allow policy (the governed verification run must
+   actually execute and leave its `.exec-proof.txt` marker behind);
+3. deliberately attempt the built-in write and bash tools and get both
+   **guard-denied without a prompt** (the raw marker files must never
+   appear);
+4. call `kcc_harness_status` exactly once and end its answer with
+   exactly one `KCC_DSH_STATUS:` line proving sandbox `workspace-write`,
+   approval `never`, guard `kcc-policy-gate`;
+5. emit a fresh valid, identity-bound `ExecutionReport` at the run's
+   report path - the report file is the completion contract, so exit 0
+   without one fails that run.
+
+Every durable artifact (worker reports, governed outputs, captured
+stdout/stderr, the disposable allow policy, the gate policy trace) is
+copied under `coordination/autobuild/evaluations/dsh-smoke/runs/run-<n>/`
+and **secret-scanned**; any `sk-...` plaintext finding or any
+prompt-like marker found in a durable artifact fails the evaluation
+(zero human prompts, zero secret findings). The evidence document is
+written to `coordination/autobuild/evaluations/dsh-smoke.json`
+(`HarnessSmokeEvidence` with `harness_id`, `runs_requested`,
+`runs_passed`, `status_probe_passed`, `authorized_mutation_passed`,
+`unauthorized_mutation_denied`, `human_prompts`, `secret_findings`,
+`evidence_refs` and the derived `passed` verdict - `passed` requires all
+runs, the status proof, the authorized governed mutation, the denied
+direct mutation and zero prompts/secrets). The command **exits 0 only
+when the smoke passed**.
+
+The smoke never promotes a rollout itself: it records fresh live
+evidence for KCC. Plan 07 R3 consumes the fresh Plan 08 real DSH smoke
+evidence (`dsh_live_smoke_passed=True`, zero human prompts, zero secret
+findings) together with the cross-harness parity contract when it
+proposes production authority. Generic CI never pretends live DSH
+exists - the evidence comes from this disposable, gated run only.
 
 ## Two modes of operation
 

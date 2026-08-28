@@ -372,3 +372,77 @@ class HarnessTask(StrictModel):
                 f"report workspace_id {report.workspace_id!r} does not match "
                 f"task workspace_id {self.workspace_id!r}"
             )
+
+
+class HarnessSmokeEvidence(StrictModel):
+    """Outcome of one real harness smoke/evidence gate (fail closed).
+
+    Plan 08, Task 7: the dsh smoke gate runs a real worker N times in a
+    disposable hardened profile/workspace and records the durable
+    evidence here.  Every requirement flag defaults false and
+    :attr:`passed` is **derived**: it requires *all* runs passed, the
+    status probe, the authorized bounded mutation through the KCC
+    wrappers, the denied direct (raw write/bash) mutation and zero human
+    prompts / zero secret findings.  Because the verdict is a property
+    of the recorded facts, a model instance can never claim ``passed``
+    while a requirement is missing -- no inconsistent evidence document
+    exists.
+    """
+
+    harness_id: str
+    runs_requested: int = Field(ge=1)
+    runs_passed: int = Field(ge=0)
+    status_probe_passed: bool = False
+    authorized_mutation_passed: bool = False
+    unauthorized_mutation_denied: bool = False
+    human_prompts: int = Field(default=0, ge=0)
+    secret_findings: int = Field(default=0, ge=0)
+    evidence_refs: list[str] = Field(default_factory=list)
+    ran_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("harness_id")
+    @classmethod
+    def _harness_id_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("harness_id must not be empty")
+        return value
+
+    @field_validator("runs_passed")
+    @classmethod
+    def _runs_passed_positive_count(cls, value: int, info: ValidationInfo) -> int:
+        requested = info.data.get("runs_requested")
+        if requested is not None and value > requested:
+            raise ValueError(
+                f"runs_passed ({value}) cannot exceed runs_requested ({requested})"
+            )
+        return value
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def _evidence_refs_nonblank_unique(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            if not entry.strip():
+                raise ValueError("evidence_refs entries must not be blank")
+        if len(value) != len(set(value)):
+            raise ValueError("evidence_refs must not contain duplicates")
+        return value
+
+    @field_validator("ran_at")
+    @classmethod
+    def _ran_at_must_be_aware_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("ran_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+    @property
+    def passed(self) -> bool:
+        """Derived verdict: all runs + status + authorized mutation +
+        denied direct mutation + zero prompts + zero secrets."""
+        return (
+            self.runs_passed == self.runs_requested
+            and self.status_probe_passed
+            and self.authorized_mutation_passed
+            and self.unauthorized_mutation_denied
+            and self.human_prompts == 0
+            and self.secret_findings == 0
+        )
