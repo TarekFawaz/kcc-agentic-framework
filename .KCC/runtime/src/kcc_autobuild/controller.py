@@ -342,6 +342,7 @@ class TaskPlan:
                 "trace graph is required to scope the handoff "
                 "(pass the task's trace context or the locked contract)"
             )
+        self._validate_trace_references(trace)
         if self.contract is not None:
             if self.contract.contract_hash is None:
                 raise ValueError(
@@ -358,6 +359,64 @@ class TaskPlan:
             CONTRACT_HASH_PATTERN, self.policy_bundle_hash
         ) is None:
             raise ValueError("policy_bundle_hash must be a canonical 64-hex hash")
+
+    def _validate_trace_references(self, trace: TraceGraph) -> None:
+        """The trace references must resolve NOW (fail fast, never late).
+
+        Mirrors the bridge's pack scoping: every requirement must be a
+        requirement node of the trace, and every acceptance/Test id must be
+        forward-reachable from the requirements with the right node kind.
+        A plan with broken references is rejected at construction instead of
+        failing when the handoff is built (or, worse, dispatching a
+        mis-scoped pack).
+        """
+        kind_by_id = {node.id: node.kind for node in trace.nodes}
+        for requirement_id in self.requirement_ids:
+            if kind_by_id.get(requirement_id) != "requirement":
+                raise ValueError(
+                    f"requirement {requirement_id!r} is not a requirement "
+                    "node of the trace graph"
+                )
+        reachable = self._forward_reachable(trace, self.requirement_ids)
+        for acceptance_id in self.acceptance_ids:
+            if acceptance_id not in reachable:
+                raise ValueError(
+                    f"acceptance {acceptance_id!r} is not reachable from "
+                    "the task requirements in the trace graph"
+                )
+            if kind_by_id.get(acceptance_id) != "acceptance":
+                raise ValueError(
+                    f"{acceptance_id!r} is not an acceptance node of the "
+                    "trace graph"
+                )
+        for test_id in self.test_ids:
+            if test_id not in reachable:
+                raise ValueError(
+                    f"test {test_id!r} is not reachable from the task "
+                    "requirements in the trace graph"
+                )
+            if kind_by_id.get(test_id) != "test":
+                raise ValueError(
+                    f"{test_id!r} is not a test node of the trace graph"
+                )
+
+    @staticmethod
+    def _forward_reachable(
+        trace: TraceGraph, roots: Iterable[str]
+    ) -> set[str]:
+        """Forward-reachable node ids from ``roots`` (deterministic DFS)."""
+        adjacency: dict[str, list[str]] = {}
+        for edge in trace.edges:
+            adjacency.setdefault(edge.source, []).append(edge.target)
+        seen: set[str] = set()
+        stack = list(roots)
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            stack.extend(adjacency.get(node_id, ()))
+        return seen
 
     def to_spec(self) -> TaskSpec:
         """The scheduler's view of this task (pure simulation input)."""
@@ -666,6 +725,23 @@ class AutobuildController:
             raise BrokenTaskGraph(
                 f"tasks depend on unknown tasks: {unknown}"
             )
+        # Provider references must resolve NOW: a rate demand for a provider
+        # with no configured capacity is a broken run contract (the
+        # scheduler refuses to guess and would raise a raw KeyError at tick
+        # time), so the controller is rejected at construction (fail fast).
+        unconfigured = sorted(
+            {
+                demand.provider_key
+                for plan in plans.values()
+                for demand in plan.rate_demands
+                if demand.provider_key not in rate.limits
+            }
+        )
+        if unconfigured:
+            raise ControllerError(
+                f"task rate demands reference unconfigured providers: "
+                f"{unconfigured}"
+            )
         self.run_id = run_id
         self.store = store
         self.scheduler = scheduler
@@ -774,7 +850,12 @@ class AutobuildController:
         self._released = []
 
         # 1) Stale lease sweep: expired leases are no longer accounted for.
+        # A (possibly shared) LeaseStore sweeps the whole database, so the
+        # controller only releases/freezes leases of its OWN run: another
+        # run's lapsed lease never touches this run's clocks/ledgers.
         for lease in self.leases.expire_stale(now):
+            if lease.run_id != self.run_id:
+                continue
             self._stale(lease, now=now, reason="lease.expired")
             self._frozen.append(lease.task_id)
             if lease.task_id not in self._paused:
@@ -928,7 +1009,13 @@ class AutobuildController:
                 f"task {task_id!r} is not running; operations belong to an attempt"
             )
         _as_utc(now if now is not None else datetime.now(timezone.utc), "now")
-        decision = self.policy.evaluator.evaluate(operation)
+        # The gate is the ONLY evaluator+executor: one evaluation per
+        # operation (never double-evaluate for the audit) and the evidence
+        # record is written only AFTER an ALLOWED execution -- a DENIED or
+        # AMBIGUOUS operation executes nothing, so it leaves no destructive
+        # evidence behind (a unique audit decision token is on the gate).
+        result = self.policy.execute(operation)
+        decision = self.policy.audits[-1].decision
         index = len(self._operations.get(task_id, []))
         self._operations.setdefault(task_id, []).append(
             WaveEvidenceItem(
@@ -939,7 +1026,7 @@ class AutobuildController:
                 detail=decision.value,
             )
         )
-        return self.policy.execute(operation)
+        return result
 
     # -- reports ---------------------------------------------------------------
 
@@ -1069,6 +1156,10 @@ class AutobuildController:
                 },
                 now,
             )
+            # A terminal-non-passed task blocks its PENDING dependents
+            # (E7/E8-style) so the scheduler is never shown a broken
+            # universe -- and the run wedges on nothing.
+            self._block_for_failed_dependencies(now)
         self._maybe_complete_wave(now)
         return acceptance
 
@@ -1120,6 +1211,7 @@ class AutobuildController:
             },
             now,
         )
+        self._block_for_failed_dependencies(now)
         self._maybe_complete_wave(now)
 
     def _stale(self, lease: Lease, *, now: datetime, reason: str) -> None:
@@ -1190,6 +1282,7 @@ class AutobuildController:
                 },
                 now,
             )
+            self._block_for_failed_dependencies(now)
             return
         self._status[task_id] = TaskState.FROZEN
         self._emit(
@@ -1208,8 +1301,68 @@ class AutobuildController:
             now,
         )
 
+    def _block_for_failed_dependencies(self, now: datetime) -> None:
+        """Block every PENDING task whose dependency chain hit a terminal-
+        non-passed task (FAILED/BLOCKED), transitively.
+
+        Graceful dependent-blocking (E7/E8-style): a dependent of a task
+        that can never pass is itself impossible, so it is BLOCKED with a
+        deterministic ``task.blocked`` event instead of the scheduler ever
+        seeing a universe with a terminal-non-passed dependency (which it
+        refuses as a broken contract -- raw :class:`KeyError`). The sweep
+        is idempotent and processes tasks in ascending id order, so the
+        event order is identical for identical inputs; a blocked task never
+        carried a lease or reservation (it was never dispatched), so no
+        accounting changes.
+        """
+        while True:
+            blocked: list[tuple[str, str, TaskState]] = []
+            for task_id in sorted(self._status):
+                if self._status[task_id] is not TaskState.PENDING:
+                    continue
+                for dependency in self._plans[task_id].depends_on:
+                    dep_state = self._status[dependency]
+                    if dep_state in _TERMINAL and dep_state is not TaskState.PASSED:
+                        blocked.append((task_id, dependency, dep_state))
+                        break
+            if not blocked:
+                return
+            for task_id, dependency, dep_state in blocked:
+                previous = self._status[task_id]
+                generation = self.leases.current_generation(task_id)
+                self._status[task_id] = TaskState.BLOCKED
+                self._emit(
+                    "task.blocked",
+                    {
+                        "task_id": task_id,
+                        "wave_id": None,
+                        "lease_id": None,
+                        "generation": generation,
+                        "attempt": generation,
+                        "from_status": previous.value,
+                        "reason": (
+                            "dependency failed"
+                            if dep_state is TaskState.FAILED
+                            else "dependency blocked"
+                        ),
+                        "dependency_id": dependency,
+                        "dependency_status": dep_state.value,
+                    },
+                    now,
+                )
+
     def _schedule_next_wave(self, now: datetime) -> None:
-        """Ask the scheduler and dispatch its selected set (reserve once)."""
+        """Ask the scheduler and dispatch its selected set (reserve once).
+
+        The scheduler is a pure decision function over a dependency-closed
+        universe: it raises :class:`KeyError` when a pending task depends
+        on a task that is neither passed nor pending. This controller never
+        presents it such a universe -- every terminal-non-passed task first
+        blocks its PENDING dependents (graceful E7/E8-style dependent
+        blocking) -- so the guard below is idempotent belt-and-braces for
+        any future terminalization path.
+        """
+        self._block_for_failed_dependencies(now)
         passed = self._by_state(TaskState.PASSED)
         active = [
             self._plans[task_id].to_spec()
@@ -1244,6 +1397,13 @@ class AutobuildController:
         """
         plan = self._plans[task_id]
         clock = self._clocks[task_id]
+        # Register wave membership up front: an attempted launch that fails
+        # (time budget exhausted, unbuildable pack) is still part of the
+        # wave, so the wave can complete and close instead of wedging open
+        # with an empty membership. Idempotent: a stale/paused task that
+        # relaunches into the SAME open wave is never duplicated.
+        if task_id not in self._waves[wave_id]:
+            self._waves[wave_id].append(task_id)
         if clock.remaining(now) <= 0:
             if task_id in self.budget.reservations:
                 self.budget.release(task_id)
@@ -1263,6 +1423,7 @@ class AutobuildController:
                 },
                 now,
             )
+            self._block_for_failed_dependencies(now)
             return None
         if not retained:
             self.budget.reserve(task_id, plan.budget_ceiling)
@@ -1300,16 +1461,13 @@ class AutobuildController:
                 },
                 now,
             )
+            self._block_for_failed_dependencies(now)
             return None
         if handoff.lease.lease_id != lease.lease_id or handoff.lease.generation != lease.generation:
             raise ControllerMismatch(
                 f"handoff lease {handoff.lease.lease_id!r} does not match "
                 f"the claimed KCC lease {lease.lease_id!r}"
             )
-        # A stale/paused task relaunches into the SAME open wave: its wave
-        # membership is idempotent (one claim per wave, never duplicated).
-        if task_id not in self._waves[wave_id]:
-            self._waves[wave_id].append(task_id)
         self._handoffs.append(handoff)
         self._emit(
             "task.dispatch",

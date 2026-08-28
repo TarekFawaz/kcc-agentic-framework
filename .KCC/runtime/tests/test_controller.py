@@ -52,12 +52,14 @@ from kcc_autobuild.bridge import (
     ExecutionReport,
     ExecutionStatus,
     FailureInfo,
+    HandoffError,
     OutputInfo,
     UsageInfo,
 )
-from kcc_autobuild.budget import BudgetLedger
+from kcc_autobuild.budget import BudgetBreach, BudgetLedger
 from kcc_autobuild.controller import (
     AutobuildController,
+    ControllerError,
     NotBuilding,
     ReportMismatch,
     StaleLeaseReport,
@@ -69,7 +71,7 @@ from kcc_autobuild.controller import (
     WaveGateReview,
 )
 from kcc_autobuild.evidence import EvidenceVerifier, ReportAcceptance
-from kcc_autobuild.leases import Lease, LeaseLedger, LeaseStatus
+from kcc_autobuild.leases import Lease, LeaseLedger, LeaseStatus, LeaseStore
 from kcc_autobuild.models import FailureClass, LifecycleState, RunRecord
 from kcc_autobuild.policy import (
     Operation,
@@ -81,7 +83,7 @@ from kcc_autobuild.policy import (
 from kcc_autobuild.rate_limit import RateCapacityLedger, RateDemand
 from kcc_autobuild.scheduler import Scheduler
 from kcc_autobuild.store import RunStore
-from kcc_autobuild.tool_gate import PolicyToolGate
+from kcc_autobuild.tool_gate import PolicyDenied, PolicyToolGate
 from kcc_autobuild.trace import TraceEdge, TraceGraph, TraceNode
 
 T0 = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -223,9 +225,11 @@ def _make_controller(
     store: RunStore,
     *,
     tasks: dict[str, TaskPlan] | None = None,
-    leases: LeaseLedger | None = None,
+    leases: LeaseLedger | LeaseStore | None = None,
     lease_ttl: timedelta | None = None,
     verifier: EvidenceVerifier | None = None,
+    bridge: ExecutionBridge | None = None,
+    policy: PolicyToolGate | None = None,
 ) -> AutobuildController:
     """Build a fully wired controller for the prescribed pipeline fixtures.
 
@@ -237,10 +241,10 @@ def _make_controller(
         store=store,
         scheduler=Scheduler(),
         leases=leases if leases is not None else LeaseLedger(lease_ttl=lease_ttl),
-        bridge=ExecutionBridge(),
+        bridge=bridge if bridge is not None else ExecutionBridge(),
         budget=BudgetLedger(Decimal("10.00")),
         rate=RateCapacityLedger({"api": 2}),
-        policy=_policy_gate(),
+        policy=policy if policy is not None else _policy_gate(),
         tasks=_plans() if tasks is None else tasks,
         verifier=verifier,
     )
@@ -922,3 +926,416 @@ def test_task_plan_rejects_broken_scopes(tmp_path):
     )
     with pytest.raises(ValueError):
         _make_controller(_make_store(tmp_path), tasks={"T1": broken})
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (review): graceful dependent-blocking, never a broken universe
+# ---------------------------------------------------------------------------
+
+
+def test_failed_dependency_blocks_dependents_and_tick_stays_clean(tmp_path):
+    """A verified FAILED task must never wedge the next tick: its PENDING
+    dependents are BLOCKED gracefully (E7/E8-style) instead of the
+    scheduler raising a raw KeyError on a terminal-non-passed dependency.
+    """
+    store = _make_store(tmp_path)
+    controller = _make_controller(store)
+    controller.tick(T0)
+    lease_t1 = controller.leases.current_lease("T1")
+
+    report = _report_for("T1", lease_t1, status=ExecutionStatus.FAILED)
+    acceptance = controller.accept_report(
+        report, acceptance=_accepted(), now=T0 + timedelta(seconds=5)
+    )
+    assert acceptance.accepted
+
+    snapshot = controller.snapshot(T0 + timedelta(seconds=5))
+    # T2 can never run: its dependency failed, so it is blocked, not wedged.
+    assert snapshot.passed == ()
+    assert snapshot.terminal == ("T1", "T2")
+    assert snapshot.pending == ()
+    blocked = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "task.blocked"
+    ]
+    assert [event.payload["task_id"] for event in blocked] == ["T2"]
+    assert blocked[-1].payload["dependency_id"] == "T1"
+    assert blocked[-1].payload["dependency_status"] == "FAILED"
+    assert blocked[-1].payload["reason"] == "dependency failed"
+    assert blocked[-1].payload["from_status"] == "PENDING"
+
+    # The independent T3 still runs; when its wave closes and the scheduler
+    # is consulted again, the universe contains no terminal-non-passed
+    # dependency: the tick returns cleanly instead of raising KeyError.
+    lease_t3 = controller.leases.current_lease("T3")
+    controller.accept_report(
+        _report_for("T3", lease_t3, cost="1.50"),
+        acceptance=_accepted(),
+        now=T0 + timedelta(seconds=20),
+    )
+    result = controller.tick(T0 + timedelta(seconds=30))
+    assert result.dispatched == ()
+    after = controller.snapshot(T0 + timedelta(seconds=30))
+    assert after.open_wave is None
+    assert after.terminal == ("T1", "T2", "T3")
+    assert store.load_run("RUN-001").state is LifecycleState.BUILDING
+
+
+def test_dependency_blocking_is_transitive_across_the_chain(tmp_path):
+    """A FAILED root dependency blocks the whole PENDING descendant chain
+    (T1 -> T2 -> T3) in deterministic order, leaving independent tasks alone.
+    """
+    store = _make_store(tmp_path)
+    chain = _plans()
+    chain["T3"] = TaskPlan(
+        id="T3",
+        budget_ceiling=Decimal("3.00"),
+        requirement_ids=("REQ-003",),
+        acceptance_ids=("AC-003",),
+        test_ids=("T-003",),
+        attempt_budget=_attempt_budget(),
+        time_budget_seconds=600,
+        depends_on=("T2",),
+        rate_demands=(RateDemand("api"),),
+        trace=_trace(),
+        policy_bundle_hash=POLICY_HASH,
+    )
+    controller = _make_controller(store, tasks=chain)
+    first = controller.tick(T0)
+    # Wave 1 = the dependency-ready set: T1 and T2 are NOT both ready
+    # (T2 depends on T1), so only T1 dispatches.
+    assert [handoff.task_id for handoff in first.dispatched] == ["T1"]
+    lease_t1 = controller.leases.current_lease("T1")
+    controller.accept_report(
+        _report_for("T1", lease_t1, status=ExecutionStatus.FAILED),
+        acceptance=_accepted(),
+        now=T0 + timedelta(seconds=5),
+    )
+    blocked = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "task.blocked"
+    ]
+    assert [event.payload["task_id"] for event in blocked] == ["T2", "T3"]
+    assert blocked[0].payload["dependency_id"] == "T1"
+    assert blocked[0].payload["dependency_status"] == "FAILED"
+    # T3's immediate dependency is the blocked T2 (chain closed transitively).
+    assert blocked[1].payload["dependency_id"] == "T2"
+    assert blocked[1].payload["dependency_status"] == "BLOCKED"
+    assert blocked[1].payload["reason"] == "dependency blocked"
+    snapshot = controller.snapshot(T0 + timedelta(seconds=5))
+    assert snapshot.terminal == ("T1", "T2", "T3")
+    assert snapshot.pending == ()
+    # The scheduler is consulted again without a broken universe.
+    assert controller.tick(T0 + timedelta(seconds=10)).dispatched == ()
+
+
+def test_time_budget_exhaustion_blocks_pending_dependents(tmp_path):
+    """A task that fails on its time budget (stale sweep) blocks its PENDING
+    dependents the same way a verified failure does -- no raw KeyError.
+    """
+    store = _make_store(tmp_path)
+    plan_t1 = TaskPlan(
+        id="T1",
+        budget_ceiling=Decimal("3.00"),
+        requirement_ids=("REQ-001",),
+        acceptance_ids=("AC-001",),
+        test_ids=("T-001",),
+        attempt_budget=_attempt_budget(),
+        time_budget_seconds=60,
+        rate_demands=(RateDemand("api"),),
+        trace=_trace(),
+        policy_bundle_hash=POLICY_HASH,
+    )
+    plan_t2 = TaskPlan(
+        id="T2",
+        budget_ceiling=Decimal("3.00"),
+        requirement_ids=("REQ-002",),
+        acceptance_ids=("AC-002",),
+        test_ids=("T-002",),
+        attempt_budget=_attempt_budget(),
+        time_budget_seconds=600,
+        depends_on=("T1",),
+        rate_demands=(RateDemand("api"),),
+        trace=_trace(),
+        policy_bundle_hash=POLICY_HASH,
+    )
+    controller = _make_controller(
+        store,
+        tasks={"T1": plan_t1, "T2": plan_t2},
+        lease_ttl=timedelta(seconds=60),
+    )
+    controller.tick(T0)
+
+    # The lease lapses exactly when the time budget is exhausted: T1 fails
+    # and its wave closes; the next tick must not raise a raw KeyError.
+    exhausted = controller.tick(T0 + timedelta(seconds=60))
+    assert exhausted.frozen == ("T1",)
+    assert controller.snapshot(T0 + timedelta(seconds=60)).terminal == ("T1", "T2")
+    later = controller.tick(T0 + timedelta(seconds=61))
+    assert later.dispatched == ()
+    blocked = [
+        event.payload["task_id"]
+        for event in store.list_events("RUN-001")
+        if event.kind == "task.blocked"
+    ]
+    assert blocked == ["T2"]
+
+
+def test_unbuildable_handoff_blocks_task_and_its_dependents(tmp_path):
+    """A pack that cannot be built blocks the task (fail closed) and its
+    PENDING dependents; the empty wave still closes so the run advances.
+    """
+
+    class BrokenBridge(ExecutionBridge):
+        def build_handoff(self, **kwargs):
+            raise HandoffError("no pack can be scoped for this task")
+
+    store = _make_store(tmp_path)
+    controller = _make_controller(
+        store,
+        tasks={"T1": _plans()["T1"], "T2": _plans()["T2"]},
+        bridge=BrokenBridge(),
+    )
+    result = controller.tick(T0)
+    assert result.dispatched == ()
+    snapshot = controller.snapshot(T0)
+    assert snapshot.terminal == ("T1", "T2")
+    # The booking is returned, the clock stays frozen and the wave closed.
+    assert controller.budget.reservations == {}
+    assert controller.rate.reservations == {}
+    assert controller.time_budget("T1").frozen
+    assert snapshot.open_wave is None
+    blocked = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "task.blocked"
+    ]
+    assert [event.payload["task_id"] for event in blocked] == ["T1", "T2"]
+    assert blocked[0].payload["reason"] == "handoff build failed or oversized"
+    assert blocked[1].payload["reason"] == "dependency blocked"
+    # The scheduler is consulted again without a broken universe.
+    assert controller.tick(T0 + timedelta(seconds=5)).dispatched == ()
+
+
+def test_rejected_acceptance_releases_fences_and_fails_task(tmp_path):
+    """A rejected report counts as a failed attempt: the booking is released,
+    the lease fenced and the task FAILED with an audit trail (fail closed).
+    """
+    store = _make_store(tmp_path)
+    controller = _make_controller(store, tasks={"T1": _plans()["T1"]})
+    controller.tick(T0)
+    lease = controller.leases.current_lease("T1")
+    rejection = ReportAcceptance(
+        accepted=False,
+        counts_as_failed_attempt=True,
+        reasons=["claimed commit does not exist"],
+    )
+    acceptance = controller.accept_report(
+        _report_for("T1", lease), acceptance=rejection, now=T0 + timedelta(seconds=5)
+    )
+    assert acceptance is rejection
+    assert controller.budget.reservations == {}
+    assert controller.rate.reservations == {}
+    assert controller.leases.lease_status("LEASE-RUN-001-T1-1") is LeaseStatus.FENCED
+    assert controller.snapshot(T0 + timedelta(seconds=5)).terminal == ("T1",)
+    kinds = {event.kind for event in store.list_events("RUN-001")}
+    assert "report.rejected" in kinds
+    assert "task.failed" in kinds
+
+
+def test_budget_breach_halts_run_to_blocked_after_settlement(tmp_path):
+    """E3: provider-reported usage breaching the hard cap halts the run to
+    BLOCKED after the books settle (never half-applied, no double charge).
+    """
+    store = _make_store(tmp_path)
+    controller = _make_controller(store, tasks={"T1": _plans()["T1"]})
+    controller.tick(T0)
+    lease = controller.leases.current_lease("T1")
+    with pytest.raises(BudgetBreach):
+        controller.accept_report(
+            _report_for("T1", lease, cost="25.00"),
+            acceptance=_accepted(),
+            now=T0 + timedelta(seconds=5),
+        )
+    assert store.load_run("RUN-001").state is LifecycleState.BLOCKED
+    # Settlement first: the wave's booking moved into actual.
+    assert controller.budget.reservations == {}
+    assert controller.budget.actual == Decimal("3.00")
+    events = store.list_events("RUN-001")
+    breach = [event for event in events if event.kind == "budget.breach"][-1]
+    assert breach.payload["wave_id"] == "wave-1"
+    assert Decimal(breach.payload["provider_actual"]) == Decimal("25.0")
+    assert Decimal(breach.payload["hard_cap"]) == Decimal("10")
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (review): policy gate discipline and run-scoped sweeping
+# ---------------------------------------------------------------------------
+
+
+class _CountingEvaluator(PolicyEvaluator):
+    """Policy evaluator that counts evaluations (no double evaluation)."""
+
+    def __init__(self, bundle, secret):
+        super().__init__(bundle, secret)
+        self.calls = 0
+
+    def evaluate(self, operation):
+        self.calls += 1
+        return super().evaluate(operation)
+
+
+def test_operation_is_evaluated_exactly_once_and_denied_leaves_no_evidence(tmp_path):
+    """The controller routes operations through the gate once: the policy is
+    evaluated exactly once per operation and a DENIED operation never
+    records execution evidence (nothing was executed/destroyed).
+    """
+    store = _make_store(tmp_path)
+    bundle = sign_policy_bundle(
+        (
+            PolicyRule(
+                operation="deploy",
+                resource="prod/analysis",
+                data_class="public",
+                decision=PolicyDecision.ALLOWED,
+            ),
+        ),
+        POLICY_SECRET,
+    )
+    evaluator = _CountingEvaluator(bundle, POLICY_SECRET)
+    executed: list[str] = []
+    gate = PolicyToolGate(
+        evaluator, executor=lambda operation, token: executed.append(token) or f"executed:{token}"
+    )
+    controller = _make_controller(store, tasks={"T1": _plans()["T1"]}, policy=gate)
+    controller.tick(T0)
+
+    # An unlisted operation is DENIED: executor untouched, no evidence.
+    with pytest.raises(PolicyDenied):
+        controller.execute_operation(
+            Operation("delete", "prod/db", "private"),
+            task_id="T1",
+            production=True,
+            now=T0 + timedelta(seconds=1),
+        )
+    assert executed == []
+    assert evaluator.calls == 1
+
+    # The allowed operation executes once and evaluates exactly once per
+    # operation (the controller never double-evaluates for the audit).
+    result = controller.execute_operation(
+        Operation("deploy", "prod/analysis", "public"),
+        task_id="T1",
+        production=True,
+        now=T0 + timedelta(seconds=2),
+    )
+    assert result.startswith("executed:")
+    assert executed == [controller.policy.audits[-1].token]
+    assert evaluator.calls == 2
+
+    # The wave review records only the executed operation: the DENIED
+    # operation left no destructive evidence behind.
+    lease = controller.leases.current_lease("T1")
+    controller.accept_report(
+        _report_for("T1", lease, outputs=[_commit("abc1234")]),
+        acceptance=_accepted(),
+        now=T0 + timedelta(seconds=5),
+    )
+    review = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "wave.review"
+    ][-1]
+    assert review.payload["mandatory_ids"] == ["T1:operation:0"]
+    assert "T1:operation:0" in review.payload["reviewed_ids"]
+
+
+def test_tick_sweep_ignores_leases_from_other_runs(tmp_path):
+    """A shared LeaseStore sweeps the database; the controller only releases
+    and freezes its OWN run's leases (a foreign lease is never fed to the
+    task clocks/ledgers of this run).
+    """
+    store = _make_store(tmp_path)
+    store.create_run(
+        RunRecord(
+            run_id="RUN-002",
+            title="second run",
+            created_at=T0,
+            state=LifecycleState.BUILDING,
+        )
+    )
+    lease_store = LeaseStore(store, lease_ttl=timedelta(seconds=60))
+    foreign = lease_store.claim("RUN-002", "T9", now=T0)
+
+    controller = _make_controller(
+        store, tasks={"T1": _plans()["T1"]}, leases=lease_store
+    )
+    # The foreign lease has lapsed; the sweep must not freeze/release it
+    # through this run's controller (no KeyError on an unknown task).
+    result = controller.tick(T0 + timedelta(seconds=120))
+    assert [handoff.task_id for handoff in result.dispatched] == ["T1"]
+    assert controller.leases.lease_status(foreign.lease_id) is LeaseStatus.EXPIRED
+    frozen = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "task.frozen"
+    ]
+    assert [event.payload["task_id"] for event in frozen] == []
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (review): eager fail-closed validation of plans
+# ---------------------------------------------------------------------------
+
+
+def test_task_plan_validates_trace_references_eagerly():
+    """A TaskPlan rejects broken trace references at construction (fail
+    fast) instead of failing late when the handoff is built.
+    """
+    base = dict(
+        budget_ceiling=Decimal("3.00"),
+        requirement_ids=("REQ-001",),
+        acceptance_ids=("AC-001",),
+        test_ids=("T-001",),
+        attempt_budget=_attempt_budget(),
+        trace=_trace(),
+        policy_bundle_hash=POLICY_HASH,
+    )
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "requirement_ids": ("REQ-999",)})
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "acceptance_ids": ("AC-999",)})
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "test_ids": ("T-999",)})
+    # Reachability, not mere existence: AC-002 is a real node but belongs
+    # to the REQ-002 cluster and is unreachable from REQ-001.
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "acceptance_ids": ("AC-002",)})
+    # A node id of the wrong kind is rejected for its declared role.
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "acceptance_ids": ("T-001",)})
+    with pytest.raises(ValueError):
+        TaskPlan(id="T1", **{**base, "test_ids": ("AC-001",)})
+
+
+def test_controller_rejects_unconfigured_provider_references_eagerly(tmp_path):
+    """Rate demands for providers without configured capacity are rejected
+    when the controller is built -- never as a raw KeyError at tick time.
+    """
+    store = _make_store(tmp_path)
+    bad = TaskPlan(
+        id="T1",
+        budget_ceiling=Decimal("3.00"),
+        requirement_ids=("REQ-001",),
+        acceptance_ids=("AC-001",),
+        test_ids=("T-001",),
+        attempt_budget=_attempt_budget(),
+        time_budget_seconds=600,
+        rate_demands=(RateDemand("gpu"),),
+        trace=_trace(),
+        policy_bundle_hash=POLICY_HASH,
+    )
+    with pytest.raises(ControllerError):
+        _make_controller(store, tasks={"T1": bad})
