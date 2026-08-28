@@ -41,7 +41,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 
 .PARAMETER Harness
     Which harness to initialize. One of: claude, codex, opencode, generic,
-    ollama, all. Defaults to all.
+    ollama, dsh, all. Defaults to all.
 
 .PARAMETER RepoRoot
     Optional repository root. Defaults to the parent of .KCC.
@@ -54,6 +54,12 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     Deprecated/no-op compatibility flag. Global Codex installation belongs in
     a separate bootstrap pipeline.
 
+.PARAMETER InstallDshProfile
+    Print AND execute the explicit DSH hardened-profile installer
+    (.KCC\adapters\dsh\install.ps1). Without this switch the dsh block only
+    PRINTS the install command: framework-init never silently mutates
+    DSH_HOME (Plan 08, Task 5).
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 -Harness codex
 
@@ -64,14 +70,16 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('claude', 'codex', 'opencode', 'generic', 'ollama', 'all')]
+    [ValidateSet('claude', 'codex', 'opencode', 'generic', 'ollama', 'dsh', 'all')]
     [string]$Harness = 'all',
 
     [string]$RepoRoot,
 
     [switch]$InstallCodexSkills,
 
-    [switch]$InstallCodexPrompts
+    [switch]$InstallCodexPrompts,
+
+    [switch]$InstallDshProfile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,6 +124,23 @@ Write-Host "Initializing spec-driven framework for harness: $Harness"
 Write-Host ''
 
 & $syncPath @argsForSync
+
+if ($Harness -in @('dsh', 'all')) {
+    Write-Host ''
+    Write-Host 'dsh hardened profile (Plan 08, Task 5): the kcc-autobuild profile is'
+    Write-Host 'NOT installed by default (no silent DSH_HOME mutation).'
+    Write-Host ''
+    $installScript = Join-Path $RepoRoot '.KCC\adapters\dsh\install.ps1'
+    Write-Host "  install:    powershell -ExecutionPolicy Bypass -File `"$installScript`""
+    Write-Host '  live proof: kcc-autobuild harness doctor dsh --live --template kcc-autobuild'
+    Write-Host ''
+    if ($InstallDshProfile) {
+        Write-Host '[dsh      ] executing the explicit DSH profile installer:'
+        & powershell -ExecutionPolicy Bypass -File $installScript
+    } else {
+        Write-Host '[dsh      ] profile installer NOT executed (re-run with -InstallDshProfile to install).'
+    }
+}
 
 Write-Host ''
 Write-Host 'Note: runtime folders (ideation/, specs/, src/, architecture/, solution/,'

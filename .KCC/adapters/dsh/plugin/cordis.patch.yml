@@ -1,0 +1,9 @@
+# kcc-dsh-policy-gate bundle patch: mount the KCC policy gate as a
+# composition row.  Runtime knobs (gateCommand / gateBundleFile /
+# gateSecretFile / gateTimeoutMs) are filled by the kcc-autobuild profile
+# layer (`profile/cordis.patch.yml`, install-generated); the committed
+# defaults are fail-closed (empty bundle/secret => every governed request
+# is denied until KCC provisions the signed policy).
+- insert:
+    - id: kcc-policy-gate
+      name: "kcc-dsh-policy-gate"

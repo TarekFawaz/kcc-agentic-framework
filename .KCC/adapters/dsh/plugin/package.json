@@ -1,0 +1,40 @@
+{
+  "name": "kcc-dsh-policy-gate",
+  "version": "0.1.0",
+  "description": "KCC policy gate bundle for DeepSeek Harness: exact post-lock tool allowlist guard plus kcc_policy_exec / kcc_policy_write / kcc_harness_status wrappers (Plan 08, Task 5).",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "cordis-row.example.yml",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "kcc",
+    "policy",
+    "guard"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

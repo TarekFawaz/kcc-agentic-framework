@@ -1,0 +1,9 @@
+# kcc-dsh-policy-gate row example (what the profile layer mounts; the
+# committed defaults are fail-closed).
+- id: kcc-policy-gate
+  name: "kcc-dsh-policy-gate"
+  config:
+    gateCommand: "kcc-autobuild"
+    gateBundleFile: "/home/you/.dsh/profiles/kcc-autobuild/gate/policy-bundle.json"
+    gateSecretFile: "/home/you/.dsh/profiles/kcc-autobuild/gate/.gate-secret"
+    gateTimeoutMs: 600000

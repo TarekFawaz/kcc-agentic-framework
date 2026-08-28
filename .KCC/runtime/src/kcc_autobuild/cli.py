@@ -20,12 +20,21 @@ features-probes the DeepSeek Harness adapter and ``harness doctor dsh``
 profile/guard of the disposable ``kcc-autobuild`` profile before
 ``approval_mode=NEVER`` + ``mutation_enforcement=KCC_POLICY_GATE`` can
 ever be granted.
+
+Plan 08, Task 5 adds the internal policy gate entry points
+``gate-write`` / ``gate-exec``: the DSH Cordis wrappers
+(``kcc_policy_write`` / ``kcc_policy_exec``) call them with the
+untrusted operation request on stdin; they reload the durable run,
+reject stale leases, verify the signed policy bundle and only then run
+the policy-bound executor.  They are internal wiring -- never
+user-facing commands.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -340,3 +349,132 @@ def harness_doctor(
     )
     if not outcome.passed:
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# Plan 08, Task 5 -- internal policy gate (called by the DSH Cordis wrappers
+# with the untrusted operation request on stdin; never a user-facing command).
+# ---------------------------------------------------------------------------
+
+
+def _gate_cli(
+    tool: str,
+    bundle: Path | None,
+    secret_file: Path | None,
+    timeout: float,
+) -> None:
+    """Run one internal ``gate-write`` / ``gate-exec`` request from stdin.
+
+    The wrapper (trusted Cordis plugin) launches this process with cwd =
+    the session workspace, so the request never carries a caller cwd and
+    the process cwd IS the confinement anchor.  The request JSON plus
+    run/task/lease identity arrives on stdin; no raw secret ever appears
+    on the command line -- the signing secret is read from the owner-only
+    file named by ``--secret-file`` or
+    ``KCC_AUTOBUILD_POLICY_SECRET_FILE`` (fail closed when absent).
+    """
+    from kcc_autobuild.dsh_gate import (
+        DshToolGate,
+        GateDecision,
+        GateRequest,
+    )
+
+    raw = sys.stdin.read()
+    payload = None
+    if raw.strip():
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            payload = None
+            raw_error = f"unusable request: stdin is not valid JSON ({exc})"
+        else:
+            raw_error = ""
+    else:
+        raw_error = "unusable request: stdin is empty"
+
+    def emit(decision: GateDecision) -> None:
+        typer.echo(
+            json.dumps(decision.model_dump(mode="json"), sort_keys=True)
+        )
+
+    if payload is None:
+        decision = GateDecision(
+            allowed=False,
+            tool=tool,
+            reason=(raw_error or "unusable request: stdin is not valid JSON"),
+        )
+        emit(decision)
+        raise typer.Exit(code=1)
+    if not isinstance(payload, dict):
+        emit(
+            GateDecision(
+                allowed=False,
+                tool=tool,
+                reason="unusable request: stdin is not a JSON object",
+            )
+        )
+        raise typer.Exit(code=1)
+    gate = DshToolGate(
+        repo_root=Path.cwd(),
+        bundle_path=bundle,
+        secret_file=secret_file,
+        timeout_seconds=timeout,
+    )
+    try:
+        # The command pins the tool: a request for the other wrapper is
+        # rejected, never reinterpreted.
+        request = GateRequest.model_validate({**payload, "tool": tool})
+        decision = gate.handle(request)
+    except Exception as exc:  # noqa: BLE001 -- the gate must fail closed
+        decision = GateDecision(
+            allowed=False,
+            tool=tool,
+            reason=f"invalid gate request: {type(exc).__name__}: {str(exc)[:400]}",
+        )
+    emit(decision)
+    if not decision.allowed:
+        raise typer.Exit(code=1)
+
+
+@app.command("gate-write")
+def gate_write(
+    bundle: Path | None = typer.Option(
+        None,
+        "--bundle",
+        help="Signed policy bundle the gate verifies (default: "
+        ".KCC/adapters/dsh/gate/policy-bundle.json under the process cwd)",
+    ),
+    secret_file: Path | None = typer.Option(
+        None,
+        "--secret-file",
+        help="Owner-only file holding the HMAC secret (default: "
+        "$KCC_AUTOBUILD_POLICY_SECRET_FILE); never a raw secret argument",
+    ),
+    timeout: float = typer.Option(
+        600.0, help="Time budget (seconds) of a governed subprocess"
+    ),
+) -> None:
+    """Internal: govern one ``kcc_policy_write`` request from stdin."""
+    _gate_cli("kcc_policy_write", bundle, secret_file, timeout)
+
+
+@app.command("gate-exec")
+def gate_exec(
+    bundle: Path | None = typer.Option(
+        None,
+        "--bundle",
+        help="Signed policy bundle the gate verifies (default: "
+        ".KCC/adapters/dsh/gate/policy-bundle.json under the process cwd)",
+    ),
+    secret_file: Path | None = typer.Option(
+        None,
+        "--secret-file",
+        help="Owner-only file holding the HMAC secret (default: "
+        "$KCC_AUTOBUILD_POLICY_SECRET_FILE); never a raw secret argument",
+    ),
+    timeout: float = typer.Option(
+        600.0, help="Time budget (seconds) of a governed subprocess"
+    ),
+) -> None:
+    """Internal: govern one ``kcc_policy_exec`` request from stdin."""
+    _gate_cli("kcc_policy_exec", bundle, secret_file, timeout)
