@@ -17,6 +17,16 @@ v1.2 section 16.2 and section 28.3 (the Build Contract + Trace Matrix +
 task handoff pack are the sole formal control-plane / execution-plane
 interface).
 
+The anchor invariant is enforced, not merely documented: the source
+contract must be **locked** and an explicit ``policy_bundle_hash`` must
+equal its canonical ``contract_hash``, so a self-inconsistent pack
+anchored to the wrong policy bundle is rejected (fail-closed).  Scoping
+is never silently disabled either: a missing trace graph (argument or
+contract Trace Matrix) refuses the build instead of packing unscoped
+context, the attempt budget is mandatory, authority-global accounts and
+credential refs travel only on auto-provision-authorized provider
+constraints, and a failed build never consumes a lease generation.
+
 Plan 03, Task 2 (Superpowers Execution Bridge) context: Design Spec
 v1.2 sections 16.2, 21, 22; plan Global Constraints.
 
@@ -506,6 +516,20 @@ class ExecutionBridge:
     requirements and every pack is anchored to the canonical policy
     bundle hash.  Each issued pack gets a fresh lease with a strictly
     positive, incrementing generation (one lease per attempt).
+
+    The anchor invariant is enforced, not documented: **the source
+    contract must be locked** and an explicit ``policy_bundle_hash``
+    must equal the locked contract's canonical ``contract_hash`` -- a
+    mismatch is rejected (fail-closed) so a self-inconsistent pack
+    anchored to the wrong policy bundle can never be produced.
+
+    Scoping is never silently disabled: without a ``trace`` graph the
+    bridge falls back to the contract's Trace Matrix, and with no trace
+    source at all it refuses to build (acceptance/Test-ID reachability
+    cannot be proven).  The attempt budget is required (KCC owns it)
+    and every input is validated before the lease generation is
+    committed: a failed build never consumes a generation, so one
+    lease generation corresponds to exactly one *issued* pack.
     """
 
     def __init__(self, *, max_handoff_bytes: int = 65536) -> None:
@@ -540,21 +564,25 @@ class ExecutionBridge:
             )
         if not test_ids:
             raise HandoffError("task scope must declare at least one test id")
+        if attempt_budget is None:
+            raise HandoffError(
+                "attempt budget is required (KCC owns the attempt budget)"
+            )
+        bundle_hash = self._anchor_hash(contract, policy_bundle_hash)
+        trace_graph = trace if trace is not None else (
+            contract.trace if contract is not None else None
+        )
+        if trace_graph is None:
+            raise HandoffError(
+                "trace graph is required to scope the handoff (pass the "
+                "task's trace context or the contract's Trace Matrix)"
+            )
         trace_nodes = self._scoped_trace_context(
-            requirement_ids, acceptance_ids, test_ids, trace
+            requirement_ids, acceptance_ids, test_ids, trace_graph
         )
         constraints = self._provider_constraints(providers, contract)
         decisions = self._scoped_decisions(locked_decisions, requirement_ids)
-        bundle_hash = policy_bundle_hash
-        if bundle_hash is None and contract is not None:
-            bundle_hash = contract.contract_hash
-        if bundle_hash is None:
-            raise HandoffError(
-                "policy bundle hash is required (pass the locked contract's "
-                "canonical hash)"
-            )
 
-        self._lease_generation += 1
         handoff = TaskHandoff(
             run_id=run_id,
             task_id=task_id,
@@ -564,10 +592,10 @@ class ExecutionBridge:
             test_ids=list(test_ids),
             locked_decisions=decisions,
             lease=TaskLease(
-                lease_id=f"LEASE-{run_id}-{task_id}-{self._lease_generation}",
+                lease_id=f"LEASE-{run_id}-{task_id}-{self._lease_generation + 1}",
                 run_id=run_id,
                 task_id=task_id,
-                generation=self._lease_generation,
+                generation=self._lease_generation + 1,
             ),
             attempt_budget=attempt_budget,
             provider_constraints=constraints,
@@ -579,7 +607,50 @@ class ExecutionBridge:
                 f"handoff pack is {len(payload)} bytes, exceeding "
                 f"max_handoff_bytes={self.max_handoff_bytes}"
             )
+        # A generation is committed only for an issued pack: a failed
+        # build (validation or overflow) must never consume one.
+        self._lease_generation += 1
         return handoff
+
+    @staticmethod
+    def _anchor_hash(
+        contract: BuildContract | None,
+        policy_bundle_hash: str | None,
+    ) -> str:
+        """Resolve and cross-verify the pack's policy bundle anchor.
+
+        The anchor invariant: ``policy_bundle_hash`` is the canonical
+        hash of the exact locked policy bundle the pack was built from.
+        When the source contract is supplied it must be **locked**
+        (canonical ``contract_hash`` present); an explicit
+        ``policy_bundle_hash`` must equal that canonical hash.  A
+        mismatch (or an unlocked contract) is rejected, so a
+        self-inconsistent pack anchored to the wrong policy bundle can
+        never be produced.
+        """
+        if contract is not None:
+            if contract.contract_hash is None:
+                raise HandoffError(
+                    "contract must be locked before a handoff can be "
+                    "anchored to it (an unlocked contract has no canonical "
+                    "policy bundle hash to cross-verify against)"
+                )
+            if (
+                policy_bundle_hash is not None
+                and policy_bundle_hash != contract.contract_hash
+            ):
+                raise HandoffError(
+                    f"policy_bundle_hash does not match the locked "
+                    f"contract's canonical contract_hash "
+                    f"({policy_bundle_hash!r} != {contract.contract_hash!r})"
+                )
+            return contract.contract_hash
+        if policy_bundle_hash is None:
+            raise HandoffError(
+                "policy bundle hash is required (pass the locked "
+                "contract's canonical hash)"
+            )
+        return policy_bundle_hash
 
     def _scoped_trace_context(
         self,
@@ -593,10 +664,15 @@ class ExecutionBridge:
         Unrelated requirements (and their whole cluster) are excluded;
         acceptance and Test IDs must be present in the reachable set
         (as acceptance/test nodes respectively) or the build is
-        rejected -- only scoped context can travel.
+        rejected -- only scoped context can travel.  A missing trace
+        graph never silently disables scoping: reachability cannot be
+        proven without one, so the build is refused (fail-closed).
         """
         if trace is None:
-            return []
+            raise HandoffError(
+                "trace graph is required to scope the handoff (pass the "
+                "task's trace context or the contract's Trace Matrix)"
+            )
         kind_by_id = {node.id: node.kind for node in trace.nodes}
         for requirement_id in requirement_ids:
             if requirement_id not in kind_by_id:
@@ -686,6 +762,11 @@ class ExecutionBridge:
                 auto_provision_authorized
                 and provider in authority.auto_provision_providers
             )
+            # Authority-global accounts and credential refs belong to
+            # the auto-provision-authorized provider set only; they are
+            # NEVER copied onto an out-of-scope provider's constraint
+            # (fail-closed: a USER_MUST_PROVIDE provider carries no
+            # authority-global account/credential material at all).
             constraints.append(
                 ProviderConstraint(
                     provider=provider,
@@ -694,7 +775,9 @@ class ExecutionBridge:
                         list(authority.approved_accounts) if authorized else []
                     ),
                     spend_cap=money.per_provider_caps.get(provider),
-                    credential_refs=list(authority.credential_refs),
+                    credential_refs=(
+                        list(authority.credential_refs) if authorized else []
+                    ),
                     auto_provision=(
                         DependencyStatus.AUTO_PROVISION_AUTHORIZED
                         if authorized

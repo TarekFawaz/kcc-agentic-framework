@@ -58,10 +58,16 @@ Pack contents (spec 16.2):
   accounts, per-provider spend caps, auto-provision status from the
   canonical authority status `AUTO_PROVISION_AUTHORIZED`, and
   credential **references only** (`vault://`, `env://`, `keychain://`)
-  — no plaintext secret ever travels in a pack (spec section 24);
+  — no plaintext secret ever travels in a pack (spec section 24), and
+  authority-global accounts/credential refs are attached **only** to
+  the constraints of auto-provision-authorized providers (an
+  out-of-scope provider carries neither);
 - the **policy bundle hash** — the canonical policy/evaluator signature
   anchoring the pack to the exact locked policy bundle it was built
-  from.
+  from.  The anchor is cross-verified, fail-closed: the source contract
+  must be **locked** and an explicit hash must equal the contract's
+  canonical `contract_hash` (a mismatch or an unlocked contract is
+  rejected, never silently packed).
 
 ## Worker authority (scoped task only)
 

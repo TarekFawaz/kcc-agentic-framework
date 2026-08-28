@@ -30,7 +30,19 @@ Binding semantics under test:
   context (only scoped context, fail-closed);
 * the pack carries the policy evaluator's canonical bundle hash -- the
   signed/locked policy fingerprint of the contract -- and refuses to
-  be built without one.
+  be built without one;
+* the anchor hash is **cross-verified, fail-closed**: when the source
+  Build Contract is supplied it must be **locked** (canonical hash
+  present) and an explicit ``policy_bundle_hash`` must equal the
+  contract's canonical ``contract_hash`` -- a mismatch or an unlocked
+  contract is rejected, so a self-inconsistent pack anchored to the
+  wrong policy bundle can never be produced;
+* scoping is never silently disabled: without the trace graph the
+  bridge cannot prove acceptance/Test-ID reachability, so it refuses
+  to build instead of packing unscoped IDs;
+* the attempt budget is mandatory (KCC owns it) and a failed build
+  never consumes a lease generation -- one generation per *issued*
+  pack, one KCC lease per attempt.
 """
 
 from __future__ import annotations
@@ -227,7 +239,13 @@ def _build(
     bridge: ExecutionBridge | None = None,
     **overrides: object,
 ) -> TaskHandoff:
-    """Build a minimal valid handoff; overrides replace any input."""
+    """Build a minimal valid handoff; overrides replace any input.
+
+    The default source contract is **locked** (canonical hash present)
+    so the pack's anchor hash can always be cross-verified; the default
+    ``policy_bundle_hash`` is ``None`` so the bridge derives it from the
+    locked contract's canonical hash.
+    """
     inputs: dict[str, object] = {
         "run_id": "RUN-001",
         "task_id": "TASK-021",
@@ -236,10 +254,10 @@ def _build(
         "test_ids": ["T-001"],
         "providers": ["openai"],
         "trace": _trace(),
-        "contract": _contract(),
+        "contract": _locked_contract(),
         "locked_decisions": _decisions(),
         "attempt_budget": _budget(),
-        "policy_bundle_hash": POLICY_HASH,
+        "policy_bundle_hash": None,
     }
     inputs.update(overrides)
     return (bridge or ExecutionBridge()).build_handoff(**inputs)  # type: ignore[arg-type]
@@ -313,7 +331,7 @@ class TestTaskHandoffFields:
         assert handoff.lease.task_id == "TASK-021"
         assert handoff.attempt_budget.max_attempts == 3
         assert [c.provider for c in handoff.provider_constraints] == ["openai"]
-        assert handoff.policy_bundle_hash == POLICY_HASH
+        assert handoff.policy_bundle_hash == _locked_contract().contract_hash
 
     def test_missing_acceptance_ids_rejected(self) -> None:
         with pytest.raises(HandoffError, match="acceptance"):
@@ -350,19 +368,42 @@ class TestTaskHandoffFields:
     def test_policy_bundle_hash_uses_canonical_sha256_shape(self) -> None:
         handoff = _build()
         assert len(handoff.policy_bundle_hash) == 64
-        assert handoff.policy_bundle_hash == POLICY_HASH
+        assert handoff.policy_bundle_hash == _locked_contract().contract_hash
         with pytest.raises(ValidationError, match="policy_bundle_hash"):
-            _build(policy_bundle_hash="not-a-hash")
+            TaskHandoff(**{**_model_kwargs(), "policy_bundle_hash": "not-a-hash"})  # type: ignore[arg-type]
 
     def test_policy_bundle_hash_is_required_by_the_bridge(self) -> None:
         with pytest.raises(HandoffError, match="policy bundle hash"):
-            _build(policy_bundle_hash=None)  # type: ignore[arg-type]
+            _build(contract=None, providers=[], policy_bundle_hash=None)
 
     def test_policy_bundle_hash_carries_the_locked_contract_hash(self) -> None:
         contract = _locked_contract()
         handoff = _build(contract=contract, policy_bundle_hash=None)
         assert handoff.policy_bundle_hash == contract.contract_hash
         assert len(handoff.policy_bundle_hash) == 64
+
+    def test_explicit_policy_bundle_hash_must_match_the_locked_contract(self) -> None:
+        """Anchor invariant (regression): an explicit hash that does not
+        match the locked contract's canonical hash is a self-inconsistent
+        pack and must be rejected (fail-closed), not silently packed."""
+        contract = _locked_contract()
+        with pytest.raises(HandoffError, match="does not match"):
+            _build(contract=contract, policy_bundle_hash="b" * 64)
+
+    def test_explicit_policy_bundle_hash_may_equal_the_locked_contract_hash(
+        self,
+    ) -> None:
+        contract = _locked_contract()
+        handoff = _build(
+            contract=contract, policy_bundle_hash=contract.contract_hash
+        )
+        assert handoff.policy_bundle_hash == contract.contract_hash
+
+    def test_unlocked_contract_cannot_anchor_a_pack(self) -> None:
+        """A contract without a canonical lock hash cannot anchor a pack,
+        so an explicit hash can never be cross-verified against it."""
+        with pytest.raises(HandoffError, match="locked"):
+            _build(contract=_contract(), policy_bundle_hash=POLICY_HASH)
 
     def test_unknown_requirement_rejected(self) -> None:
         with pytest.raises(HandoffError, match="REQ-777"):
@@ -536,6 +577,75 @@ class TestExecutionBridgeScoping:
         unrelated = constraints["unrelated-provider"]
         assert unrelated.auto_provision is DependencyStatus.USER_MUST_PROVIDE
         assert unrelated.approved_accounts == []
+
+    def test_unrelated_provider_does_not_carry_authority_credentials(self) -> None:
+        """Regression: authority-global accounts/credential refs are
+        scoped to the auto-provision-authorized providers they belong
+        to; an out-of-scope provider constraint must never carry them."""
+        handoff = _build(providers=None)
+        constraints = {
+            constraint.provider: constraint
+            for constraint in handoff.provider_constraints
+        }
+        unrelated = constraints["unrelated-provider"]
+        assert unrelated.credential_refs == []
+        assert unrelated.approved_accounts == []
+        openai = constraints["openai"]
+        assert openai.credential_refs == ["vault://prod/openai-key"]
+        assert openai.approved_accounts == ["acct-openai-1"]
+
+
+class TestExecutionBridgeFailClosed:
+    """Fail-closed rules of the bridge (fix round): scoping is never
+    silently disabled, inputs are validated as HandoffErrors, and a
+    failed build never consumes a lease generation."""
+
+    def test_trace_scoping_cannot_be_silently_disabled(self) -> None:
+        """trace=None must fall back to the contract trace graph, so
+        acceptance/Test-ID reachability is still enforced."""
+        with pytest.raises(HandoffError, match="AC-999"):
+            _build(trace=None, acceptance_ids=["AC-999"])
+        handoff = _build(trace=None)
+        assert [node.id for node in handoff.trace_nodes] == [
+            "AC-001",
+            "IMPL-001",
+            "PROD-001",
+            "REQ-001",
+            "T-001",
+        ]
+
+    def test_missing_trace_graph_is_rejected(self) -> None:
+        """With no trace argument and no contract trace graph, the
+        bridge cannot prove reachability and refuses to build."""
+        with pytest.raises(HandoffError, match="trace"):
+            _build(
+                trace=None,
+                contract=None,
+                providers=[],
+                policy_bundle_hash=POLICY_HASH,
+            )
+
+    def test_attempt_budget_is_required(self) -> None:
+        """attempt_budget=None raises a bridge HandoffError, never a
+        raw pydantic ValidationError (fail-closed, KCC owns budgets)."""
+        with pytest.raises(HandoffError, match="attempt budget"):
+            _build(attempt_budget=None)
+
+    def test_failed_build_does_not_consume_lease_generation(self) -> None:
+        bridge = ExecutionBridge()
+        with pytest.raises(HandoffError):
+            _build(bridge, attempt_budget=None)
+        handoff = _build(bridge)
+        assert handoff.lease.generation == 1
+        assert handoff.lease.lease_id == "LEASE-RUN-001-TASK-021-1"
+
+    def test_overflow_failure_does_not_consume_lease_generation(self) -> None:
+        bridge = ExecutionBridge(max_handoff_bytes=512)
+        with pytest.raises(HandoffOverflowError):
+            _build(bridge)
+        bridge.max_handoff_bytes = 65536
+        handoff = _build(bridge)
+        assert handoff.lease.generation == 1
 
 
 # ---------------------------------------------------------------------------
