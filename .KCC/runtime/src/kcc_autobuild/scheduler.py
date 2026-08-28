@@ -5,6 +5,15 @@ and wave scheduling, and it reserves money/rate for the selected wave set
 exactly once afterwards. This module is the *pure decision function* for
 that: it only simulates -- it never reserves (no double reserve).
 
+Plan 08, Task 2 (Capability registry + generic compatibility mode): the
+scheduler's harness decision consumes capability/strategy only, never a
+hardcoded CLI name list.  :meth:`Scheduler.select_harness` picks the
+harness for the next dispatch from the registry's probe outcomes
+(detected + capability score + minimum strategy), and
+:meth:`Scheduler.next_dispatch_set` carries that choice on the wave as
+``DispatchDecision.harness_id`` -- the controller dispatches the wave on
+the proven capability/strategy, not on a bare CLI name.
+
 The behavioral contract is owned by :file:`.KCC/runtime/tests/test_scheduler.py`:
 
 - :class:`TaskSpec` is a frozen value object describing one pending task
@@ -19,7 +28,9 @@ The behavioral contract is owned by :file:`.KCC/runtime/tests/test_scheduler.py`
     always yield an identical wave;
   - the **simulated remaining money/rate** after the selected set, computed
     from the ledgers' derived available/effective state without mutating
-    them.
+    them;
+  - the optional **capability-selected harness** (``harness`` argument)
+    whose id is carried on the decision as ``harness_id``.
 
 A task whose dependency or provider demand is unknown (neither passed nor
 pending; provider absent from the rate limits) is a broken run contract and
@@ -34,6 +45,8 @@ from decimal import Decimal
 from typing import Iterable, Mapping
 
 from kcc_autobuild.budget import BudgetLedger
+from kcc_autobuild.harnesses.models import ExecutionStrategy
+from kcc_autobuild.harnesses.registry import HarnessRegistry, HarnessSelection
 from kcc_autobuild.rate_limit import RateCapacityLedger, RateDemand
 
 
@@ -96,11 +109,15 @@ class DispatchDecision:
     (task id ascending). ``remaining_money`` / ``remaining_rate`` are the
     simulated leftovers for the next wave -- the ledgers themselves are
     untouched; the controller reserves the selected set exactly once.
+    ``harness_id`` is the capability-selected harness the wave will
+    dispatch on (``None`` when no harness decision was supplied): the
+    scheduler consumes capability/strategy, never a hardcoded CLI name.
     """
 
     task_ids: tuple[str, ...]
     remaining_money: Decimal
     remaining_rate: Mapping[str, int]
+    harness_id: str | None = None
 
 
 class Scheduler:
@@ -108,8 +125,32 @@ class Scheduler:
 
     No ledger is ever mutated: every call is a simulation, so identical
     inputs produce byte-identical decisions and the controller alone decides
-    when to reserve.
+    when to reserve.  The harness decision consumes capability/strategy
+    only (Plan 08, Task 2) -- never a hardcoded CLI name list.
     """
+
+    @staticmethod
+    def select_harness(
+        registry: HarnessRegistry,
+        *,
+        requested: str | None = None,
+        min_strategy: ExecutionStrategy = ExecutionStrategy.LOCAL,
+    ) -> HarnessSelection:
+        """Decide which harness the next dispatch runs on (capability-only).
+
+        Consumes the :class:`HarnessRegistry` probe outcomes: only
+        detected harnesses are candidates, ranked by their capability
+        score and bounded by ``min_strategy``; ``requested`` (when set)
+        must be detected and usable or the call raises
+        :class:`~kcc_autobuild.harnesses.HarnessError` (fail closed,
+        never a silent fallback).  No CLI name preference exists here --
+        the decision is made from proven capabilities/strategy alone.
+        """
+        if not isinstance(registry, HarnessRegistry):
+            raise TypeError(
+                f"registry must be a HarnessRegistry, got {type(registry).__name__}"
+            )
+        return registry.select(requested=requested, min_strategy=min_strategy)
 
     @staticmethod
     def next_dispatch_set(
@@ -117,6 +158,8 @@ class Scheduler:
         active: Iterable[TaskSpec],
         budget: BudgetLedger,
         rate: RateCapacityLedger,
+        *,
+        harness: HarnessSelection | None = None,
     ) -> DispatchDecision:
         """Select the next dependency-closed, budget/rate-constrained wave.
 
@@ -126,7 +169,16 @@ class Scheduler:
         :class:`TaskSpec` candidates. The result contains only dependency-
         ready tasks in deterministic (task id ascending) order, each fitting
         in the money and rate remaining after the previously selected tasks.
+
+        ``harness`` is the capability-selected harness for the wave (see
+        :meth:`select_harness`); its id is carried on the decision as
+        ``harness_id`` so the wave dispatches on proven
+        capability/strategy rather than a hardcoded CLI name.
         """
+        if harness is not None and not isinstance(harness, HarnessSelection):
+            raise TypeError(
+                f"harness must be a HarnessSelection, got {type(harness).__name__}"
+            )
         if not isinstance(budget, BudgetLedger):
             raise TypeError(
                 f"budget must be a BudgetLedger, got {type(budget).__name__}"
@@ -192,4 +244,5 @@ class Scheduler:
             task_ids=tuple(selected),
             remaining_money=money_remaining,
             remaining_rate=rate_remaining,
+            harness_id=harness.harness_id if harness is not None else None,
         )

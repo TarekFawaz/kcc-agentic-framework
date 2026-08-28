@@ -354,3 +354,233 @@ def test_dispatch_decision_fields_and_immutability():
     assert decision.remaining_rate == {"api": 2}
     with pytest.raises(AttributeError):
         decision.task_ids = ("T1",)  # type: ignore[misc]
+
+
+# --- Harness capability consumption (Plan 08, Task 2) -------------------------
+#
+# The scheduler's harness decision consumes capability/strategy only --
+# never a hardcoded CLI name list.  The registry probes adapters; the
+# scheduler picks the harness for the next dispatch from the probe
+# capabilities and carries it on the wave decision.
+
+
+def _probe(
+    harness_id,
+    *,
+    detected=True,
+    read=False,
+    write=False,
+    exec=False,
+    fresh_workers=False,
+    parallel_workers=False,
+    subagents=False,
+    confidence=1.0,
+):
+    from datetime import datetime, timezone
+
+    from kcc_autobuild.harnesses import (
+        ApprovalMode,
+        HarnessCapabilities,
+        HarnessProbe,
+        MutationEnforcement,
+    )
+
+    return HarnessProbe(
+        harness_id=harness_id,
+        detected=detected,
+        capabilities=HarnessCapabilities(
+            read=read,
+            write=write,
+            exec=exec,
+            fresh_workers=fresh_workers,
+            parallel_workers=parallel_workers,
+            subagents=subagents,
+            approval_mode=ApprovalMode.UNKNOWN,
+            mutation_enforcement=MutationEnforcement.NONE,
+            confidence=confidence,
+        ),
+        probed_at=datetime(2026, 8, 29, 2, 0, 0, tzinfo=timezone.utc),
+        evidence=[f"stub evidence for {harness_id}"] if detected else [],
+    )
+
+
+def _stub(harness_id, probe):
+    from kcc_autobuild.bridge import ExecutionReport
+    from kcc_autobuild.harnesses import HarnessAdapter, HarnessError, HarnessTask
+
+    _id = harness_id
+
+    class StubAdapter(HarnessAdapter):
+        harness_id = _id
+
+        def probe(self):
+            return probe
+
+        def execute(self, task: HarnessTask) -> ExecutionReport:  # pragma: no cover
+            raise HarnessError(f"stub {harness_id} never executes tasks")
+
+    return StubAdapter()
+
+
+def _harness_registry():
+    from kcc_autobuild.harnesses.registry import HarnessRegistry
+
+    return HarnessRegistry()
+
+
+def test_scheduler_harness_decision_consumes_capability_not_cli_names():
+    from kcc_autobuild.harnesses import ExecutionStrategy
+    registry = _harness_registry()
+    registry.register(_stub("codex", _probe("codex", read=True, write=True, exec=True)))
+    registry.register(
+        _stub(
+            "beta",
+            _probe(
+                "beta",
+                read=True,
+                write=True,
+                exec=True,
+                fresh_workers=True,
+                parallel_workers=True,
+            ),
+        )
+    )
+    # The parallel-proven harness wins on capability alone even though the
+    # local-only harness is named "codex": no hardcoded CLI preference.
+    selection = Scheduler.select_harness(registry)
+    assert selection.harness_id == "beta"
+    assert selection.strategy is ExecutionStrategy.PARALLEL_WORKERS
+    assert selection.score > Scheduler.select_harness(
+        registry, requested="codex"
+    ).score
+
+
+def test_scheduler_harness_decision_name_independence():
+    from kcc_autobuild.harnesses.generic import GenericHarnessAdapter
+
+    # Swap which id carries which capability set: the decision follows the
+    # capabilities, not the names.
+    registry = _harness_registry()
+    registry.register(
+        _stub("codex", _probe("codex", read=True, write=True, exec=True, parallel_workers=True))
+    )
+    registry.register(_stub("dsh", _probe("dsh", read=True, write=True, exec=True)))
+    assert Scheduler.select_harness(registry).harness_id == "codex"
+
+    registry2 = _harness_registry()
+    registry2.register(
+        _stub("codex", _probe("codex", read=True, write=True, exec=True))
+    )
+    registry2.register(
+        _stub("dsh", _probe("dsh", read=True, write=True, exec=True, parallel_workers=True))
+    )
+    assert Scheduler.select_harness(registry2).harness_id == "dsh"
+
+
+def test_scheduler_harness_decision_is_deterministic():
+    registry = _harness_registry()
+    registry.register(_stub("zeta", _probe("zeta", read=True, write=True, exec=True)))
+    registry.register(_stub("alpha", _probe("alpha", read=True, write=True, exec=True)))
+    first = Scheduler.select_harness(registry)
+    second = Scheduler.select_harness(registry)
+    assert first == second  # identical inputs -> identical decision
+    assert first.harness_id == "alpha"  # stable tie, lexicographically smallest
+
+
+def test_scheduler_harness_decision_honors_requested_harness():
+    from kcc_autobuild.harnesses import HarnessError
+
+    registry = _harness_registry()
+    registry.register(
+        _stub("beta", _probe("beta", read=True, write=True, exec=True, parallel_workers=True))
+    )
+    registry.register(_stub("gamma", _probe("gamma", read=True, write=True, exec=True)))
+    assert Scheduler.select_harness(registry, requested="gamma").harness_id == "gamma"
+    with pytest.raises(HarnessError, match="not registered"):
+        Scheduler.select_harness(registry, requested="nope")
+    ghost_registry = _harness_registry()
+    ghost_registry.register(_stub("ghost", _probe("ghost", detected=False, read=True)))
+    with pytest.raises(HarnessError, match="not detected"):
+        Scheduler.select_harness(ghost_registry, requested="ghost")
+
+
+def test_scheduler_harness_decision_applies_minimum_strategy():
+    from kcc_autobuild.harnesses import ExecutionStrategy, HarnessError
+
+    registry = _harness_registry()
+    registry.register(_stub("generic", _probe("generic", read=True, write=True, exec=True)))
+    registry.register(
+        _stub(
+            "beta",
+            _probe(
+                "beta",
+                read=True,
+                write=True,
+                exec=True,
+                fresh_workers=True,
+                parallel_workers=True,
+            ),
+        )
+    )
+    selection = Scheduler.select_harness(
+        registry, min_strategy=ExecutionStrategy.PARALLEL_WORKERS
+    )
+    assert selection.harness_id == "beta"
+    with pytest.raises(HarnessError, match="minimum strategy"):
+        Scheduler.select_harness(
+            registry, min_strategy=ExecutionStrategy.FULL_AUTOPILOT
+        )
+
+
+def test_scheduler_select_harness_requires_a_registry():
+    for bad in (None, object(), "registry"):
+        with pytest.raises(TypeError, match="HarnessRegistry"):
+            Scheduler.select_harness(bad)  # type: ignore[arg-type]
+
+
+def test_wave_decision_carries_the_capability_selected_harness(tmp_path):
+    """The wave carries the harness id chosen by capability/strategy."""
+    from kcc_autobuild.harnesses.generic import GenericHarnessAdapter
+
+    registry = _harness_registry()
+    registry.register(GenericHarnessAdapter(workspace=tmp_path, shell="sh"))
+    registry.register(
+        _stub(
+            "beta",
+            _probe(
+                "beta",
+                read=True,
+                write=True,
+                exec=True,
+                fresh_workers=True,
+                parallel_workers=True,
+            ),
+        )
+    )
+    selection = Scheduler.select_harness(registry)
+    budget = BudgetLedger(Decimal("10.00"))
+    rate = RateCapacityLedger({"api": 2})
+    active = [TaskSpec("T1", budget_ceiling=Decimal("3"), rate_demands=(RateDemand("api"),))]
+    # The wave decision carries the capability-selected harness id, so the
+    # controller dispatches on proven capability/strategy -- never a
+    # hardcoded CLI name.
+    decision = Scheduler.next_dispatch_set((), active, budget, rate, harness=selection)
+    assert decision.task_ids == ("T1",)
+    assert decision.harness_id == "beta"
+
+
+def test_wave_decision_without_harness_selection_keeps_harness_id_none():
+    budget = BudgetLedger(Decimal("10.00"))
+    rate = RateCapacityLedger({"api": 2})
+    decision = Scheduler.next_dispatch_set((), [], budget, rate)
+    assert decision.harness_id is None
+
+
+def test_wave_decision_rejects_non_selection_harness():
+    from kcc_autobuild.harnesses.registry import HarnessSelection
+
+    budget = BudgetLedger(Decimal("10.00"))
+    rate = RateCapacityLedger({"api": 2})
+    for bad in (object(), "codex", HarnessSelection):
+        with pytest.raises(TypeError, match="HarnessSelection"):
+            Scheduler.next_dispatch_set((), [], budget, rate, harness=bad)  # type: ignore[arg-type]
