@@ -73,6 +73,24 @@ def test_transition_missing_does_not_create_database(tmp_path):
             "screens: []\n"
             "interactions: []\n",
         ),
+        (
+            "execution-report",
+            "run_id: RUN-001\n"
+            "task_id: TASK-021\n"
+            "attempt: 1\n"
+            "status: passed\n"
+            "lease_id: LEASE-2026-0001\n"
+            "workspace_id: WS-RUN-001\n"
+            "acceptance_evidence:\n"
+            "  - acceptance_id: AC-014-1\n"
+            "    test_ids: [T-041, T-042]\n"
+            "    evidence_refs: [artifacts/run-001/t-041.log]\n"
+            "failure: null\n"
+            "usage: {}\n"
+            "outputs: []\n"
+            "deviations: []\n"
+            "trace_updates: []\n",
+        ),
     ],
 )
 def test_validate_model_valid_kind(tmp_path, kind, yaml_text):
@@ -85,6 +103,30 @@ def test_validate_model_valid_kind(tmp_path, kind, yaml_text):
         "kind": kind,
         "path": str(path),
     }
+
+
+def test_validate_model_rejects_invalid_execution_report(tmp_path):
+    """The execution-report kind is real schema validation: a passed
+    report without acceptance evidence fails nonzero (regression guard
+    for the Task 4 ``validate-model execution-report`` gate)."""
+    path = tmp_path / "report.yaml"
+    path.write_text(
+        "run_id: RUN-001\n"
+        "task_id: TASK-021\n"
+        "attempt: 1\n"
+        "status: passed\n"
+        "lease_id: LEASE-2026-0001\n"
+        "workspace_id: WS-RUN-001\n"
+        "acceptance_evidence: []\n"
+        "usage: {}\n"
+        "outputs: []\n"
+        "deviations: []\n"
+        "trace_updates: []\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["validate-model", "execution-report", str(path)])
+    assert result.exit_code != 0
+    assert '"valid": false' in result.stderr
 
 
 def test_validate_model_rejects_invalid_model_yaml(tmp_path):

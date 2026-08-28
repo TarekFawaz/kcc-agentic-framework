@@ -9,7 +9,10 @@ Output is deterministic: commands that print a model use
 machine-readable contract of the CLI output is stable. ``validate-model``
 is real YAML/schema validation (Plan-02 ruling R5): model kinds map to
 the actual Pydantic models and invalid input exits non-zero — failures
-are never swallowed into exit 0.
+are never swallowed into exit 0.  The kind map includes
+``execution-report`` (Plan 03, Task 4): the bounded execution skill's
+final gate is ``kcc-autobuild validate-model execution-report <path>``,
+so the bridge's terminal report model must be a real schema kind.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import typer
 import yaml
 from pydantic import ValidationError
 
+from kcc_autobuild.bridge import ExecutionReport
 from kcc_autobuild.contract import BuildContract
 from kcc_autobuild.decision_log import DecisionLog
 from kcc_autobuild.models import RUN_ID_PATTERN, LifecycleState, RunRecord
@@ -39,12 +43,17 @@ MODEL_KINDS: dict[str, type] = {
     "contract": BuildContract,
     "decision-log": DecisionLog,
     "prototype": Prototype,
+    "execution-report": ExecutionReport,
 }
 """Map the ``validate-model`` kind strings to the real Pydantic models.
 
-The five kinds are the approved autobuild artifact kinds (Plan-02 ruling
-R5): trace matrix, readiness evidence pack, build contract, decision log
-and clickable prototype manifest.
+The six kinds are the approved autobuild artifact kinds (Plan-02 ruling
+R5, plus the Plan 03 execution bridge): trace matrix, readiness evidence
+pack, build contract, decision log, clickable prototype manifest and the
+worker's terminal Execution Report.  ``execution-report`` is the final
+gate of the bounded task-execution skill: a report that does not
+validate against :class:`kcc_autobuild.bridge.ExecutionReport` is
+malformed and is rejected before any chain-of-custody check.
 """
 
 
@@ -152,12 +161,14 @@ def transition(
 def validate_model(kind: str, path: Path) -> None:
     """Validate a YAML artifact against the real autobuild model schema.
 
-    Kinds: trace, readiness, contract, decision-log, prototype.  Exits 0
-    with deterministic JSON when the artifact is valid; exits non-zero
-    with a deterministic JSON error document on stderr for an unknown
-    kind, a missing file, malformed YAML or a model schema violation
-    (Plan-02 ruling R5 — this is real validation, not an existence
-    probe, so LOCK validation is meaningful).
+    Kinds: trace, readiness, contract, decision-log, prototype,
+    execution-report.  Exits 0 with deterministic JSON when the artifact
+    is valid; exits non-zero with a deterministic JSON error document on
+    stderr for an unknown kind, a missing file, malformed YAML or a
+    model schema violation (Plan-02 ruling R5 — this is real validation,
+    not an existence probe, so LOCK validation is meaningful, and the
+    ``execution-report`` kind backs the bounded execution skill's final
+    report gate).
     """
     model_cls = MODEL_KINDS.get(kind)
     if model_cls is None:
