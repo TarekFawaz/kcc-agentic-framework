@@ -1,0 +1,152 @@
+# KCC x Superpowers — Autobuild Build Contract template.
+# Design Spec v1.2 sections 14-15 and 23: the two-tier contract that
+# defines what the autonomous system is allowed and required to do after
+# LOCK.  Tier 1 holds the locked invariants (including authority
+# envelope, money policy and destructive-action policy); Tier 2 holds
+# autonomous engineering detail that may change without user
+# interruption.  This template is an unlocked scaffold: locked_at /
+# contract_hash / tier2_hash are null until LOCK.  The canonical Tier-1
+# hash covers Tier-1 JSON only (R7); every Tier-1 fallback-whitelist
+# provider must be backed by a validated readiness fallback entry (R6).
+#
+# Validate with:  kcc-autobuild validate-model contract build-contract.yaml
+contract_version: "1.0"
+tier1:
+  product_scope: "Internal tool: upload a PDF and receive a reviewed summary with an export file."
+  non_goals:
+    - "No public signup"
+    - "No real-money movement"
+    - "No production data mutation beyond the summary store"
+  primary_user_journeys:
+    - "Operator uploads a PDF and reads the summary"
+    - "Operator exports the summary for downstream use"
+  ux_direction: "Single-window CLI with explicit loading/error/success states"
+  prototype_ref: ".KCC/kernel/templates/prototype-manifest.yaml"
+  provider_whitelist:
+    - provider: auth-provider
+      paid: false
+    - provider: fallback-provider
+      paid: false
+  fallback_whitelist:
+    - fallback-provider
+  auth_model: "OAuth 2.1 with PKCE against the approved identity provider"
+  core_data_entities:
+    - SummaryRecord
+    - UploadJob
+  security_constraints:
+    - "Secrets are stored as references only (vault://, env://, keychain://)"
+    - "Least-privilege identities on staging and production"
+  authority:
+    auto_provision_status: USER_MUST_PROVIDE
+    auto_provision_providers: []
+    approved_accounts: []
+    credential_refs:
+      - "vault://project/provider/oauth"
+    dependency_installation: false
+    environment_creation: false
+    cicd_configuration: false
+    database_migration: false
+    dns_changes: false
+    approved_dns_zones: []
+    staging_deployment: false
+    production_deployment: false
+    rollback: false
+    monitoring_setup: false
+    secret_reference_usage: true
+    bounded_spend: true
+    auto_debug: true
+  money:
+    hard_limits: true
+    currency: USD
+    one_time_build_budget: 250000
+    per_provider_caps:
+      auth-provider: 5000
+      fallback-provider: 1000
+    monthly_infrastructure_cap: 500000
+    model_token_cap: 2000000
+  destructive_policy:
+    - operation: rename-summary-output
+      classification: REVERSIBLE_AUTONOMOUS
+    - operation: delete-staging-job-cache
+      classification: REVERSIBLE_WITH_ROLLBACK_REQUIRED
+      rollback_path: "restore from the staging snapshot"
+    - operation: rotate-api-key
+      classification: IRREVERSIBLE_WHITELISTED
+      backup_required: true
+  definition_of_done: "An operator can upload a PDF, read the reviewed summary and export it on the deployed system."
+tier2:
+  component_boundaries:
+    - "cli / upload / summarize / export"
+  test_organization:
+    - "unit per component; one E2E journey per primary journey"
+  staging_provider: staging-provider
+trace:
+  run_id: RUN-001
+  nodes:
+    - {id: REQ-001, kind: requirement}
+    - {id: JOURNEY-01, kind: journey}
+    - {id: SCREEN-01, kind: screen}
+    - {id: API-01, kind: api}
+    - {id: DATA-01, kind: data}
+    - {id: TASK-001, kind: implementation}
+    - {id: AC-001, kind: acceptance}
+    - {id: TEST-001, kind: test}
+    - {id: PROD-001, kind: production_validation}
+  edges:
+    - {source: REQ-001, target: JOURNEY-01}
+    - {source: JOURNEY-01, target: SCREEN-01}
+    - {source: SCREEN-01, target: API-01}
+    - {source: API-01, target: DATA-01}
+    - {source: API-01, target: TASK-001}
+    - {source: TASK-001, target: AC-001}
+    - {source: AC-001, target: TEST-001}
+    - {source: TEST-001, target: PROD-001}
+readiness:
+  items:
+    - id: DEP-Auth
+      provider: auth-provider
+      status: READY
+      required_kinds:
+        - identity
+        - permissions
+      evidence:
+        - kind: identity
+          checked_at: 2026-08-27T10:00:00Z
+          result: pass
+          principal: svc-auth-staging
+          scopes:
+            - openid
+            - profile
+          mode: sandbox
+        - kind: permissions
+          checked_at: 2026-08-27T10:05:00Z
+          result: pass
+          principal: svc-auth-staging
+          scopes:
+            - openid
+            - profile
+          mode: sandbox
+      fallbacks:
+        - provider: fallback-provider
+          trigger_scope: auth-provider outage
+          allowed_function: read-only identity verification
+          data_classes_allowed:
+            - user-profile
+          regions_allowed:
+            - us-east-1
+          credential_ref: "vault://project/provider/fallback"
+          switch_revalidation_required: true
+      evidence_ttl: PT24H
+  red_team_findings:
+    - id: RT-001
+      summary: "OAuth redirect URI verified in the provider console; callback reaches the staging route."
+      disposition: RESOLVED
+      related_item_id: DEP-Auth
+    - id: RT-002
+      summary: "Fallback path validated by a probe re-run against the sandbox credential."
+      disposition: MITIGATED
+      related_item_id: DEP-Auth
+resume: {}
+locked_at: null
+contract_hash: null
+tier2_hash: null

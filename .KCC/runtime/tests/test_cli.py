@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from typer.testing import CliRunner
 from kcc_autobuild.cli import app
@@ -41,3 +43,84 @@ def test_transition_missing_does_not_create_database(tmp_path):
     )
     assert result.exit_code != 0
     assert not (tmp_path / "coordination/autobuild/RUN-999/run.db").exists()
+
+
+# ---------------------------------------------------------------------------
+# R5: validate-model is real YAML/schema validation, not an existence probe.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "yaml_text"),
+    [
+        ("trace", "nodes: []\nedges: []\n"),
+        ("readiness", "items: []\nred_team_findings: []\n"),
+        ("decision-log", "run_id: RUN-001\nentries: []\n"),
+        (
+            "contract",
+            "contract_version: '1.0'\n"
+            "tier1:\n"
+            "  product_scope: demo\n"
+            "  authority: {}\n"
+            "  money: {}\n"
+            "  definition_of_done: demo done\n",
+        ),
+        (
+            "prototype",
+            "title: demo\n"
+            "artifact_ref: https://demo.invalid\n"
+            "interactive: true\n"
+            "screens: []\n"
+            "interactions: []\n",
+        ),
+    ],
+)
+def test_validate_model_valid_kind(tmp_path, kind, yaml_text):
+    path = tmp_path / "artifact.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+    result = runner.invoke(app, ["validate-model", kind, str(path)])
+    assert result.exit_code == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "valid": True,
+        "kind": kind,
+        "path": str(path),
+    }
+
+
+def test_validate_model_rejects_invalid_model_yaml(tmp_path):
+    """Schema violations fail nonzero instead of reporting valid=true."""
+    path = tmp_path / "bad-trace.yaml"
+    path.write_text(
+        "nodes:\n"
+        "  - id: REQ-001\n"
+        "    kind: requirement\n"
+        "edges:\n"
+        "  - source: REQ-001\n"
+        "    target: MISSING\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["validate-model", "trace", str(path)])
+    assert result.exit_code != 0
+    assert '"valid": false' in result.stderr
+
+
+def test_validate_model_rejects_unknown_kind(tmp_path):
+    path = tmp_path / "artifact.yaml"
+    path.write_text("nodes: []\n", encoding="utf-8")
+    result = runner.invoke(app, ["validate-model", "bogus", str(path)])
+    assert result.exit_code != 0
+    assert "bogus" in result.stderr
+
+
+def test_validate_model_rejects_malformed_yaml(tmp_path):
+    path = tmp_path / "broken.yaml"
+    path.write_text("{ this is not: [ valid\n", encoding="utf-8")
+    result = runner.invoke(app, ["validate-model", "trace", str(path)])
+    assert result.exit_code != 0
+
+
+def test_validate_model_rejects_missing_file(tmp_path):
+    result = runner.invoke(
+        app, ["validate-model", "trace", str(tmp_path / "missing.yaml")]
+    )
+    assert result.exit_code != 0

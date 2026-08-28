@@ -1,0 +1,61 @@
+# KCC x Superpowers — Autobuild Readiness Evidence Pack template.
+# Design Spec v1.2 sections 12-13, 23: proof that access, dependencies,
+# testing and deployment paths are ready.  READY is evidence-backed;
+# timestamps are timezone-aware (UTC); every probe kind required by an
+# item needs current pass evidence.  Red-team findings and dispositions
+# are part of the pack (section 13: red-team findings and dispositions).
+#
+# Dispositions: OPEN findings block LOCK; RESOLVED / MITIGATED /
+# ACCEPTED are recorded and non-blocking (they surface in the
+# consolidated risk view).
+#
+# Validate with:  kcc-autobuild validate-model readiness readiness-pack.yaml
+items:
+  - id: DEP-Auth
+    provider: auth-provider
+    status: READY
+    required_kinds:
+      - identity
+      - permissions
+    evidence:
+      - kind: identity
+        checked_at: 2026-08-27T10:00:00Z
+        result: pass
+        principal: svc-auth-staging
+        resource_ids:
+          - tenant-auth-staging
+        scopes:
+          - openid
+          - profile
+        mode: sandbox
+      - kind: permissions
+        checked_at: 2026-08-27T10:05:00Z
+        result: pass
+        principal: svc-auth-staging
+        scopes:
+          - openid
+          - profile
+        mode: sandbox
+        quota: "500 tokens/hour"
+    fallbacks:
+      - provider: fallback-provider
+        trigger_scope: auth-provider outage
+        allowed_function: read-only identity verification
+        data_classes_allowed:
+          - user-profile
+        regions_allowed:
+          - us-east-1
+        credential_ref: "vault://project/provider/fallback"
+        switch_revalidation_required: true
+    evidence_ttl: PT24H
+red_team_findings:
+  - id: RT-001
+    summary: "OAuth redirect URI verified in the provider console; callback
+      reaches the staging route."
+    disposition: RESOLVED
+    related_item_id: DEP-Auth
+  - id: RT-002
+    summary: "Fallback path validated by a probe re-run against the sandbox
+      credential; quota remains sufficient for the locked workload."
+    disposition: MITIGATED
+    related_item_id: DEP-Auth

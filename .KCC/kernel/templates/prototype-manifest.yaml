@@ -1,0 +1,24 @@
+# KCC x Superpowers — Autobuild Clickable Prototype template.
+# Design Spec v1.2 sections 2.2, 9.5-9.6: the pre-lock interactive
+# artifact that validates interaction, information structure and user
+# experience before implementation.  Interactivity is declared, never
+# assumed; the prototype is never the production implementation.
+# `primary_journey` is the ordered interaction-id chain from the entry
+# screen to an exit screen for the H2 prototype walkthrough.
+#
+# Validate with:  kcc-autobuild validate-model prototype prototype-manifest.yaml
+run_id: RUN-001
+title: "PDF upload and summary — clickable prototype"
+artifact_ref: "https://prototype.example.invalid/runs/RUN-001"
+interactive: true
+production_implementation: false
+screens:
+  - {id: landing, name: Landing, states: [DEFAULT], entry: true}
+  - {id: upload, name: Upload, states: [DEFAULT, LOADING, ERROR]}
+  - {id: result, name: Result, states: [DEFAULT, SUCCESS, EMPTY], exit: true}
+interactions:
+  - {id: open-upload, source: landing, action: open-upload, target: upload}
+  - {id: process-upload, source: upload, action: process-upload, target: result}
+primary_journey:
+  - open-upload
+  - process-upload

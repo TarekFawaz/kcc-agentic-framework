@@ -1,0 +1,54 @@
+# KCC x Superpowers — Autobuild Decision Log template.
+# Design Spec v1.2 sections 9.7, 11, 23, 24: the continuously updated
+# record of material choices.  Every entry records the recommended
+# option, alternatives considered, rejected options, rationale,
+# cost/risk implications and whether the decision becomes a locked
+# Tier-1 invariant or remains Tier-2 autonomous detail.  Secret
+# references only — raw secrets are rejected (section 24).
+#
+# Validate with:  kcc-autobuild validate-model decision-log decision-log.yaml
+run_id: RUN-001
+entries:
+  - id: DEC-001
+    problem: "Which authentication model should the product use?"
+    recommended: "OAuth 2.1 with PKCE against the approved identity provider"
+    alternatives:
+      - "email + password with TOTP"
+    rejected:
+      - "JWT-only bearer auth without refresh rotation"
+      - "basic auth over TLS"
+    rationale: "The approved identity provider already holds the verified
+      credentials; PKCE keeps the public CLI client out of the secret path."
+    cost_risk: "OAuth adds a console redirect configuration and refresh-token
+      rotation; mitigations are documented in the readiness pack."
+    tier: LOCKED_INVARIANT
+    area: auth
+    credential_refs:
+      - "vault://project/provider/oauth"
+  - id: DEC-002
+    problem: "Where should the initial deployment run?"
+    recommended: "Managed container runtime inside the approved organization account"
+    alternatives:
+      - "self-hosted VM"
+    rejected:
+      - "bare-metal colocation"
+    rationale: "Managed runtime gives the smallest safe staging-to-production
+      parity surface for the first release."
+    cost_risk: "Provider egress and idle costs; bounded by the money policy caps."
+    tier: AUTONOMOUS_DETAIL
+    area: hosting
+  - id: DEC-003
+    problem: "Which persistence model fits the primary journey?"
+    recommended: "PostgreSQL with a single summary table plus job queue"
+    alternatives:
+      - "document store with s3-backed blobs"
+    rejected:
+      - "embedded key-value store"
+    rationale: "The summary result must be queryable and auditable; one
+      relational store with an ordering queue keeps the data model small."
+    cost_risk: "Migrations are classified in the destructive policy; a rollback
+      path is required."
+    tier: LOCKED_INVARIANT
+    area: database
+    credential_refs:
+      - "vault://project/provider/db"

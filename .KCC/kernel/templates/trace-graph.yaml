@@ -1,0 +1,32 @@
+# KCC x Superpowers — Autobuild Trace Matrix template.
+# Design Spec v1.2 sections 10, 23: the primary requirement-to-production
+# spine.  Every in-scope requirement must reach BOTH an `acceptance` node
+# and a `production_validation` node through forward edges, otherwise it
+# is an orphan requirement and blocks LOCK (orphan rule, section 10.3).
+#
+# Validate with:  kcc-autobuild validate-model trace trace-graph.yaml
+#
+# Keeping the example editable: add one node per matrix layer
+# (requirement, journey, flow, screen, component, api, data, dependency,
+# implementation, acceptance, test, observability, production_validation)
+# and one directed edge per refinement.
+run_id: RUN-001
+nodes:
+  - {id: REQ-001, kind: requirement}
+  - {id: JOURNEY-01, kind: journey}
+  - {id: SCREEN-01, kind: screen}
+  - {id: API-01, kind: api}
+  - {id: DATA-01, kind: data}
+  - {id: TASK-001, kind: implementation}
+  - {id: AC-001, kind: acceptance}
+  - {id: TEST-001, kind: test}
+  - {id: PROD-001, kind: production_validation}
+edges:
+  - {source: REQ-001, target: JOURNEY-01}
+  - {source: JOURNEY-01, target: SCREEN-01}
+  - {source: SCREEN-01, target: API-01}
+  - {source: API-01, target: DATA-01}
+  - {source: API-01, target: TASK-001}
+  - {source: TASK-001, target: AC-001}
+  - {source: AC-001, target: TEST-001}
+  - {source: TEST-001, target: PROD-001}
