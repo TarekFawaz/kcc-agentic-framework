@@ -2,9 +2,11 @@
 
 From clone to your first **agentic AI workflow** in five minutes.
 
-Pick one harness path - Codex CLI, Claude Code, OpenCode, or a generic/Ollama
-runner. The lifecycle stays the same because every adapter is generated from
-the same `.KCC/kernel/` and `.KCC/capabilities/` source.
+Pick one harness path - Codex CLI, Claude Code, OpenCode, DeepSeek Harness
+(dsh), or a generic/Ollama runner. The lifecycle stays the same because every
+adapter is generated from the same `.KCC/kernel/` and `.KCC/capabilities/`
+source. The core is harness-neutral with adapter-specific capability levels -
+each harness proves its own read/write/exec, worker, and policy capabilities.
 
 ---
 
@@ -20,8 +22,8 @@ interrogate -> create -> token-budget -> plan -> token-budget -> implement -> te
 
 Each stage has a dedicated agent role. Meta-agents (Butler + Token Guard)
 wrap every turn at minimum token burn. Multi-harness - Claude Code, Codex
-CLI, OpenCode, generic, Ollama all materialize from a single neutral
-source at `.KCC/kernel/` + `.KCC/capabilities/`.
+CLI, OpenCode, generic, Ollama, DeepSeek Harness (dsh) all materialize
+from a single neutral source at `.KCC/kernel/` + `.KCC/capabilities/`.
 
 You write zero framework code. You write specs and let the agents do the
 rest.
@@ -38,6 +40,7 @@ rest.
   - **[Claude Code](https://docs.claude.com/claude-code)** - reads `CLAUDE.md` + `.claude/`
   - **[Codex CLI](https://github.com/openai/codex)** - reads `AGENTS.md`
   - **[OpenCode](https://opencode.ai)** - reads `AGENTS.md`
+  - **[DeepSeek Harness](https://tikasway.dev/kcc)** (`dsh`) - reads root `AGENTS.md` + `.dsh/skills/` (see [the dsh adapter doc](./docs/autobuild/deepseek-harness.md))
 - **Docker** (optional) - only needed if you'll use sandboxed sessions
   via `start-agent-session.ps1 --sandbox` or if any of your agents trip
   the Lethal Trifecta detector and auto-engage the sandbox.
@@ -74,6 +77,7 @@ After first run, the framework adds:
 ```text
 |-- AGENTS.md  CLAUDE.md       <- root entrypoints (created from kernel templates)
 |-- .claude/  .codex/  .opencode/  .agents/  ollama/   <- adapter surfaces for this cell (regenerated; gitignored by default)
+|-- .dsh/                                     <- DeepSeek Harness skill surface (regenerated; local output, not committed)
 |-- memory/  coordination/  architecture/
 |-- solution/  ideation/  specs/  Traces/  migrations/
 `-- src/IDEA-{ID}-{slug}/...   <- one source folder per idea
@@ -119,10 +123,17 @@ powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 generic
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 dsh
 ```
 
 On Mac/Linux equivalent: `./.KCC/tools/framework-init.sh claude` (or
 whichever harness).
+
+`framework-init dsh` generates the `.dsh/` skill surface and **prints**
+the hardened-profile install command by default - it never silently
+mutates `DSH_HOME`. See the
+[DeepSeek harness adapter doc](./docs/autobuild/deepseek-harness.md) for
+the explicit install and proof commands.
 
 This reads `.KCC/kernel/` + `.KCC/capabilities/`, creates the root
 entrypoints (`AGENTS.md` + `CLAUDE.md` if missing), state folders
@@ -170,7 +181,7 @@ estimate, planning, implementation, testing, and review with the required gates.
 
 ---
 
-## Three paths
+## Four paths
 
 ### Path A - Claude Code
 
@@ -220,6 +231,21 @@ opencode
 ```
 
 OpenCode also reads `AGENTS.md`. Same prompt as Path B.
+
+### Path D - DeepSeek Harness (dsh)
+
+```powershell
+cd my-project
+dsh
+```
+
+`dsh` reads the root `AGENTS.md` as the directive catalogue plus the
+generated `.dsh/skills/` packages. Same prompt as Path B. For autobuild
+post-lock work, install the hardened `kcc-autobuild` profile (explicit
+installer under `.KCC/adapters/dsh/`, never automatic) and prove the
+effective profile/guard with `kcc-autobuild harness doctor dsh --live`
+before any Full Autopilot claim:
+[docs/autobuild/deepseek-harness.md](./docs/autobuild/deepseek-harness.md).
 
 ---
 
@@ -493,6 +519,7 @@ lives in [example-solutions.md](./example-solutions.md).
 | Claude adapter surface | `.claude/agents/`, `.claude/skills/` |
 | Codex adapter surface | `.codex/agents/`, `.codex/skills/`, `.codex/config.toml` |
 | OpenCode adapter surface | `.opencode/agents/`, `.opencode/commands/`, `.opencode/skills/`, `opencode.json` |
+| DeepSeek Harness adapter surface | `.dsh/skills/*/SKILL.md` |
 
 ---
 
@@ -505,7 +532,7 @@ after clone so the `.sh` tools are executable.
 
 | Tool | What it does | Key parameters | Example |
 |---|---|---|---|
-| `framework-init` | First-run initializer: creates root entrypoints, state folders, and harness adapter outputs from `.KCC/`. | `Harness` (claude\|codex\|opencode\|generic\|ollama\|all, default all) | `.KCC\tools\framework-init.ps1 codex` |
+| `framework-init` | First-run initializer: creates root entrypoints, state folders, and harness adapter outputs from `.KCC/`. For `dsh` it prints the hardened-profile install command by default. | `Harness` (claude\|codex\|opencode\|generic\|ollama\|dsh\|all, default all) | `.KCC\tools\framework-init.ps1 codex` |
 | `sync-adapters` | Regenerates per-harness files from `.KCC/kernel/` + `.KCC/capabilities/`. Run after any kernel/capability edit. | `Harness` (default all) | `.KCC\tools\sync-adapters.ps1 -Harness claude` |
 | `validate-kcc` | Validates structure, capability metadata, generated/runtime boundaries, stale refs, parser health, and scans for control-char/mojibake/BOM corruption. | `-Mode cell` (default) \| `repo` | `.KCC\tools\validate-kcc.ps1 -Mode repo` |
 | `backchannel-append` | Appends exactly one event to `coordination/backchannel.jsonl` (monotonic `BC-NNNNN` id, UTC ts). Best-effort refreshes the dashboard. | `-Kind` `-From` (req); `-To` `-Spec` `-Session` `-Payload` `-NoDashboard` | `.KCC\tools\backchannel-append.ps1 -Kind brief-issued -From butler -Spec SPEC-007` |
@@ -533,6 +560,8 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 - [AI agent governance](./docs/ai-agent-governance.md) - cost, confidence, trace, and toolchain gates
 - [KCC vs agent frameworks](./docs/kcc-vs-agent-frameworks.md) - how KCC compares to prompts, assistants, and execution frameworks
 - [Harness support](./docs/codex-claude-opencode-ollama.md) - Codex, Claude Code, OpenCode, generic, and Ollama outputs
+- [Autobuild harnesses and capability levels](./docs/autobuild/harnesses.md) - harness-neutral core, capability tiers, report parity, two-mode operation
+- [DeepSeek Harness (dsh) adapter](./docs/autobuild/deepseek-harness.md) - dsh sync, install, profile proof, and worker boundary
 - [Example solutions](./example-solutions.md) - full csvtojson CLI walkthrough, idea to deploy
 - [Alignment matrix](./docs/alignment-matrix.md) - implementation status vs KCC v0.4
 - [[AGENTS]] - the root entrypoint Codex / OpenCode load (full agent + skill catalog)

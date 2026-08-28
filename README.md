@@ -5,7 +5,7 @@ traceability, cost awareness, quality gates, or reusable learning.
 
 [![Status: public alpha](https://img.shields.io/badge/status-public%20alpha-blue)](./docs/alignment-matrix.md)
 [![License](https://img.shields.io/badge/license-see%20LICENSE-green)](./LICENSE)
-[![Harnesses](https://img.shields.io/badge/harnesses-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode%20%7C%20Ollama-informational)](#initialize-or-sync)
+[![Harnesses](https://img.shields.io/badge/harnesses-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode%20%7C%20Ollama%20%7C%20DeepSeek%20(dsh)-informational)](#initialize-or-sync)
 
 
 **Official KCC page:** [tikasway.dev/kcc](https://tikasway.dev/kcc)
@@ -18,7 +18,9 @@ idea -> interrogate -> spec -> budget -> plan -> budget -> implement -> test -> 
 
 KCC is local-first. The source of truth lives in `.KCC/`, and the framework
 generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
-`.agents` bundles, and Ollama-backed runners.
+`.agents` bundles, Ollama-backed runners, and the DeepSeek harness (`dsh`).
+The core is harness-neutral with adapter-specific capability levels - each
+harness reports only proven capabilities, never a "works on every CLI" claim.
 
 > KCC exists to structurally compound intelligence without collapsing
 > governance.
@@ -46,7 +48,7 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 | Governance gates | Humans approve budget, confidence, toolchain, security, privacy, and scope decisions when needed. |
 | Token Guard | Cost and token estimates appear before expensive planning or implementation. |
 | Butler memory | Reusable decisions and patterns survive beyond a single agent context window. |
-| Multi-harness adapters | One `.KCC` source generates Codex, Claude Code, OpenCode, generic, and Ollama surfaces. |
+| Multi-harness adapters | One `.KCC` source generates Codex, Claude Code, OpenCode, generic, Ollama, and DeepSeek Harness (dsh) surfaces. |
 
 ## Quick Start
 
@@ -57,6 +59,7 @@ powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claude
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
+powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 dsh
 ```
 
 Then open your preferred harness and start with an idea:
@@ -66,7 +69,7 @@ auto build a CLI that converts CSV to JSON
 ```
 
 See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
-generic/Ollama, and Mac/Linux paths.
+DeepSeek Harness (dsh), generic/Ollama, and Mac/Linux paths.
 
 ## Why KCC
 
@@ -183,9 +186,9 @@ locally:
 | Root docs | Public explanation, quick start, contribution docs, and project policy. |
 
 Generated harness folders such as `.claude/`, `.codex/`, `.opencode/`,
-`.agents/`, and `ollama/` are **local output**, not source. They are adapter
-surfaces generated from `.KCC/` when the user initializes or syncs the
-framework.
+`.agents/`, `.dsh/`, and `ollama/` are **local output**, not source. They are
+adapter surfaces generated from `.KCC/` when the user initializes or syncs
+the framework.
 
 ## Current Status
 
@@ -194,7 +197,7 @@ framework.
 | Source agents | 17 |
 | Source skills | 22 |
 | Dialects | 23 |
-| Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama |
+| Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama, DeepSeek Harness (dsh) |
 | Structural validation | Passing with 0 errors and 0 warnings (PowerShell + bash, cell + repo modes) |
 | Current maturity | Public alpha / field-pilot reference implementation |
 
@@ -265,6 +268,7 @@ CLAUDE.md
 .codex/
 .opencode/
 .agents/
+.dsh/
 ollama/
 memory/
 coordination/
@@ -297,6 +301,8 @@ under `docs/` instead of committing live harness folders at the root.
 | `docs/ai-agent-governance.md`          | Governance surfaces: cost, confidence, traces, toolchain gates, and memory.                         |
 | `docs/kcc-vs-agent-frameworks.md`      | How KCC differs from prompt libraries, coding assistants, and agent frameworks.                     |
 | `docs/codex-claude-opencode-ollama.md` | Harness adapter overview for Codex, Claude Code, OpenCode, generic, and Ollama.                     |
+| `docs/autobuild/harnesses.md`          | Harness-neutral autobuild core: capability tiers, proof rules, report parity, and two-mode operation. |
+| `docs/autobuild/deepseek-harness.md`   | DeepSeek Harness (dsh) adapter: sync, install, profile proof, and worker boundary.                  |
 | `docs/alignment-matrix.md`             | Honest status matrix against the KCC v0.4 operating-model primitives.                               |
 | `docs/diagrams/`                       | Animated GIF, Mermaid, and draw.io sources.                                                         |
 | `QUICKSTART.md`                        | Guided first run.                                                                                   |
@@ -310,6 +316,7 @@ under `docs/` instead of committing live harness folders at the root.
 | OpenCode | `.opencode/agents/`, `.opencode/commands/`, `.opencode/skills/` |
 | Generic | `.agents/agents/`, `.agents/skills/`, `.agents/tools/` |
 | Ollama | `ollama/agents.json`, `ollama/README.md` |
+| DeepSeek Harness (dsh) | `.dsh/skills/*/SKILL.md` |
 
 ## Initialize or Sync
 
@@ -333,8 +340,16 @@ bash .KCC/tools/validate-kcc.sh
 Supported harness values:
 
 ```text
-claude | codex | opencode | generic | ollama | all
+claude | codex | opencode | generic | ollama | dsh | all
 ```
+
+The dsh harness additionally needs its hardened profile/guard for
+post-lock workers: `framework-init dsh` **prints** the install command
+by default and never silently mutates `DSH_HOME`. The explicit installer
+and the exact capability-proof commands are documented in
+[docs/autobuild/deepseek-harness.md](./docs/autobuild/deepseek-harness.md);
+the capability tiers, report-parity contract, and pre-lock/post-lock
+modes live in [docs/autobuild/harnesses.md](./docs/autobuild/harnesses.md).
 
 ## Important Concepts
 
@@ -345,6 +360,7 @@ claude | codex | opencode | generic | ollama | all
 | Capability | A reusable agent or skill that follows kernel contracts. |
 | Gate | A required stop for human approval, budget, confidence, safety, or scope. |
 | Trace | A session-level record of actions, tools, decisions, handovers, and token usage. |
+| Capability level | Per-harness proven capabilities (read/write/exec, fresh/parallel workers, policy gate, approval mode); unproven parallel degrades to serial. |
 | Butler | Meta-agent responsible for memory and calibration signals. |
 | Token Guard | Meta-agent responsible for cost estimates and budget gates. |
 
@@ -370,6 +386,8 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 | AI agent governance | [docs/ai-agent-governance.md](./docs/ai-agent-governance.md) |
 | KCC vs agent frameworks | [docs/kcc-vs-agent-frameworks.md](./docs/kcc-vs-agent-frameworks.md) |
 | Codex, Claude Code, OpenCode, and Ollama | [docs/codex-claude-opencode-ollama.md](./docs/codex-claude-opencode-ollama.md) |
+| Autobuild harnesses and capability levels | [docs/autobuild/harnesses.md](./docs/autobuild/harnesses.md) |
+| DeepSeek Harness (dsh) adapter | [docs/autobuild/deepseek-harness.md](./docs/autobuild/deepseek-harness.md) |
 
 ## Contributing
 
