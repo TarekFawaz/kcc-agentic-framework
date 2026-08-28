@@ -17,19 +17,20 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
       generic   -> .agents/agents/{name}.md, .agents/skills/{name}/SKILL.md,
                    .agents/config.json, .agents/manifest.json, .agents/tools/README.md
       ollama    -> ollama/agents.json, ollama/README.md
+      dsh       -> .dsh/skills/{name}/SKILL.md
 
     "all" runs every adapter (default).
 
     The neutral .KCC/kernel/ and .KCC/capabilities/ trees are the source of truth. Edit them,
     then rerun this script to regenerate the per-harness wire-up files. Root
     AGENTS.md and CLAUDE.md are created from defaults only when missing.
-    Generated files under .claude/, .codex/, .opencode/, .agents/, and ollama/
+    Generated files under .claude/, .codex/, .opencode/, .agents/, .dsh/, and ollama/
     may be overwritten on the next sync.
 
     PowerShell 5.1 compatible. UTF-8 (no BOM) output. No && operator.
 
 .PARAMETER Harness
-    Which harness to generate for. One of: claude, codex, opencode, generic, ollama, all.
+    Which harness to generate for. One of: claude, codex, opencode, generic, ollama, dsh, all.
     Defaults to "all". Accepts positional argument:
 
         .KCC\tools\sync-adapters.ps1 codex
@@ -71,6 +72,10 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     powershell -ExecutionPolicy Bypass -File .KCC\tools\sync-adapters.ps1 -Harness ollama
 
 .EXAMPLE
+    # Generate native project-local DeepSeek harness skills:
+    powershell -ExecutionPolicy Bypass -File .KCC\tools\sync-adapters.ps1 -Harness dsh
+
+.EXAMPLE
     # Generate native project-local Codex skills:
     powershell -ExecutionPolicy Bypass -File .KCC\tools\sync-adapters.ps1 codex -InstallCodexSkills
 #>
@@ -78,7 +83,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('claude', 'codex', 'opencode', 'generic', 'ollama', 'all')]
+    [ValidateSet('claude', 'codex', 'opencode', 'generic', 'ollama', 'dsh', 'all')]
     [string]$Harness = 'all',
 
     [string]$RepoRoot,
@@ -619,7 +624,8 @@ function New-HarnessOutputTable {
         '| `codex` | `.codex/agents/`, `.codex/skills/*/SKILL.md`, `.codex/tools/`, `.codex/config.toml`, `AGENTS.md` if missing |',
         '| `opencode` | `.opencode/agents/`, `.opencode/commands/`, `.opencode/skills/`, `opencode.json`, `AGENTS.md` if missing |',
         '| `generic` | `.agents/agents/`, `.agents/skills/`, `.agents/tools/`, `.agents/config.json`, `.agents/manifest.json` |',
-        '| `ollama` | `ollama/agents.json`, `ollama/README.md` |'
+        '| `ollama` | `ollama/agents.json`, `ollama/README.md` |',
+        '| `dsh` | `.dsh/skills/*/SKILL.md`, `AGENTS.md` if missing |'
     )
     return ($lines -join "`n")
 }
@@ -753,6 +759,7 @@ function Initialize-FrameworkInfrastructure {
 .opencode/
 .agents/
 ollama/
+.dsh/
 
 Traces/Session-*/
 ideation/IDEA-*/
@@ -1608,6 +1615,60 @@ Override per-agent by editing ``agents.json`` after sync.
     return $report
 }
 
+# ----- DeepSeek harness (dsh) -----
+
+function New-DshWorkerBoundary {
+    # Post-lock worker boundary text appended to every generated .dsh skill.
+    # Plan 08: native read-only allowlist direct; everything else fail-closed;
+    # governed actions through the exact KCC policy wrappers; KCC owns
+    # controller/status/resume. Conformance (check-run-conformance -Scope
+    # harness) requires every marker line below to appear in each SKILL.md.
+    # Single-quoted here-string: backticks stay literal.
+    return @'
+
+---
+
+## KCC worker boundary (generated)
+
+- Post-lock workers use the DSH native read-only allowlist directly (read, read_image, glob, grep, todo_write) and never escalate it.
+- process, write, network, subagent, workflow, code-runtime, MCP, Cordis, and unknown operations fail closed (denied without prompt).
+- Governed actions use exactly `kcc_policy_exec` / `kcc_policy_write`.
+- KCC owns controller, status, and resume.
+'@
+}
+
+function Invoke-DshSync {
+    param(
+        [Parameter(Mandatory)]$Agents,
+        [Parameter(Mandatory)]$Skills,
+        [Parameter(Mandatory)][string]$Root
+    )
+    $report = New-SyncReport
+
+    $skillsDir = Join-Path $Root '.dsh/skills'
+
+    foreach ($s in $Skills) {
+        $name = $s.Name
+        $meta = $s.Meta
+        # dsh skills are native skill-package directories. Keep arguments
+        # slash-command compatible by rewriting the neutral placeholder to
+        # $ARGUMENTS, then append the generated KCC worker boundary.
+        $final = New-SkillPackageContent -Name $name -Meta $meta -Body $s.Body -ArgumentToken '$ARGUMENTS' -Compatibility 'dsh'
+        $boundary = New-DshWorkerBoundary
+        $final = $final.TrimEnd() + "`n`n" + $boundary
+        if (-not $final.EndsWith("`n")) { $final += "`n" }
+        $outPath = Join-Path $skillsDir ("{0}/SKILL.md" -f $name)
+        Write-Utf8File -Path $outPath -Content $final
+        Write-Host "[dsh      ] [skill ] $outPath"
+        $report.SkillsWritten++
+        [void]$report.Files.Add($outPath)
+    }
+
+    [void]$report.Notes.Add('Root AGENTS.md is the dsh entrypoint; created only if missing and never overwritten.')
+    [void]$report.Notes.Add('dsh skills are project-local under .dsh/skills/{name}/SKILL.md; no user DSH_HOME files are written.')
+    return $report
+}
+
 # ============================================================
 # Main
 # ============================================================
@@ -1655,6 +1716,9 @@ if ($Harness -eq 'all' -or $Harness -eq 'generic') {
 if ($Harness -eq 'all' -or $Harness -eq 'ollama') {
     $report['ollama'] = Invoke-OllamaSync -Agents $agents -Skills $skills -Root $RepoRoot
 }
+if ($Harness -eq 'all' -or $Harness -eq 'dsh') {
+    $report['dsh'] = Invoke-DshSync -Agents $agents -Skills $skills -Root $RepoRoot
+}
 
 # ============================================================
 # Summary report
@@ -1692,6 +1756,10 @@ if ($report.Contains('codex'))    {
 if ($report.Contains('opencode')) { Write-Host '  - .opencode/agents/, .opencode/commands/, .opencode/skills/, opencode.json' }
 if ($report.Contains('generic'))  { Write-Host '  - .agents/agents/, .agents/skills/, .agents/tools/, .agents/config.json, .agents/manifest.json' }
 if ($report.Contains('ollama'))   { Write-Host '  - ollama/agents.json, ollama/README.md' }
+if ($report.Contains('dsh'))      {
+    Write-Host '  - .dsh/skills/*/SKILL.md'
+    Write-Host '    (local only; skill generation alone is not Full Autopilot - the policy-guard profile/plugin is a separate install)'
+}
 Write-Host ''
 Write-Host 'Do NOT edit generated files by hand. Edit .KCC/kernel/ or .KCC/capabilities/ and rerun.'
 Write-Host 'Root orchestrator entrypoints are created from .KCC/kernel/templates/'

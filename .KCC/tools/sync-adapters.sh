@@ -10,7 +10,7 @@ INSTALL_CODEX_SKILLS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    claude|codex|opencode|generic|ollama|all)
+    claude|codex|opencode|generic|ollama|dsh|all)
       HARNESS="$1"; shift ;;
     --harness|-Harness)
       HARNESS="$2"; shift 2 ;;
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$HARNESS" in
-  claude|codex|opencode|generic|ollama|all) ;;
+  claude|codex|opencode|generic|ollama|dsh|all) ;;
   *) echo "error: unsupported harness: $HARNESS" >&2; exit 2 ;;
 esac
 
@@ -315,6 +315,7 @@ harness_output_table() {
 | `opencode` | `.opencode/agents/`, `.opencode/commands/`, `.opencode/skills/`, `opencode.json`, `AGENTS.md` if missing |
 | `generic` | `.agents/agents/`, `.agents/skills/`, `.agents/tools/`, `.agents/config.json`, `.agents/manifest.json` |
 | `ollama` | `ollama/agents.json`, `ollama/README.md` |
+| `dsh` | `.dsh/skills/*/SKILL.md`, `AGENTS.md` if missing |
 TABLE
 }
 
@@ -381,6 +382,7 @@ initialize_framework() {
 .opencode/
 .agents/
 ollama/
+.dsh/
 
 Traces/Session-*/
 ideation/IDEA-*/
@@ -823,6 +825,50 @@ EOF
   echo "[ollama   ] [manifest] $out/agents.json"
 }
 
+# Post-lock worker boundary text appended to every generated .dsh skill.
+# Plan 08: native read-only allowlist direct; everything else fail-closed;
+# governed actions through the exact KCC policy wrappers; KCC owns
+# controller/status/resume. Conformance (check-run-conformance -Scope harness)
+# requires every marker line below to appear in each SKILL.md.
+dsh_worker_boundary() {
+  cat <<'EOF'
+
+---
+
+## KCC worker boundary (generated)
+
+- Post-lock workers use the DSH native read-only allowlist directly (read, read_image, glob, grep, todo_write) and never escalate it.
+- process, write, network, subagent, workflow, code-runtime, MCP, Cordis, and unknown operations fail closed (denied without prompt).
+- Governed actions use exactly `kcc_policy_exec` / `kcc_policy_write`.
+- KCC owns controller, status, and resume.
+EOF
+}
+
+sync_dsh() {
+  local skills_out="$REPO_ROOT/.dsh/skills"
+  mkdir -p "$skills_out"
+  while IFS= read -r file; do
+    local name desc
+    name="$(yaml_scalar "$file" name)"; [[ -n "$name" ]] || name="$(basename "$file" .md)"
+    desc="$(yaml_scalar "$file" description)"
+    mkdir -p "$skills_out/$name"
+    {
+      echo "---"
+      echo "name: $name"
+      echo "description: >"
+      echo "  $desc"
+      echo "compatibility: dsh"
+      metadata_block "$file"
+      echo "---"
+      echo
+      body_after_frontmatter "$file" | replace_args '$ARGUMENTS'
+      dsh_worker_boundary
+    } > "$skills_out/$name/SKILL.md"
+    echo "[dsh      ] [skill ] $skills_out/$name/SKILL.md"
+  done < <(find "$SKILLS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+  echo "[dsh      ] root AGENTS.md is the dsh entrypoint; created only if missing and never overwritten."
+}
+
 initialize_framework
 case "$HARNESS" in
   claude) sync_claude ;;
@@ -830,19 +876,21 @@ case "$HARNESS" in
   opencode) sync_opencode ;;
   generic) sync_generic ;;
   ollama) sync_ollama ;;
+  dsh) sync_dsh ;;
   all)
     sync_claude
     sync_codex
     sync_opencode
     sync_generic
     sync_ollama
+    sync_dsh
     ;;
 esac
 
 # Write-time guard sweep: strip disallowed control characters from all
 # generated output so corruption can never silently survive a future edit.
 strip_ctrl_tree "$REPO_ROOT/coordination"
-for gen in AGENTS.md CLAUDE.md .claude .codex .opencode .agents ollama; do
+for gen in AGENTS.md CLAUDE.md .claude .codex .opencode .agents ollama .dsh; do
   strip_ctrl_tree "$REPO_ROOT/$gen"
 done
 

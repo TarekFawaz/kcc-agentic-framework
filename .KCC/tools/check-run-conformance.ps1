@@ -22,6 +22,15 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
       trace        - the most recent Traces/Session-*/ has the 7 canonical files.
       memory       - when substantive decisions were made (ADRs/specs/gate),
                      memory/decisions or memory/preferences is non-empty.
+      token        - the most recent Traces/Session-*/ TokenUsage.md records at
+                     least one actuals row (harness-reported|api-usage|
+                     manual-meter|unavailable), never estimates only.
+      harness      - when a .dsh surface exists it must be complete and in sync
+                     with .KCC/capabilities/skills/ and every generated
+                     .dsh/skills/{name}/SKILL.md must carry the full KCC worker
+                     boundary text (native read-only allowlist direct, fail
+                     closed, exact kcc_policy_exec/kcc_policy_write, KCC owns
+                     controller/status/resume); root AGENTS.md must exist.
 
     Read-only. PowerShell 5.1 compatible. No && operator.
 
@@ -29,7 +38,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     Workspace root to check. Defaults to the parent of .KCC.
 
 .PARAMETER Scope
-    Which checks to run: all | architecture | linking | trace | memory.
+    Which checks to run: all | architecture | linking | trace | memory | token | harness.
     The architecture gate in `auto` calls `-Scope architecture`.
 
 .PARAMETER Json
@@ -44,7 +53,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [string]$RepoRoot,
-    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory', 'token')]
+    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory', 'token', 'harness')]
     [string]$Scope = 'all',
     [switch]$Json
 )
@@ -96,6 +105,8 @@ $specsDir = Join-Path $RepoRoot 'specs'
 $ideationDir = Join-Path $RepoRoot 'ideation'
 $tracesDir = Join-Path $RepoRoot 'Traces'
 $memoryDir = Join-Path $RepoRoot 'memory'
+$dshSkillsDir = Join-Path $RepoRoot '.dsh/skills'
+$capSkillsDir = Join-Path $RepoRoot '.KCC/capabilities/skills'
 
 # ---------------------------------------------------------------------------
 # ARCHITECTURE
@@ -261,11 +272,81 @@ function Invoke-TokenChecks {
     }
 }
 
+# ---------------------------------------------------------------------------
+# HARNESS (DSH generated surface)
+# ---------------------------------------------------------------------------
+
+# Required worker-boundary markers that every generated .dsh skill must carry.
+# These encode the Plan 08 DSH worker boundary verbatim: post-lock native
+# read-only allowlist direct; everything else fail-closed; governed actions go
+# through exactly `kcc_policy_exec` / `kcc_policy_write`; KCC owns
+# controller/status/resume. Skill generation alone is not Full Autopilot - the
+# policy-guard profile/plugin proof is separate (Plan 08 Task 5 / Task 7).
+$script:DshBoundaryMarkers = @(
+    'native read-only allowlist',
+    'fail closed',
+    'kcc_policy_exec',
+    'kcc_policy_write',
+    'KCC owns controller, status, and resume',
+    'code-runtime',
+    'Cordis'
+)
+
+function Get-YamlScalar {
+    # Extract the first `key: value` scalar from a YAML frontmatter block.
+    param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][string]$Key)
+    $m = [regex]::Match($Text, "(?m)^[ \t]*${Key}:[ \t]*([^#\r\n]+)")
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return ''
+}
+
+function Invoke-HarnessChecks {
+    # Generated harness surface conformance. Judges only what exists (the same
+    # skip-if-absent rule as the other scopes): when a .dsh surface has been
+    # generated, it must be complete, in sync with the neutral skills, and carry
+    # the full worker-boundary text.
+    if (-not (Test-Path -LiteralPath $dshSkillsDir)) { return }
+
+    if (Test-Path -LiteralPath $capSkillsDir) {
+        foreach ($src in @(Get-ChildItem -LiteralPath $capSkillsDir -File -Filter '*.md' -ErrorAction SilentlyContinue)) {
+            $name = $src.BaseName
+            if (-not (Test-Path -LiteralPath (Join-Path $dshSkillsDir "$name/SKILL.md"))) {
+                Add-Violation 'DSH-001' 'error' 'sync-adapters' ("Neutral skill {0} has no generated .dsh/skills/{0}/SKILL.md - rerun sync-adapters dsh." -f $name)
+            }
+        }
+    }
+
+    foreach ($genDir in @(Get-ChildItem -LiteralPath $dshSkillsDir -Directory -ErrorAction SilentlyContinue)) {
+        $name = $genDir.Name
+        if ((Test-Path -LiteralPath $capSkillsDir) -and -not (Test-Path -LiteralPath (Join-Path $capSkillsDir "$name.md"))) {
+            Add-Violation 'DSH-002' 'error' 'sync-adapters' ("Generated .dsh/skills/{0}/SKILL.md has no neutral source (.KCC/capabilities/skills/{0}.md) - stale surface, rerun sync-adapters dsh after removing the capability or delete the orphan." -f $name)
+        }
+    }
+
+    foreach ($skillFile in @(Get-ChildItem -LiteralPath $dshSkillsDir -Recurse -File -Filter 'SKILL.md' -ErrorAction SilentlyContinue)) {
+        $dirName = $skillFile.Directory.Name
+        $text = Read-Text $skillFile.FullName
+        $fmName = Get-YamlScalar -Text $text -Key 'name'
+        if ($fmName -ne $dirName) {
+            Add-Violation 'DSH-003' 'error' 'sync-adapters' ("{0} frontmatter name '{1}' does not match its skill directory - regenerate via sync-adapters dsh." -f (Get-RelPath $skillFile.FullName), $fmName)
+        }
+        $missing = @($script:DshBoundaryMarkers | Where-Object { $text.IndexOf($_) -lt 0 })
+        if ($missing.Count -gt 0) {
+            Add-Violation 'DSH-004' 'error' 'sync-adapters' ("{0} is missing worker-boundary markers: {1}" -f (Get-RelPath $skillFile.FullName), ($missing -join ' '))
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'AGENTS.md'))) {
+        Add-Violation 'DSH-005' 'error' 'framework-init' 'The .dsh surface exists but root AGENTS.md is missing. DSH reads root AGENTS.md as its entrypoint; it is created once from .KCC/kernel/templates/ when missing and then preserved (never overwritten by sync).'
+    }
+}
+
 if ($Scope -eq 'all' -or $Scope -eq 'architecture') { Invoke-ArchitectureChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'linking') { Invoke-LinkingChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'trace') { Invoke-TraceChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'memory') { Invoke-MemoryChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'token') { Invoke-TokenChecks }
+if ($Scope -eq 'all' -or $Scope -eq 'harness') { Invoke-HarnessChecks }
 
 $errors = @($violations | Where-Object { $_.severity -eq 'error' })
 $warnings = @($violations | Where-Object { $_.severity -eq 'warning' })

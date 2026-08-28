@@ -5,7 +5,7 @@
 # Mirror of check-run-conformance.ps1. Read-only.
 #
 # Usage:
-#   bash .KCC/tools/check-run-conformance.sh [--repo-root PATH] [--scope all|architecture|linking|trace|memory]
+#   bash .KCC/tools/check-run-conformance.sh [--repo-root PATH] [--scope all|architecture|linking|trace|memory|token|harness]
 #
 # Exit code 1 if any error-severity violation is found, else 0.
 
@@ -38,6 +38,9 @@ SPECS_DIR="$REPO_ROOT/specs"
 IDEATION_DIR="$REPO_ROOT/ideation"
 TRACES_DIR="$REPO_ROOT/Traces"
 MEMORY_DIR="$REPO_ROOT/memory"
+DSH_DIR="$REPO_ROOT/.dsh"
+DSH_SKILLS_DIR="$DSH_DIR/skills"
+CAP_SKILLS_DIR="$REPO_ROOT/.KCC/capabilities/skills"
 
 ERRORS=0
 WARNINGS=0
@@ -50,6 +53,23 @@ violation() { # code severity owner message
 }
 
 has_mermaid() { grep -qE '^[[:space:]]*```mermaid' "$1" 2>/dev/null; }
+
+# Extract the first `key: value` scalar from a file's leading YAML frontmatter.
+fm_scalar() {
+  local file="$1" key="$2"
+  awk -v key="$key" '
+    NR == 1 && $0 == "---" { in_fm=1; next }
+    in_fm && $0 == "---" { exit }
+    in_fm && $0 ~ "^" key ":[[:space:]]*" {
+      val=$0
+      sub("^" key ":[[:space:]]*", "", val)
+      if (val == ">" || val == "|") { next }
+      sub(/[[:space:]]+$/, "", val)
+      print val
+      exit
+    }
+  ' "$file"
+}
 
 check_architecture() {
   [ -d "$ARCH_DIR" ] || return 0
@@ -183,16 +203,78 @@ check_memory() {
   fi
 }
 
+# Required worker-boundary markers that every generated .dsh skill must carry.
+# These encode the Plan 08 DSH worker boundary verbatim: post-lock native
+# read-only allowlist direct; everything else fail-closed; governed actions go
+# through exactly `kcc_policy_exec` / `kcc_policy_write`; KCC owns
+# controller/status/resume. Skill generation alone is not Full Autopilot - the
+# policy-guard profile/plugin proof is separate (Plan 08 Task 5 / Task 7).
+DSH_BOUNDARY_MARKERS=(
+  'native read-only allowlist'
+  'fail closed'
+  'kcc_policy_exec'
+  'kcc_policy_write'
+  'KCC owns controller, status, and resume'
+  'code-runtime'
+  'Cordis'
+)
+
+check_harness() {
+  # Generated harness surface conformance. Judges only what exists (same
+  # skip-if-absent rule as the other scopes): when a .dsh surface has been
+  # generated, it must be complete, in sync with the neutral skills, and carry
+  # the full worker-boundary text.
+  [ -d "$DSH_SKILLS_DIR" ] || return 0
+
+  local name f missing marker
+  if [ -d "$CAP_SKILLS_DIR" ]; then
+    while IFS= read -r src; do
+      [ -z "$src" ] && continue
+      name="$(basename "$src" .md)"
+      [ -f "$DSH_SKILLS_DIR/$name/SKILL.md" ] || violation "DSH-001" "error" "sync-adapters" "Neutral skill $name has no generated .dsh/skills/$name/SKILL.md - rerun sync-adapters dsh."
+    done < <(find "$CAP_SKILLS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+  fi
+
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
+    name="$(basename "$d")"
+    if [ -d "$CAP_SKILLS_DIR" ] && [ ! -f "$CAP_SKILLS_DIR/$name.md" ]; then
+      violation "DSH-002" "error" "sync-adapters" "Generated .dsh/skills/$name/SKILL.md has no neutral source (.KCC/capabilities/skills/$name.md) - stale surface, rerun sync-adapters dsh after removing the capability or delete the orphan."
+    fi
+  done < <(find "$DSH_SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    name="$(basename "$(dirname "$f")")"
+    local fm_name
+    fm_name="$(fm_scalar "$f" name)"
+    [ "$fm_name" = "$name" ] || violation "DSH-003" "error" "sync-adapters" "$(rel "$f") frontmatter name '${fm_name:-<empty>}' does not match its skill directory - regenerate via sync-adapters dsh."
+
+    missing=""
+    for marker in "${DSH_BOUNDARY_MARKERS[@]}"; do
+      grep -qF "$marker" "$f" || missing="$missing $marker"
+    done
+    if [ -n "$missing" ]; then
+      violation "DSH-004" "error" "sync-adapters" "$(rel "$f") is missing worker-boundary markers:$missing"
+    fi
+  done < <(find "$DSH_SKILLS_DIR" -name 'SKILL.md' -type f | sort)
+
+  if [ ! -f "$REPO_ROOT/AGENTS.md" ]; then
+    violation "DSH-005" "error" "framework-init" 'The .dsh surface exists but root AGENTS.md is missing. DSH reads root AGENTS.md as its entrypoint; it is created once from .KCC/kernel/templates/ when missing and then preserved (never overwritten by sync).'
+  fi
+}
+
 echo "KCC run conformance: $REPO_ROOT  (scope: $SCOPE)"
 echo ""
 
 case "$SCOPE" in
-  all) check_architecture; check_linking; check_trace; check_memory; check_token ;;
+  all) check_architecture; check_linking; check_trace; check_memory; check_token; check_harness ;;
   architecture) check_architecture ;;
   linking) check_linking ;;
   trace) check_trace ;;
   memory) check_memory ;;
   token) check_token ;;
+  harness) check_harness ;;
   *) echo "unknown scope: $SCOPE" >&2; exit 2 ;;
 esac
 
