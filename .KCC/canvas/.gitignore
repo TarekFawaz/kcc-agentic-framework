@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Production build output
+dist/
+
+# Playwright artifacts
+playwright-report/
+test-results/
+
+# Test coverage
+coverage/
+
+# Local env overrides (VITE_* variables are set by the harness)
+.env.local
+.env.*.local
