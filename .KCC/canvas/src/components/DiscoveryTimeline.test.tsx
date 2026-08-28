@@ -21,7 +21,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { LifecycleState } from "../types";
+import { LIFECYCLE_STATES, type LifecycleState } from "../types";
 import {
   DiscoveryTimeline,
   TIMELINE_PHASES,
@@ -92,5 +92,12 @@ describe("DiscoveryTimeline", () => {
     expect(currentTimelinePhase("LOCKED")).toBeNull();
     expect(currentTimelinePhase("BUILDING")).toBeNull();
     expect(currentTimelinePhase("ABANDONED")).toBeNull();
+  });
+
+  it("derives its seven phases from the canonical lifecycle state mirror", () => {
+    // The discovery phases are exactly the first seven lifecycle states,
+    // in canonical order (INTAKE .. CONTRACT_REVIEW), before LOCKED.
+    expect(TIMELINE_PHASES).toHaveLength(7);
+    expect([...TIMELINE_PHASES]).toEqual([...LIFECYCLE_STATES].slice(0, 7));
   });
 });

@@ -21,7 +21,16 @@
  *   keeps no node/edge state.  There is therefore no client-side graph
  *   mutation and nothing to persist — the server projection can never
  *   be dragged or edited away.
+ *
+ * Rendering prerequisites (review round 1): the module side-effect
+ * imports React Flow's required stylesheet
+ * (``@xyflow/react/dist/style.css`` — it carries the
+ * ``.react-flow__node`` / ``.react-flow__edge`` absolute-positioning
+ * rules) and the ``.trace-graph`` viewport is explicitly sized via
+ * :data:`TRACE_GRAPH_HEIGHT_PX`, so the projection has a box to paint
+ * into as soon as it is mounted.
  */
+import "@xyflow/react/dist/style.css";
 import { useMemo } from "react";
 import {
   Background,
@@ -40,6 +49,9 @@ export const TRACE_LAYOUT_X_GAP = 280;
 
 /** Vertical distance between nodes of the same level. */
 export const TRACE_LAYOUT_Y_GAP = 130;
+
+/** Height of the trace graph viewport in px (React Flow needs a box). */
+export const TRACE_GRAPH_HEIGHT_PX = 520;
 
 /** Data carried by one trace node in the React Flow projection. */
 export interface TraceNodeData extends Record<string, unknown> {
@@ -182,6 +194,7 @@ export function TraceGraph({ projection }: { projection: TraceProjection }) {
   return (
     <div
       className="trace-graph"
+      style={{ height: TRACE_GRAPH_HEIGHT_PX }}
       aria-label={`Autobuild trace graph for run ${projection.run_id ?? "unknown"}`}
     >
       <ReactFlow

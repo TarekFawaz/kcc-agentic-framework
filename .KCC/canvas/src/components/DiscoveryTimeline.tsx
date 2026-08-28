@@ -13,17 +13,25 @@
  * discovery, either by locking or by abandoning it, so no timeline
  * item carries ``aria-current``.
  */
-import type { LifecycleState } from "../types";
+import { LIFECYCLE_STATES, type LifecycleState } from "../types";
 
-/** The seven pre-lock discovery phases in canonical order. */
+/**
+ * The seven pre-lock discovery phases in canonical order.
+ *
+ * Derived from the canonical lifecycle state mirror
+ * (:data:`LIFECYCLE_STATES`): the discovery phases are exactly the
+ * first seven lifecycle states (INTAKE .. CONTRACT_REVIEW), before
+ * LOCKED.  Each member is indexed off the canonical source so the
+ * timeline can never drift from the runtime ordering.
+ */
 export const TIMELINE_PHASES = [
-  "INTAKE",
-  "DISCOVERY",
-  "PROTOTYPE_REVIEW",
-  "ARCHITECTURE",
-  "DE_RISK",
-  "READINESS",
-  "CONTRACT_REVIEW",
+  LIFECYCLE_STATES[0],
+  LIFECYCLE_STATES[1],
+  LIFECYCLE_STATES[2],
+  LIFECYCLE_STATES[3],
+  LIFECYCLE_STATES[4],
+  LIFECYCLE_STATES[5],
+  LIFECYCLE_STATES[6],
 ] as const;
 
 export type TimelinePhase = (typeof TIMELINE_PHASES)[number];
