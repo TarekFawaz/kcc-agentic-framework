@@ -35,6 +35,11 @@ Global Constraints):
   fences the live leases and freezes the time budgets but NEVER releases
   money/rate; resume re-dispatches the retained set with fresh lease
   generations and no new reservation (still exactly once).
+- **Operations fail closed on the attempt identity**: an operation
+  belongs to the task's current lease, so a lease that lapsed (or was
+  fenced) refuses the operation with :class:`StaleLeaseOperation` before
+  the gate evaluates or executes anything -- no lapsed-but-unswept window
+  for destructive operations.
 - The **wave-gate deviation review** is deterministic: 100% of declared
   deviations plus every production/destructive operation are always
   reviewed (mandatory), at least 20% of the remaining evidence is sampled
@@ -112,6 +117,17 @@ class StaleLeaseReport(ControllerError):
 
     A stale/fenced/expired lease is never a retry: the attempt is no longer
     accounted for, so the report cannot advance (fail closed).
+    """
+
+
+class StaleLeaseOperation(ControllerError):
+    """Raised when an operation targets a task whose lease is not live.
+
+    A lease whose TTL has lapsed (or that was fenced) is no longer
+    accounted for even before the tick sweep runs: the destructive
+    operation is refused (fail closed) instead of executing inside the
+    lapsed-but-unswept window, and only the sweep may release the attempt
+    reservation.
     """
 
 
@@ -1001,6 +1017,13 @@ class AutobuildController:
         raises :class:`~kcc_autobuild.tool_gate.PolicyDenied` and AMBIGUOUS
         raises :class:`~kcc_autobuild.tool_gate.AmbiguousPolicy` back to KCC
         machine interpretation (never a direct user prompt).
+
+        Fail closed on the attempt identity first: the operation belongs to
+        the task's current lease, and a lease that lapsed (or was fenced)
+        is no longer accounted for even before the tick sweep runs, so the
+        operation is refused with :class:`StaleLeaseOperation` before the
+        gate evaluates or executes anything (no lapsed-but-unswept window
+        for destructive operations).
         """
         if task_id not in self._plans:
             raise UnknownTask(task_id)
@@ -1008,7 +1031,19 @@ class AutobuildController:
             raise ControllerError(
                 f"task {task_id!r} is not running; operations belong to an attempt"
             )
-        _as_utc(now if now is not None else datetime.now(timezone.utc), "now")
+        now = _as_utc(
+            now if now is not None else datetime.now(timezone.utc), "now"
+        )
+        current = self.leases.current_lease(task_id)
+        if current is None or not self.leases.lease_is_live(
+            current.lease_id, self.run_id, now=now
+        ):
+            raise StaleLeaseOperation(
+                f"task {task_id!r} lease "
+                f"{current.lease_id if current is not None else None!r} is not"
+                " live -- the attempt is no longer accounted for; the"
+                " operation is refused until a fresh lease is claimed"
+            )
         # The gate is the ONLY evaluator+executor: one evaluation per
         # operation (never double-evaluate for the audit) and the evidence
         # record is written only AFTER an ALLOWED execution -- a DENIED or

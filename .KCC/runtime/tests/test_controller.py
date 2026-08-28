@@ -32,7 +32,11 @@ Behaviors under contract:
 * the wave-gate deviation review is deterministic: 100% of declared
   deviations plus all production/destructive operations are always
   reviewed, at least 20% of the remaining evidence is sampled, and a
-  nonempty wave always yields at least one reviewed item.
+  nonempty wave always yields at least one reviewed item;
+* operations fail closed on the attempt identity: a destructive operation
+  on a task whose lease lapsed (or was fenced) is refused with
+  :class:`~kcc_autobuild.controller.StaleLeaseOperation` before the gate
+  evaluates or executes anything -- there is no lapsed-but-unswept window.
 
 Prescribed scenarios under test: dispatch/advance; an expired lease
 releases its reservations and freezes the time budget; deviation sampling.
@@ -62,6 +66,7 @@ from kcc_autobuild.controller import (
     ControllerError,
     NotBuilding,
     ReportMismatch,
+    StaleLeaseOperation,
     StaleLeaseReport,
     TaskPlan,
     TaskTimeBudget,
@@ -1339,3 +1344,89 @@ def test_controller_rejects_unconfigured_provider_references_eagerly(tmp_path):
     )
     with pytest.raises(ControllerError):
         _make_controller(store, tasks={"T1": bad})
+
+
+# ---------------------------------------------------------------------------
+# Fix round 2 (review): operations fail closed on a stale lease
+# ---------------------------------------------------------------------------
+
+
+def test_operation_refused_when_lease_lapsed_but_not_yet_swept(tmp_path):
+    """A destructive operation never executes on a stale attempt.
+
+    The lease TTL lapsed but the next tick (the sweep) has not run yet:
+    the controller status still reports the task RUNNING (nothing has
+    frozen it) while the lease is already stale. The controller must fail
+    closed and refuse the operation BEFORE the gate evaluates or executes
+    anything -- there is no lapsed-but-unswept window for destructive
+    operations -- and only the sweep may release the reservation.
+    """
+    store = _make_store(tmp_path)
+    bundle = sign_policy_bundle(
+        (
+            PolicyRule(
+                operation="deploy",
+                resource="prod/analysis",
+                data_class="public",
+                decision=PolicyDecision.ALLOWED,
+            ),
+        ),
+        POLICY_SECRET,
+    )
+    evaluator = _CountingEvaluator(bundle, POLICY_SECRET)
+    executed: list[str] = []
+    gate = PolicyToolGate(
+        evaluator,
+        executor=lambda operation, token: executed.append(token)
+        or f"executed:{token}",
+    )
+    controller = _make_controller(
+        store,
+        tasks={"T1": _plans()["T1"]},
+        lease_ttl=timedelta(seconds=60),
+        policy=gate,
+    )
+    controller.tick(T0)
+    assert controller.budget.reservations == {"T1": Decimal("3.00")}
+    assert sorted(controller.rate.reservations) == ["T1"]
+
+    # Inside the lapsed-but-unswept window the task still looks RUNNING
+    # (no sweep yet) even though the lease is already stale.
+    later = T0 + timedelta(seconds=120)
+    assert not controller.leases.lease_is_live(
+        "LEASE-RUN-001-T1-1", "RUN-001", now=later
+    )
+    assert controller.snapshot(later).running == ("T1",)
+
+    with pytest.raises(StaleLeaseOperation):
+        controller.execute_operation(
+            Operation("deploy", "prod/analysis", "public"),
+            task_id="T1",
+            production=True,
+            now=later,
+        )
+    # Fail closed: nothing evaluated, nothing executed and no destructive
+    # evidence recorded; the reservation is still exactly once (only the
+    # sweep owns the release).
+    assert evaluator.calls == 0
+    assert executed == []
+    assert controller.budget.reservations == {"T1": Decimal("3.00")}
+    assert controller.budget.reserved == Decimal("3.00")
+    assert sorted(controller.rate.reservations) == ["T1"]
+
+    # The next tick sweeps the stale lease exactly once and re-dispatches
+    # with a fresh, live lease generation.
+    result = controller.tick(later)
+    assert result.frozen == ("T1",)
+    assert result.released == ("T1",)
+    assert result.dispatched[0].lease.lease_id == "LEASE-RUN-001-T1-2"
+    assert controller.leases.lease_is_live(
+        "LEASE-RUN-001-T1-2", "RUN-001", now=later
+    )
+    # The refused operation never became wave evidence.
+    review_events = [
+        event
+        for event in store.list_events("RUN-001")
+        if event.kind == "wave.review"
+    ]
+    assert review_events == []
