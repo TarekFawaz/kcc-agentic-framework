@@ -308,6 +308,34 @@ AutoPolicy typo aliases accepted: `--slient` -> `--silent`,
 
 ---
 
+## Autobuild (opt-in)
+
+`auto` is the Human-On-The-Loop lifecycle. Autobuild is a separate,
+**opt-in** workflow for contract-locked autonomous builds: deeper
+discovery before implementation (H1 scope, H2 prototype, final LOCK),
+then the locked Build Contract is handed to the autonomous controller.
+Starting an autobuild run never changes any `auto` semantics above.
+
+| Command | Meaning |
+|---|---|
+| `autobuild <idea-or-path>` | Start a new autobuild run from an idea description or a file/folder path. |
+| `autobuild <run-id>` | Resume RUN from durable state and continue at the first incomplete action - no completed task is repeated. |
+| `autobuild --status <run-id>` | Show the run's durable lifecycle state. |
+| `autobuild --pause <run-id>` | Durable `PAUSED` first, then drain/fence/freeze with a persisted checkpoint. |
+| `autobuild --resume <run-id>` | `PAUSED -> RESUMING -> BUILDING` from durable state. |
+
+Run states: `BLOCKED` **auto-rechecks** until the external condition
+clears (real evidence only - never a local pretend-pass);
+`EXTERNAL_WAIT` **tracks** external reviews (app-store review,
+third-party manual approval) without claiming completion; `HALTED`
+presents a **consolidated decision** and only ever interrupts the human
+outside the locked authority envelope. The operator reference is
+[docs/autobuild/operations.md](./docs/autobuild/operations.md);
+license and attribution baselines are in
+[docs/autobuild/licensing.md](./docs/autobuild/licensing.md).
+
+---
+
 ## The `auto` skill in depth
 
 `auto` is the Human-On-The-Loop entrypoint. It runs the full lifecycle for you
@@ -562,6 +590,8 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 - [Harness support](./docs/codex-claude-opencode-ollama.md) - Codex, Claude Code, OpenCode, generic, and Ollama outputs
 - [Autobuild harnesses and capability levels](./docs/autobuild/harnesses.md) - harness-neutral core, capability tiers, report parity, two-mode operation
 - [DeepSeek Harness (dsh) adapter](./docs/autobuild/deepseek-harness.md) - dsh sync, install, profile proof, and worker boundary
+- [Autobuild operations](./docs/autobuild/operations.md) - operator commands, pause/resume, BLOCKED auto-recheck, EXTERNAL_WAIT, HALTED
+- [Autobuild licensing and attribution](./docs/autobuild/licensing.md) - KCC custom license (GitHub `NOASSERTION`) + Superpowers MIT baselines
 - [Example solutions](./example-solutions.md) - full csvtojson CLI walkthrough, idea to deploy
 - [Alignment matrix](./docs/alignment-matrix.md) - implementation status vs KCC v0.4
 - [[AGENTS]] - the root entrypoint Codex / OpenCode load (full agent + skill catalog)

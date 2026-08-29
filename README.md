@@ -236,6 +236,24 @@ creation fans out one subagent per epic, and parallel windows open without the
 per-spec prompt (e.g. `auto <idea> --parallel`). See
 [QUICKSTART.md](./QUICKSTART.md#the-auto-skill-in-depth).
 
+### Autobuild (opt-in)
+
+Autobuild is a separate, **opt-in** workflow for contract-locked
+autonomous builds: it deepens discovery before implementation (H1 scope,
+H2 prototype, then final LOCK) and hands the locked Build Contract to
+the autonomous controller. It is not the `auto` entrypoint and it never
+changes `auto` semantics - `auto <idea>` stays the Human-On-The-Loop
+spec lifecycle described above.
+
+Start an autobuild run with `autobuild <idea-or-path>`; re-enter an
+existing run with `autobuild <run-id>` (resume RUN from durable state)
+and inspect or control it with `--status`, `--pause` and `--resume`.
+BLOCKED runs auto-recheck until the external condition clears;
+EXTERNAL_WAIT tracks external reviews without claiming completion;
+HALTED batches contract-external blockers into one consolidated decision
+and only ever interrupts outside the locked authority envelope. The
+operator reference is [docs/autobuild/operations.md](./docs/autobuild/operations.md).
+
 ## Source Package vs Generated Output
 
 The public source package should contain the framework source and docs:
@@ -303,6 +321,8 @@ under `docs/` instead of committing live harness folders at the root.
 | `docs/codex-claude-opencode-ollama.md` | Harness adapter overview for Codex, Claude Code, OpenCode, generic, and Ollama.                     |
 | `docs/autobuild/harnesses.md`          | Harness-neutral autobuild core: capability tiers, proof rules, report parity, and two-mode operation. |
 | `docs/autobuild/deepseek-harness.md`   | DeepSeek Harness (dsh) adapter: sync, install, profile proof, and worker boundary.                  |
+| `docs/autobuild/operations.md`         | Autobuild operator commands and run states: pause/resume, BLOCKED auto-recheck, EXTERNAL_WAIT, HALTED. |
+| `docs/autobuild/licensing.md`          | Immutable license/attribution baselines: KCC custom license (GitHub `NOASSERTION`) and Superpowers MIT. |
 | `docs/alignment-matrix.md`             | Honest status matrix against the KCC v0.4 operating-model primitives.                               |
 | `docs/diagrams/`                       | Animated GIF, Mermaid, and draw.io sources.                                                         |
 | `QUICKSTART.md`                        | Guided first run.                                                                                   |
@@ -388,6 +408,8 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 | Codex, Claude Code, OpenCode, and Ollama | [docs/codex-claude-opencode-ollama.md](./docs/codex-claude-opencode-ollama.md) |
 | Autobuild harnesses and capability levels | [docs/autobuild/harnesses.md](./docs/autobuild/harnesses.md) |
 | DeepSeek Harness (dsh) adapter | [docs/autobuild/deepseek-harness.md](./docs/autobuild/deepseek-harness.md) |
+| Autobuild operator commands and run states | [docs/autobuild/operations.md](./docs/autobuild/operations.md) |
+| Autobuild license and attribution baselines | [docs/autobuild/licensing.md](./docs/autobuild/licensing.md) |
 
 ## Contributing
 
@@ -410,4 +432,4 @@ Start with [CONTRIBUTING.md](./CONTRIBUTING.md) and
 
 ## License
 
-KCC framework (c) 2026 Tarek Fawaz, [tikasway.dev](https://tikasway.dev/kcc). Licensed under the terms in [LICENSE](./LICENSE).
+KCC framework (c) 2026 Tarek Fawaz, [tikasway.dev](https://tikasway.dev/kcc). Licensed under the terms in [LICENSE](./LICENSE). The immutable license and attribution baselines (KCC custom license with GitHub `NOASSERTION`, Superpowers MIT) are recorded in [docs/autobuild/licensing.md](./docs/autobuild/licensing.md).
