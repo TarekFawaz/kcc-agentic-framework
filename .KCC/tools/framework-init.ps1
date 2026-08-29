@@ -60,6 +60,14 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     PRINTS the install command: framework-init never silently mutates
     DSH_HOME (Plan 08, Task 5).
 
+.PARAMETER EnableAutobuild
+    OPT-IN autobuild runtime check (Plan 07, Task 5). With this switch
+    framework-init checks the interpreter is Python 3.11+
+    ($env:KCC_AUTOBUILD_PYTHON or python3) and PRINTS the runtime install
+    command only - it never installs anything. Without the switch plain
+    KCC init continues unchanged even when Python 3.11+ or the runtime is
+    absent.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 -Harness codex
 
@@ -79,7 +87,9 @@ param(
 
     [switch]$InstallCodexPrompts,
 
-    [switch]$InstallDshProfile
+    [switch]$InstallDshProfile,
+
+    [switch]$EnableAutobuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,6 +150,32 @@ if ($Harness -in @('dsh', 'all')) {
     } else {
         Write-Host '[dsh      ] profile installer NOT executed (re-run with -InstallDshProfile to install).'
     }
+}
+
+Write-Host ''
+if (-not $EnableAutobuild) {
+    Write-Host 'Autobuild runtime not enabled - existing KCC init continues unchanged.'
+    Write-Host 'Re-run with -EnableAutobuild to check Python 3.11+ and print the runtime install command.'
+}
+else {
+    Write-Host 'Autobuild runtime (optional): Python 3.11+ check - print install command only, never execute.'
+    $python = if ($env:KCC_AUTOBUILD_PYTHON) { $env:KCC_AUTOBUILD_PYTHON } else { 'python3' }
+    $runtimeDir = Join-Path $RepoRoot '.KCC/runtime'
+    $pyVersion = $null
+    if (Get-Command $python -ErrorAction SilentlyContinue) {
+        $pyVersion = (& $python -c 'import sys; print(".".join(str(p) for p in sys.version_info[:3]))' 2>$null | Select-Object -First 1)
+    }
+    if ($pyVersion -and ($pyVersion -match '^(\d+)\.(\d+)\.(\d+)') -and ([version]$pyVersion -ge [version]'3.11')) {
+        Write-Host "[autobuild] Autobuild runtime ready: Python $pyVersion detected (>= 3.11). Install command (printed only, never executed):"
+    }
+    elseif ($pyVersion) {
+        Write-Host "[autobuild] Python $pyVersion detected; Autobuild runtime requires Python 3.11+ (install command printed only, never executed):"
+    }
+    else {
+        Write-Host "[autobuild] $python not found; Autobuild runtime requires Python 3.11+ (install command printed only, never executed):"
+    }
+    Write-Host "[autobuild]   $python -m pip install -e '$runtimeDir'"
+    Write-Host '[autobuild] No silent install: existing KCC init continues even when the runtime is missing.'
 }
 
 Write-Host ''

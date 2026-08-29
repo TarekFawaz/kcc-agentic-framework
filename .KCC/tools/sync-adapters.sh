@@ -645,7 +645,9 @@ name = "spec-driven-framework"
 entrypoint = "AGENTS.md"
 EOF
   fi
-  (( INSTALL_CODEX_SKILLS == 1 )) && echo "[codex    ] project-local Codex skills initialized"
+  if [[ "$INSTALL_CODEX_SKILLS" == "1" ]]; then
+    echo "[codex    ] project-local Codex skills initialized"
+  fi
 }
 
 sync_opencode() {

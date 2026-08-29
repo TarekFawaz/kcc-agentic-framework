@@ -31,6 +31,18 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
                      boundary text (native read-only allowlist direct, fail
                      closed, exact kcc_policy_exec/kcc_policy_write, KCC owns
                      controller/status/resume); root AGENTS.md must exist.
+      autobuild    - adapter compatibility + bootstrap optional runtime: every
+                     generated surface (.codex/.claude/.agents/.opencode/.dsh)
+                     must carry the autobuild outputs (autobuild,
+                     autobuild-task-execute) and keep the legacy auto skill;
+                     once any surface advertises autobuild output the
+                     .KCC/runtime package must exist (framework-init
+                     -EnableAutobuild only PRINTS the Python 3.11+ check and
+                     install command - never a silent install).
+      secrets      - durable state (coordination/, Traces/, memory/) carries
+                     secret references only; any plaintext secret finding
+                     (sk-..., AKIA..., gh[pousr]_..., xox..., PEM private key)
+                     is an error.
 
     Read-only. PowerShell 5.1 compatible. No && operator.
 
@@ -38,7 +50,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     Workspace root to check. Defaults to the parent of .KCC.
 
 .PARAMETER Scope
-    Which checks to run: all | architecture | linking | trace | memory | token | harness.
+    Which checks to run: all | architecture | linking | trace | memory | token | harness | autobuild | secrets.
     The architecture gate in `auto` calls `-Scope architecture`.
 
 .PARAMETER Json
@@ -53,7 +65,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [string]$RepoRoot,
-    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory', 'token', 'harness')]
+    [ValidateSet('all', 'architecture', 'linking', 'trace', 'memory', 'token', 'harness', 'autobuild', 'secrets')]
     [string]$Scope = 'all',
     [switch]$Json
 )
@@ -107,6 +119,27 @@ $tracesDir = Join-Path $RepoRoot 'Traces'
 $memoryDir = Join-Path $RepoRoot 'memory'
 $dshSkillsDir = Join-Path $RepoRoot '.dsh/skills'
 $capSkillsDir = Join-Path $RepoRoot '.KCC/capabilities/skills'
+
+# Plan 07, Task 5 -- adapter compatibility + bootstrap optional runtime.
+# Generated adapter surfaces (.codex, .claude, .agents, .opencode, .dsh)
+# must carry the autobuild outputs (autobuild, autobuild-task-execute) and
+# keep the legacy auto skill; once any surface advertises autobuild output,
+# the autobuild runtime must exist. framework-init -EnableAutobuild only
+# PRINTS the Python 3.11+ check and the install command - the runtime is
+# opt-in and never installed silently, so plain KCC init still continues
+# without it.
+$AutobuildSurfaces = @('codex', 'claude', 'agents', 'opencode', 'dsh')
+$AutobuildMarker = 'Run the approved autobuild discovery workflow'
+$TaskExecuteMarker = 'Execute one bounded autobuild task'
+$LegacyAutoMarker = 'Human-On-The-Loop'
+$AutobuildRuntimePyproject = Join-Path $RepoRoot '.KCC/runtime/pyproject.toml'
+$AutobuildRuntimePkg = Join-Path $RepoRoot '.KCC/runtime/src/kcc_autobuild'
+
+# Durable-state secret scan surface (Plan 07, Task 5): plaintext secret
+# material in coordination/, Traces/ or memory/ is a finding; secret
+# REFERENCES (vault://, env://, keychain://) are the only allowed form.
+$SecretDirs = @('coordination', 'Traces', 'memory')
+$SecretRawPattern = 'sk-[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
 # ---------------------------------------------------------------------------
 # ARCHITECTURE
@@ -341,12 +374,67 @@ function Invoke-HarnessChecks {
     }
 }
 
+function Invoke-AutobuildChecks {
+    # Plan 07, Task 5 -- autobuild adapter compatibility + optional runtime.
+    # Judges only what exists (the same skip-if-absent rule as the other
+    # scopes): a generated surface must carry the autobuild outputs
+    # (autobuild, autobuild-task-execute) and keep the legacy auto skill;
+    # once any surface advertises autobuild output the runtime must exist.
+    $anySurface = $false
+    foreach ($surface in $AutobuildSurfaces) {
+        $surfaceDir = Join-Path $RepoRoot (".$surface")
+        if (-not (Test-Path -LiteralPath $surfaceDir)) { continue }
+        $anySurface = $true
+        foreach ($req in @(
+                @('autobuild', 'AUTOBUILD-002', 'AUTOBUILD-006', $AutobuildMarker, 'autobuild output'),
+                @('autobuild-task-execute', 'AUTOBUILD-003', 'AUTOBUILD-007', $TaskExecuteMarker, 'autobuild-task-execute output'),
+                @('auto', 'AUTOBUILD-004', 'AUTOBUILD-005', $LegacyAutoMarker, 'legacy auto output')
+            )) {
+            $skill = $req[0]
+            $spath = Join-Path $surfaceDir ("skills/$skill/SKILL.md")
+            if (-not (Test-Path -LiteralPath $spath)) {
+                Add-Violation $req[1] 'error' 'sync-adapters' ("Generated .{0} surface is missing the {1} - rerun sync-adapters (the surface must carry autobuild outputs and keep legacy auto)." -f $surface, $req[4])
+            }
+            else {
+                $text = Read-Text $spath
+                if ($text.IndexOf($req[3]) -lt 0) {
+                    Add-Violation $req[2] 'error' 'sync-adapters' ("{0} lost its {1} text - regenerate via sync-adapters." -f (Get-RelPath $spath), $req[4])
+                }
+            }
+        }
+    }
+
+    if ($anySurface) {
+        if (-not (Test-Path -LiteralPath $AutobuildRuntimePyproject) -or (-not (Test-Path -LiteralPath (Join-Path $AutobuildRuntimePkg '__init__.py')))) {
+            Add-Violation 'AUTOBUILD-001' 'error' 'framework-init' 'Autobuild outputs exist but the autobuild runtime is missing (.KCC/runtime) - run framework-init -EnableAutobuild (checks Python 3.11+ and prints the install command only) or remove the generated autobuild outputs.'
+        }
+    }
+}
+
+function Invoke-SecretChecks {
+    # Durable-state secret scan: coordination/, Traces/, memory/ must carry
+    # secret REFERENCES only, never raw material (fail closed, like the
+    # handoff-pack rule the runtime enforces).
+    foreach ($dirName in $SecretDirs) {
+        $dir = Join-Path $RepoRoot $dirName
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($file in @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue)) {
+            $text = Read-Text $file.FullName
+            foreach ($m in [regex]::Matches($text, $SecretRawPattern)) {
+                Add-Violation 'SECRET-001' 'error' 'framework-init' ("{0} contains a plaintext secret finding '{1}' - durable state must carry references only (vault://, env://, keychain://)." -f (Get-RelPath $file.FullName), $m.Value)
+            }
+        }
+    }
+}
+
 if ($Scope -eq 'all' -or $Scope -eq 'architecture') { Invoke-ArchitectureChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'linking') { Invoke-LinkingChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'trace') { Invoke-TraceChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'memory') { Invoke-MemoryChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'token') { Invoke-TokenChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'harness') { Invoke-HarnessChecks }
+if ($Scope -eq 'all' -or $Scope -eq 'autobuild') { Invoke-AutobuildChecks }
+if ($Scope -eq 'all' -or $Scope -eq 'secrets') { Invoke-SecretChecks }
 
 $errors = @($violations | Where-Object { $_.severity -eq 'error' })
 $warnings = @($violations | Where-Object { $_.severity -eq 'warning' })

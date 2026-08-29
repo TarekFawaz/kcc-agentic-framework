@@ -5,7 +5,7 @@
 # Mirror of check-run-conformance.ps1. Read-only.
 #
 # Usage:
-#   bash .KCC/tools/check-run-conformance.sh [--repo-root PATH] [--scope all|architecture|linking|trace|memory|token|harness]
+#   bash .KCC/tools/check-run-conformance.sh [--repo-root PATH] [--scope all|architecture|linking|trace|memory|token|harness|autobuild|secrets]
 #
 # Exit code 1 if any error-severity violation is found, else 0.
 
@@ -219,6 +219,80 @@ DSH_BOUNDARY_MARKERS=(
   'Cordis'
 )
 
+# Plan 07, Task 5 -- adapter compatibility + bootstrap optional runtime.
+# Generated adapter surfaces (`.codex`, `.claude`, `.agents`, `.opencode`,
+# `.dsh`) must carry the autobuild outputs (`autobuild`,
+# `autobuild-task-execute`) and keep the legacy `auto` skill; once any
+# surface advertises autobuild output, the autobuild runtime must exist
+# (framework-init --enable-autobuild only PRINTS the Python 3.11+ check and
+# the install command - the runtime is opt-in and never installed silently,
+# so plain KCC init still continues without it).
+AUTOBUILD_SURFACES=(codex claude agents opencode dsh)
+AUTOBUILD_MARKER='Run the approved autobuild discovery workflow'
+TASK_EXECUTE_MARKER='Execute one bounded autobuild task'
+LEGACY_AUTO_MARKER='Human-On-The-Loop'
+AUTOBUILD_RUNTIME_PYPROJECT="$REPO_ROOT/.KCC/runtime/pyproject.toml"
+AUTOBUILD_RUNTIME_PKG="$REPO_ROOT/.KCC/runtime/src/kcc_autobuild"
+
+# Durable-state secret scan surface (Plan 07, Task 5): plaintext secret
+# material in coordination/, Traces/ or memory/ is a finding; secret
+# REFERENCES (vault://, env://, keychain://) are the only allowed form.
+SECRET_DIRS=(coordination Traces memory)
+SECRET_RAW_PATTERN='sk-[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+check_autobuild() {
+  # Autobuild adapter compatibility. Judges only what exists (same
+  # skip-if-absent rule as the other scopes): a generated surface must carry
+  # the autobuild outputs and keep legacy auto; nothing to judge when no
+  # surface was generated.
+  local surface skill spath any_surface=0 marker stub_code label code
+  for surface in "${AUTOBUILD_SURFACES[@]}"; do
+    [ -d "$REPO_ROOT/.$surface" ] || continue
+    any_surface=1
+    for skill in autobuild autobuild-task-execute auto; do
+      spath="$REPO_ROOT/.$surface/skills/$skill/SKILL.md"
+      case "$skill" in
+        autobuild) marker="$AUTOBUILD_MARKER"; stub_code="AUTOBUILD-006"; label='autobuild output' ;;
+        autobuild-task-execute) marker="$TASK_EXECUTE_MARKER"; stub_code="AUTOBUILD-007"; label='autobuild-task-execute output' ;;
+        auto) marker="$LEGACY_AUTO_MARKER"; stub_code="AUTOBUILD-005"; label='legacy auto output' ;;
+      esac
+      if [ ! -f "$spath" ]; then
+        case "$skill" in
+          autobuild) code="AUTOBUILD-002" ;;
+          autobuild-task-execute) code="AUTOBUILD-003" ;;
+          auto) code="AUTOBUILD-004" ;;
+        esac
+        violation "$code" "error" "sync-adapters" "Generated .$surface surface is missing the $label - rerun sync-adapters (the surface must carry autobuild outputs and keep legacy auto)."
+      else
+        grep -qF "$marker" "$spath" || violation "$stub_code" "error" "sync-adapters" "$(rel "$spath") lost its $label text - regenerate via sync-adapters."
+      fi
+    done
+  done
+
+  if [ "$any_surface" = "1" ]; then
+    if [ ! -f "$AUTOBUILD_RUNTIME_PYPROJECT" ] || [ ! -f "$AUTOBUILD_RUNTIME_PKG/__init__.py" ]; then
+      violation "AUTOBUILD-001" "error" "framework-init" "Autobuild outputs exist but the autobuild runtime is missing (.KCC/runtime) - run framework-init --enable-autobuild (checks Python 3.11+ and prints the install command only) or remove the generated autobuild outputs."
+    fi
+  fi
+}
+
+check_secrets() {
+  # Durable-state secret scan: coordination/, Traces/, memory/ must carry
+  # secret REFERENCES only, never raw material (fail closed, like the
+  # handoff-pack rule the runtime enforces).
+  local dir
+  for dir in "${SECRET_DIRS[@]}"; do
+    [ -d "$REPO_ROOT/$dir" ] || continue
+    while IFS= read -r match; do
+      [ -z "$match" ] && continue
+      local f lineno
+      f="${match%%:*}"
+      lineno="${match#*:}"
+      violation "SECRET-001" "error" "framework-init" "$(rel "$f"):$lineno contains a plaintext secret finding - durable state must carry references only (vault://, env://, keychain://)."
+    done < <(grep -rnaE "$SECRET_RAW_PATTERN" "$REPO_ROOT/$dir" 2>/dev/null || true)
+  done
+}
+
 check_harness() {
   # Generated harness surface conformance. Judges only what exists (same
   # skip-if-absent rule as the other scopes): when a .dsh surface has been
@@ -268,13 +342,15 @@ echo "KCC run conformance: $REPO_ROOT  (scope: $SCOPE)"
 echo ""
 
 case "$SCOPE" in
-  all) check_architecture; check_linking; check_trace; check_memory; check_token; check_harness ;;
+  all) check_architecture; check_linking; check_trace; check_memory; check_token; check_harness; check_autobuild; check_secrets ;;
   architecture) check_architecture ;;
   linking) check_linking ;;
   trace) check_trace ;;
   memory) check_memory ;;
   token) check_token ;;
   harness) check_harness ;;
+  autobuild) check_autobuild ;;
+  secrets) check_secrets ;;
   *) echo "unknown scope: $SCOPE" >&2; exit 2 ;;
 esac
 
