@@ -1,0 +1,102 @@
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Autobuild runtime + evaluation suite (Plan 07, Task 7: CI + final acceptance).
+#
+# Three contract jobs:
+#   runtime-tests        Python 3.11/3.12 runtime + harness suites
+#   canvas-tests         Canvas vitest, production build, fixture-backed E2E
+#   windows-conformance  Windows PowerShell adapter sync + conformance
+#
+# Rollout honesty (Plan 07 global constraints): this generic CI NEVER runs a
+# live DSH smoke and never produces DSH smoke evidence. Live DSH smoke is a
+# Plan 08 real-run artifact (coordination/autobuild/evaluations/dsh-smoke.json)
+# consumed by the runtime metrics (rollout eligibility R3, DSH_SMOKE_TTL
+# freshness window) at gate time. R3 additionally consumes FRESH Plan08 real
+# DSH smoke evidence; nothing in this workflow pretends live DSH exists - the
+# harness suite exercises DSH adapters against the deterministic fake only.
+
+name: Autobuild runtime and evaluation suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: autobuild-evaluation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-tests:
+    name: Runtime + harness tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install autobuild runtime (editable, test extra)
+        run: python -m pip install -e ".KCC/runtime[test]"
+      - name: Runtime suite (evaluation - exactly 30 scenarios, no skip/xfail)
+        run: python -m pytest .KCC/runtime/tests -q
+      - name: Harness suite (parity, adapters, bootstrap, fake-DSH smoke)
+        run: python -m pytest .KCC/runtime/tests/harnesses -q
+      - name: Adapter sync + conformance (shell, real repo surfaces)
+        run: |
+          bash .KCC/tools/sync-adapters.sh all
+          bash .KCC/tools/check-run-conformance.sh --scope autobuild
+          bash .KCC/tools/check-run-conformance.sh --scope harness
+          bash .KCC/tools/check-run-conformance.sh --scope secrets
+
+  canvas-tests:
+    name: Canvas unit tests, build and E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: .KCC/canvas
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: .KCC/canvas/package-lock.json
+      - name: Install locked canvas dependencies
+        run: npm ci
+      - name: Canvas unit/component tests (vitest)
+        run: npm test -- --run
+      - name: Canvas production build (tsc --noEmit + vite build)
+        run: npm run build
+      - name: Install Playwright chromium + system deps
+        run: npx playwright install --with-deps chromium
+      - name: Canvas E2E (deterministic fixture server serves dist/)
+        run: npm run test:e2e
+
+  windows-conformance:
+    name: Windows adapters and conformance (PowerShell)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install autobuild runtime (editable, test extra)
+        run: python -m pip install -e ".KCC/runtime[test]"
+      - name: Harness suite on Windows (PowerShell mirrors exercised)
+        run: python -m pytest .KCC/runtime/tests/harnesses -q
+      - name: Sync adapters across all five surfaces (PowerShell)
+        run: pwsh -NoProfile -File .KCC/tools/sync-adapters.ps1 -Harness all
+      - name: Conformance - adapter compatibility scope
+        run: pwsh -NoProfile -File .KCC/tools/check-run-conformance.ps1 -Scope autobuild
+      - name: Conformance - native DSH skills scope
+        run: pwsh -NoProfile -File .KCC/tools/check-run-conformance.ps1 -Scope harness
+      - name: Conformance - durable-state secret scan
+        run: pwsh -NoProfile -File .KCC/tools/check-run-conformance.ps1 -Scope secrets
