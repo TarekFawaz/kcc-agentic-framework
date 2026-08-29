@@ -34,9 +34,15 @@ honesty):
   drills from fresh-lease re-dispatches and unplanned post-lock prompts
   from the consolidated batch discipline (spec 18.1).
 * R3's live-DSH evidence is a ``HarnessSmokeEvidence`` record
-  (Plan 08, Task 7) -- generic CI never pretends live DSH exists, and a
-  smoke with any human prompt or secret finding can never satisfy the
-  gate even if a number claims otherwise.
+  (Plan 08, Task 7) -- generic CI never pretends live DSH exists: the
+  gate verifies the record's ``harness_id`` is the canonical ``dsh``
+  harness and that the record is inside the freshness window at gate
+  time, and a smoke with any human prompt or secret finding can never
+  satisfy the gate even if a number claims otherwise.
+* Stale-worker promotion counting follows the durable trace ORDER: a
+  terminal event is a promotion only when it arrives after a newer
+  dispatch for the same task (a result accepted while its generation was
+  current is not stale).
 * The canonical enum ``AUTO_PROVISION_AUTHORIZED`` is never renamed.
 
 Written first (strict TDD red phase) before ``metrics.py`` exists.
@@ -46,7 +52,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -56,7 +62,7 @@ from kcc_autobuild.evaluation import metrics as METRICS  # noqa: N814
 from kcc_autobuild.evaluation.runner import ScenarioResult, run_scenario
 from kcc_autobuild.evaluation.scenarios import ProjectClass
 from kcc_autobuild.harnesses.models import HarnessSmokeEvidence
-from kcc_autobuild.models import DependencyStatus
+from kcc_autobuild.models import DependencyStatus, RunEvent
 
 # ---------------------------------------------------------------------------
 # Shared evidence
@@ -69,7 +75,12 @@ ROLLBACK_DRILLS = 5
 
 
 def passing_dsh_smoke(**overrides) -> HarnessSmokeEvidence:
-    """One passing live DSH smoke record (Plan 08, Task 7 semantics)."""
+    """One passing live DSH smoke record (Plan 08, Task 7 semantics).
+
+    ``ran_at`` defaults to one hour before the test runs, so the record
+    is inside the R3 freshness window when the gate evaluates it with
+    the real clock.
+    """
     values = dict(
         harness_id="dsh",
         runs_requested=3,
@@ -86,7 +97,7 @@ def passing_dsh_smoke(**overrides) -> HarnessSmokeEvidence:
             "smoke://unauthorized-mutation-denied/raw-write",
             "smoke://unauthorized-mutation-denied/raw-bash",
         ],
-        ran_at=datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc),
+        ran_at=datetime.now(timezone.utc) - timedelta(hours=1),
     )
     values.update(overrides)
     return HarnessSmokeEvidence(**values)
@@ -175,6 +186,17 @@ def _r1_metrics() -> "METRICS.EvaluationMetrics":
 
 def _unmet(eligibility) -> tuple[str, ...]:
     return tuple(check.requirement for check in eligibility.checks if not check.met)
+
+
+def _task_event(kind: str, task_id: str, generation: int, at_seconds: int) -> RunEvent:
+    """One deterministic task event of a crafted durable trace (ordered)."""
+    return RunEvent(
+        run_id="run-1",
+        kind=kind,
+        at=datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+        + timedelta(seconds=at_seconds),
+        payload={"task_id": task_id, "generation": generation},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +296,48 @@ def test_collect_rejects_unknown_or_duplicate_scenario_ids(
     ]
     with pytest.raises(ValueError):
         METRICS.EvaluationMetrics.collect(duplicate)
+
+
+def test_stale_promotion_counting_is_order_sensitive(scenario_results) -> None:
+    """A result accepted while its lease generation was current is NOT stale.
+
+    The durable trace is an ordered event stream: a gen-1 result
+    accepted BEFORE the task was ever re-dispatched on a fresh lease was
+    current at acceptance time.  Counting must follow the trace order --
+    a terminal event is a stale-worker promotion only when it arrives
+    AFTER a newer dispatch for the same task.
+    """
+    events = (
+        _task_event("task.dispatch", "T-1", 1, 1),
+        _task_event("task.passed", "T-1", 1, 2),  # current when accepted
+        _task_event("task.dispatch", "T-1", 2, 3),  # re-dispatched later
+        _task_event("task.passed", "T-1", 2, 4),
+    )
+    metrics = METRICS.EvaluationMetrics.collect(
+        [dataclasses.replace(scenario_results[0], run_events=events)]
+    )
+    assert metrics.stale_worker_promotions == 0
+
+
+def test_stale_promotion_counts_a_result_from_a_superseded_lease(
+    scenario_results,
+) -> None:
+    """The actual stale-promotion case: the newer dispatch precedes the old result.
+
+    A terminal event whose generation is below the task's latest
+    dispatch generation AT THE MOMENT IT ARRIVES is a result accepted
+    from a superseded lease -- the fencer failed and the gate counts
+    exactly one promotion.
+    """
+    events = (
+        _task_event("task.dispatch", "T-1", 1, 1),
+        _task_event("task.dispatch", "T-1", 2, 2),  # superseded first
+        _task_event("task.passed", "T-1", 1, 3),  # stale result accepted
+    )
+    metrics = METRICS.EvaluationMetrics.collect(
+        [dataclasses.replace(scenario_results[0], run_events=events)]
+    )
+    assert metrics.stale_worker_promotions == 1
 
 
 # ---------------------------------------------------------------------------
@@ -387,21 +451,52 @@ def test_r2_denies_when_a_named_staging_class_never_staged() -> None:
     assert "staging_smoke_classes_named" in _unmet(eligibility)
 
 
-def test_r2_denies_when_all_named_classes_never_staged() -> None:
-    """The named classes are a hard requirement; other classes do not substitute."""
-    metrics = _full_metrics()
-    changed = _with_changed_evidence(
-        metrics,
-        lambda e: e
-        if e.project_class
-        not in (ProjectClass.WEB_APPLICATION,
-                ProjectClass.API_SERVICE,
-                ProjectClass.BROWSER_EXTENSION)
-        else e.model_copy(update={"staging_smoke": False}),
+def test_r2_refuses_staged_substitute_classes_for_the_named_ones() -> None:
+    """The named classes are a hard requirement -- other classes do not substitute.
+
+    The staged set here contains THREE non-named project classes, so the
+    ``staging_smoke_classes >= 3`` COUNT requirement is satisfied; the
+    gate must still deny because the three *named* classes (web app,
+    API-only, browser extension) never staged.  The count is not the
+    contract.
+    """
+    substitute_classes = (
+        ProjectClass.DATA_PIPELINE,
+        ProjectClass.CLI_LOCAL_AUTOMATION,
+        ProjectClass.INTERNAL_TOOL,
     )
-    eligibility = METRICS.eligible_for(changed, METRICS.RolloutStage.R2)
+    metrics = METRICS.EvaluationMetrics(
+        scenario_evidence=tuple(
+            METRICS.ScenarioAutonomyEvidence(
+                scenario_id=f"scenario{index}",
+                project_class=substitute_classes[(index - 1) % 3],
+                passed=True,
+                stale_worker_promotions=0,
+                budget_cap_breach=False,
+                policy_violation=False,
+                staging_smoke=True,
+                resume_drill=True,
+                unplanned_post_lock_prompts=0,
+            )
+            for index in range(1, 31)
+        ),
+        canary_projects=CANARY_PROJECTS,
+        rollback_drills=ROLLBACK_DRILLS,
+        native_harnesses=NATIVE_HARNESSES,
+        harness_parity_runs_passed=PARITY_RUNS_PASSED,
+        dsh_smoke=passing_dsh_smoke(),
+    )
+    eligibility = METRICS.eligible_for(metrics, METRICS.RolloutStage.R2)
     assert eligibility.eligible is False
     assert "staging_smoke_classes_named" in _unmet(eligibility)
+    # The count requirement IS met (three classes staged): the denial is
+    # about the named-class contract, not the count.
+    count_check = next(
+        check
+        for check in eligibility.checks
+        if check.requirement == "staging_smoke_classes_three"
+    )
+    assert count_check.met is True
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +600,69 @@ def test_r3_denies_a_smoke_with_any_human_prompt_or_secret() -> None:
         assert "dsh_live_smoke_passed" in _unmet(eligibility)
 
 
+def test_r3_refuses_a_passed_smoke_record_that_is_not_the_dsh_harness() -> None:
+    """Rollout honesty: generic CI must never pretend live DSH exists.
+
+    A ``HarnessSmokeEvidence`` record that passes every run/flag for a
+    DIFFERENT harness (codex, generic) is still NOT a live DSH smoke:
+    the gate requires the record's ``harness_id`` to be the canonical
+    dsh harness id, otherwise the evidence is refused even though the
+    record itself is a valid pass for its own harness.
+    """
+    for harness_id in ("codex", "generic"):
+        smoke = passing_dsh_smoke(harness_id=harness_id)
+        assert smoke.passed is True  # a valid pass... for that harness
+        eligibility = METRICS.eligible_for(
+            _full_metrics(dsh_smoke=smoke), METRICS.RolloutStage.R3
+        )
+        assert eligibility.eligible is False
+        assert "dsh_live_smoke_passed" in _unmet(eligibility)
+
+
+def test_r3_denies_a_stale_or_future_dsh_smoke_record() -> None:
+    """R3 consumes FRESH Plan08 live DSH smoke evidence (global constraint).
+
+    Freshness is measured from the record's ``ran_at`` against the gate
+    time: an expired record or one stamped in the future is refused even
+    when every run/flag passed -- a copied old record can never stand in
+    for a live DSH exercise at the moment the gate is evaluated.
+    """
+    now = datetime.now(timezone.utc)
+    stale = passing_dsh_smoke(
+        ran_at=now - METRICS.DSH_SMOKE_TTL - timedelta(hours=1)
+    )
+    future = passing_dsh_smoke(ran_at=now + timedelta(hours=1))
+    for smoke in (stale, future):
+        assert smoke.passed is True
+        eligibility = METRICS.eligible_for(
+            _full_metrics(dsh_smoke=smoke),
+            METRICS.RolloutStage.R3,
+            now=now,
+        )
+        assert eligibility.eligible is False
+        assert "dsh_live_smoke_passed" in _unmet(eligibility)
+
+
+def test_r3_accepts_a_fresh_dsh_smoke_at_gate_time() -> None:
+    """A fresh dsh-harness record inside the TTL satisfies the smoke gate."""
+    now = datetime.now(timezone.utc)
+    fresh = passing_dsh_smoke(ran_at=now - timedelta(minutes=30))
+    eligibility = METRICS.eligible_for(
+        _full_metrics(dsh_smoke=fresh),
+        METRICS.RolloutStage.R3,
+        now=now,
+    )
+    assert eligibility.eligible is True
+    assert "dsh_live_smoke_passed" not in _unmet(eligibility)
+
+
+def test_gate_freshness_clock_must_be_timezone_aware(full_metrics) -> None:
+    """The injected gate time is a clock, not a naive wall stamp."""
+    naive = datetime(2026, 8, 29, 12, 0)
+    with pytest.raises(ValueError):
+        METRICS.eligible_for(full_metrics, METRICS.RolloutStage.R3, now=naive)
+
+
 def test_r3_requires_r1_and_r2_controls_verbatim() -> None:
     """A metrics doc failing an R1 control cannot reach R3."""
     metrics = _full_metrics()
@@ -528,6 +686,28 @@ def test_unknown_stage_fails_closed(full_metrics) -> None:
         METRICS.eligible_for(full_metrics, "r4")
     with pytest.raises(ValueError):
         METRICS.eligible_for(full_metrics, "PRODUCTION")
+
+
+def test_eligible_for_accepts_canonical_string_stage(full_metrics) -> None:
+    """A canonical lowercase string resolves to the same gate as the enum."""
+    now = datetime.now(timezone.utc)
+    for value, stage in (
+        ("r1", METRICS.RolloutStage.R1),
+        ("r2", METRICS.RolloutStage.R2),
+        ("r3", METRICS.RolloutStage.R3),
+    ):
+        via_string = METRICS.eligible_for(full_metrics, value, now=now)
+        via_enum = METRICS.eligible_for(full_metrics, stage, now=now)
+        assert via_string.stage is stage
+        assert via_string.eligible == via_enum.eligible
+        assert via_string.checks == via_enum.checks
+
+
+def test_eligible_for_refuses_a_non_stage_type(full_metrics) -> None:
+    """Anything that is neither a RolloutStage nor a canonical string is refused."""
+    for wrong in (None, 3, ("r1",)):
+        with pytest.raises(TypeError):
+            METRICS.eligible_for(full_metrics, wrong)
 
 
 def test_stages_are_canonical_lowercase() -> None:

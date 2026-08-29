@@ -34,7 +34,7 @@ stage?** It never grants authority by itself.
 |---|---|
 | **R1** | 30/30 — exactly the 30 approved evaluation scenarios settle in their expected lifecycle states; zero stale-worker promotions; zero budget-cap breaches; zero policy violations. |
 | **R2** | R1, plus `staging_smoke_classes >= 3` covering the three named project classes: **web app, API-only, browser extension**. |
-| **R3** | R2, plus `canary_projects >= 5`; `unplanned_post_lock_prompts = 0`; `rollback_drills >= 5`; `resume_drills >= 5`; native harnesses include **`codex`** and **`dsh`**; `harness_parity_runs_passed >= 3`; `dsh_live_smoke_passed = true` — and the latest DSH smoke has **zero human prompts and zero secret findings**. |
+| **R3** | R2, plus `canary_projects >= 5`; `unplanned_post_lock_prompts = 0`; `rollback_drills >= 5`; `resume_drills >= 5`; native harnesses include **`codex`** and **`dsh`**; `harness_parity_runs_passed >= 3`; `dsh_live_smoke_passed = true` — the live DSH smoke evidence is a **fresh** record of the canonical **dsh** harness (inside the `DSH_SMOKE_TTL` freshness window at gate time) with **zero human prompts and zero secret findings**. |
 
 Stages are canonical lowercase values (`r1`/`r2`/`r3`); an unknown stage
 is refused by the gate, never guessed. Every requirement is reported
@@ -75,7 +75,14 @@ record, so no gap is silent and the evidence can be audited.
   record whose `passed` verdict is **derived** (all runs, status probe,
   authorized mutation, denied direct mutation, zero prompts/secrets).
   Generic CI never pretends live DSH exists; the gate fails closed
-  without a fresh record.
+  without a fresh record, and it verifies the record's **identity and
+  freshness** before it can ever satisfy `dsh_live_smoke_passed`:
+  `harness_id` must be the canonical **`dsh`** harness id (a passing
+  record for `codex`, `generic`, or any other harness is refused) and
+  the recorded `ran_at` must sit inside the `DSH_SMOKE_TTL` window
+  (24 h, mirroring the readiness-evidence freshness convention) at gate
+  time — so an old copied record can never stand in for a live DSH
+  exercise.
 
 ## R3 production authority
 

@@ -28,9 +28,11 @@ The module owns two things:
    * **R3** requires R2 plus ``canary_projects >= 5``,
      ``unplanned_post_lock_prompts = 0``, ``rollback_drills >= 5``,
      ``resume_drills >= 5``, native harnesses including ``codex`` and
-     ``dsh``, ``harness_parity_runs_passed >= 3`` and a passed live DSH
-     smoke whose latest run has zero human prompts and zero secret
-     findings.
+     ``dsh``, ``harness_parity_runs_passed >= 3`` and a FRESH passed
+     live DSH smoke -- the record's ``harness_id`` must be the
+     canonical dsh adapter and its ``ran_at`` must sit inside
+     :data:`DSH_SMOKE_TTL` at gate time -- with zero human prompts and
+     zero secret findings.
 
 Evidence definitions (each is observable, never inferred from a
 scenario name):
@@ -41,13 +43,15 @@ scenario name):
 * ``stale_worker_promotions`` -- a worker result from a superseded
   lease generation accepted by the controller.  The durable event trace
   exposes it as a terminal task event (``task.passed`` /
-  ``task.failed`` / ``task.blocked``) whose generation is below the
-  latest dispatch generation for the same task: a fenced worker's
-  result never advances the wave.  Scenario 19 observes the rejected
-  promotion (the runner counts the attempt); scenarios 4/13/23/25/26
-  observe interrupted sessions re-executing on fresh lease generations;
-  the accepted count is what the gate measures and is zero exactly when
-  every attempt was rejected before promotion.
+  ``task.failed`` / ``task.blocked``) that arrives AFTER a newer
+  dispatch generation for the same task: a fenced worker's result never
+  advances the wave, while a result accepted while its generation was
+  still current is never counted (trace order is the contract).
+  Scenario 19 observes the rejected promotion (the runner counts the
+  attempt); scenarios 4/13/23/25/26 observe interrupted sessions
+  re-executing on fresh lease generations; the accepted count is what
+  the gate measures and is zero exactly when every attempt was rejected
+  before promotion.
 * ``budget_cap_breach`` -- settled provider actuals above the run's
   hard cap **without** the E3 halt at settlement.  A
   ``budget.breach`` event means the ledger settled the books first and
@@ -78,7 +82,12 @@ scenario name):
   ``native_harnesses``, ``harness_parity_runs_passed``, ``dsh_smoke``)
   is the count/record captured by the rollout exercises and by the
   harness/parity conformance runs -- it is preserved verbatim and the
-  gate reads it as evidence, never as a claim.
+  gate reads it as evidence, never as a claim.  For the live DSH smoke
+  the gate additionally verifies the record's identity and freshness:
+  ``harness_id`` must be the canonical dsh adapter id and the recorded
+  ``ran_at`` must sit inside :data:`DSH_SMOKE_TTL` at gate time, so a
+  passed record for another harness (generic CI pretending) or a copied
+  old record can never satisfy ``dsh_live_smoke_passed``.
 
 R3 authority policy (documented in
 ``docs/autobuild/rollout.md``): an R3-eligible gate *proposes* the R3
@@ -93,6 +102,7 @@ The behavioral contract is owned by
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Iterator
@@ -101,6 +111,7 @@ from pydantic import ConfigDict, Field, field_validator
 
 from kcc_autobuild.evaluation.runner import ScenarioResult
 from kcc_autobuild.evaluation.scenarios import ProjectClass, SCENARIOS_BY_ID
+from kcc_autobuild.harnesses.dsh import DSH_HARNESS_ID
 from kcc_autobuild.harnesses.models import HarnessSmokeEvidence
 from kcc_autobuild.models import StrictModel
 
@@ -197,8 +208,19 @@ REQUIRED_STAGING_CLASSES: frozenset[ProjectClass] = frozenset(
 )
 """The three named staging smoke classes of the R2/R3 gate (design spec 6.1)."""
 
-REQUIRED_NATIVE_HARNESSES: frozenset[str] = frozenset({"codex", "dsh"})
+REQUIRED_NATIVE_HARNESSES: frozenset[str] = frozenset({"codex", DSH_HARNESS_ID})
 """Native harnesses the R3 gate requires (capability contract, Plan 08)."""
+
+DSH_SMOKE_TTL: timedelta = timedelta(hours=24)
+"""Freshness window of the live DSH smoke evidence at gate time.
+
+R3 consumes FRESH Plan08 real DSH smoke evidence (global constraints:
+rollout honesty): a record older than this window -- or stamped in the
+future -- can never satisfy ``dsh_live_smoke_passed``, so a copied old
+result cannot stand in for a live DSH exercise when the gate is
+evaluated.  The window mirrors the framework's readiness-evidence
+freshness convention (``readiness.DEFAULT_EVIDENCE_TTL``).
+"""
 
 
 class EvaluationMetrics(StrictModel):
@@ -368,16 +390,24 @@ def _evaluate(results: Iterable[ScenarioResult]) -> Iterator[ScenarioAutonomyEvi
 
 
 def _accepted_stale_promotions(result: ScenarioResult) -> int:
-    """Terminal task events on a superseded lease generation (accepted stale)."""
+    """Terminal task events accepted from a superseded lease generation.
+
+    The durable trace is an ORDERED event stream: a terminal event is a
+    stale-worker promotion only when it arrives AFTER a newer dispatch
+    for the same task (the controller accepted a result from a lease
+    generation that had already been replaced).  A result accepted while
+    its generation was still the latest -- even if the task is later
+    re-dispatched on a fresh generation -- was current at acceptance
+    time and is never counted.
+    """
     latest: dict[str, int] = {}
+    accepted = 0
     for event in result.run_events:
         if event.kind == "task.dispatch":
             task_id = event.payload["task_id"]
             generation = int(event.payload.get("generation", 0))
             latest[task_id] = max(latest.get(task_id, 0), generation)
-    accepted = 0
-    for event in result.run_events:
-        if event.kind in ("task.passed", "task.failed", "task.blocked"):
+        elif event.kind in ("task.passed", "task.failed", "task.blocked"):
             task_id = event.payload["task_id"]
             generation = int(event.payload.get("generation", 0))
             if generation < latest.get(task_id, 0):
@@ -421,6 +451,8 @@ def _unplanned_prompts(result: ScenarioResult) -> int:
 def eligible_for(
     metrics: EvaluationMetrics,
     stage: RolloutStage | str,
+    *,
+    now: datetime | None = None,
 ) -> RolloutEligibility:
     """Evaluate one cumulative rollout stage against the evidence.
 
@@ -430,6 +462,12 @@ def eligible_for(
     guessed.  Every requirement of the target stage is reported with a
     met/unmet verdict; R2 includes the R1 requirements and R3 includes
     the R1 and R2 requirements.
+
+    ``now`` is the gate evaluation time (timezone-aware; defaults to
+    the current UTC instant) and only governs the R3 live DSH smoke
+    freshness window -- the smoke record must have been produced inside
+    :data:`DSH_SMOKE_TTL` at gate time.  A naive/absent timezone is
+    refused.
     """
     if isinstance(stage, RolloutStage):
         resolved = stage
@@ -441,12 +479,19 @@ def eligible_for(
     else:
         raise TypeError(f"stage must be a RolloutStage, got {type(stage).__name__}")
 
+    if now is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    else:
+        now_utc = now.astimezone(timezone.utc)
+
     checks: list[GateCheck] = []
     _r1_checks(metrics, checks)
     if resolved is not RolloutStage.R1:
         _r2_checks(metrics, checks)
     if resolved is RolloutStage.R3:
-        _r3_checks(metrics, checks)
+        _r3_checks(metrics, checks, now_utc)
     return RolloutEligibility(
         stage=resolved,
         eligible=all(check.met for check in checks),
@@ -524,7 +569,9 @@ def _r2_checks(
 
 
 def _r3_checks(
-    metrics: EvaluationMetrics, checks: list[GateCheck]
+    metrics: EvaluationMetrics,
+    checks: list[GateCheck],
+    now: datetime,
 ) -> None:
     canary = metrics.canary_projects
     checks.append(
@@ -583,19 +630,60 @@ def _r3_checks(
         )
     )
     smoke = metrics.dsh_smoke
-    smoke_ok = (
-        smoke is not None
-        and smoke.passed
-        and smoke.human_prompts == 0
-        and smoke.secret_findings == 0
-    )
     if smoke is None:
+        smoke_ok = False
         smoke_detail = (
-            "NO fresh live DSH smoke evidence recorded "
+            "NO live DSH smoke evidence recorded "
             "(generic CI never pretends live DSH exists)"
         )
     else:
-        smoke_detail = (
+        age = now - smoke.ran_at
+        is_dsh = smoke.harness_id == DSH_HARNESS_ID
+        fresh = timedelta(0) <= age <= DSH_SMOKE_TTL
+        runs_ok = smoke.runs_passed == smoke.runs_requested
+        probes_ok = (
+            smoke.status_probe_passed
+            and smoke.authorized_mutation_passed
+            and smoke.unauthorized_mutation_denied
+        )
+        prompts_ok = smoke.human_prompts == 0
+        secrets_ok = smoke.secret_findings == 0
+        smoke_ok = (
+            is_dsh
+            and fresh
+            and runs_ok
+            and probes_ok
+            and prompts_ok
+            and secrets_ok
+        )
+        denials: list[str] = []
+        if not is_dsh:
+            denials.append(
+                f"record harness_id={smoke.harness_id!r} is not the live "
+                f"DSH harness {DSH_HARNESS_ID!r}"
+            )
+        if not fresh:
+            denials.append(
+                f"evidence age {age} is outside the {DSH_SMOKE_TTL} "
+                "freshness window at gate time"
+            )
+        if not runs_ok:
+            denials.append(
+                f"{smoke.runs_passed}/{smoke.runs_requested} runs passed "
+                "(all requested runs must pass)"
+            )
+        if not probes_ok:
+            denials.append(
+                "status probe, authorized mutation or denied direct "
+                "mutation failed"
+            )
+        if not prompts_ok:
+            denials.append(f"{smoke.human_prompts} human prompt(s) recorded")
+        if not secrets_ok:
+            denials.append(
+                f"{smoke.secret_findings} secret finding(s) recorded"
+            )
+        facts = (
             f"{smoke.runs_passed}/{smoke.runs_requested} runs passed, "
             f"status probe "
             f"{'passed' if smoke.status_probe_passed else 'failed'}, "
@@ -604,8 +692,10 @@ def _r3_checks(
             f"direct mutation denied: "
             f"{'yes' if smoke.unauthorized_mutation_denied else 'no'}, "
             f"{smoke.human_prompts} human prompt(s), "
-            f"{smoke.secret_findings} secret finding(s)"
+            f"{smoke.secret_findings} secret finding(s), "
+            f"harness_id={smoke.harness_id!r}, age={age}"
         )
+        smoke_detail = "; ".join([facts, *denials]) if denials else facts
     checks.append(
         GateCheck(
             requirement="dsh_live_smoke_passed",
@@ -613,14 +703,16 @@ def _r3_checks(
             detail=(
                 "live DSH smoke evidence: "
                 + smoke_detail
-                + " (contract: passed with zero human prompts and "
-                "zero secret findings)"
+                + " (contract: a fresh dsh-harness record inside the "
+                f"{DSH_SMOKE_TTL.total_seconds() / 3600:g}h window with "
+                "zero human prompts and zero secret findings)"
             ),
         )
     )
 
 
 __all__ = [
+    "DSH_SMOKE_TTL",
     "EvaluationMetrics",
     "GateCheck",
     "REQUIRED_NATIVE_HARNESSES",
