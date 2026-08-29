@@ -170,6 +170,11 @@ class ScenarioResult:
     store_decision: StoreDecision | None
     pending_billing: int
     provider_actual_cost: float
+    # Autonomy metrics evidence (Plan 07, Task 4): the per-run facts the
+    # metrics/rollout-gates module derives from -- the hard cap the ledger
+    # enforced and the outside-policy operations that actually executed.
+    budget_cap: Decimal
+    policy_violations: int
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +273,9 @@ class RunContext:
     deviation_violation: str | None = None
     store_decision: StoreDecision | None = None
 
+    policy: PolicyToolGate | None = None
+    policy_allowed_resources: frozenset[str] = frozenset()
+
     _verifier: EvidenceVerifier | None = None
 
     # -- wiring --------------------------------------------------------------
@@ -309,6 +317,9 @@ class RunContext:
             )
         self.plan = tasks
         self.budget_cap = cap if cap is not None else DEFAULT_BUDGET_CAP
+        self.policy, self.policy_allowed_resources = _policy_gate_and_resources(
+            self.world
+        )
         self.controller = AutobuildController(
             run_id=RUN_ID,
             store=self.store,
@@ -317,7 +328,7 @@ class RunContext:
             bridge=ExecutionBridge(),
             budget=BudgetLedger(self.budget_cap),
             rate=RateCapacityLedger({"llm": 32, "llm-aux": 32}),
-            policy=_policy_gate(self.world),
+            policy=self.policy,
             tasks=tasks,
         )
         self._verifier = EvidenceVerifier(
@@ -625,29 +636,41 @@ def _trace_graph(task_ids: tuple[str, ...]) -> TraceGraph:
     return TraceGraph(run_id=RUN_ID, nodes=nodes, edges=edges)
 
 
-def _policy_gate(world: FakeWorld) -> PolicyToolGate:
-    """Deterministic signed destructive-action policy gate over the world."""
-    bundle = sign_policy_bundle(
-        (
-            PolicyRule(
-                operation="migrate",
-                resource="prod/db/schema",
-                data_class="public",
-                decision=PolicyDecision.ALLOWED,
-            ),
+def _policy_gate_and_resources(world: FakeWorld) -> tuple[PolicyToolGate, frozenset[str]]:
+    """Deterministic signed destructive-action policy gate over the world.
+
+    Returns the gate and the resources the signed bundle actually
+    allows -- the per-run truth the policy-violation metric compares the
+    world's executed migrations against (a clean ``migration.commit`` on
+    a resource outside this set is a violation; a simulated
+    ``migration.commit_crash`` is exogenous target truth, not a
+    control-plane action).
+    """
+    rules = (
+        PolicyRule(
+            operation="migrate",
+            resource="prod/db/schema",
+            data_class="public",
+            decision=PolicyDecision.ALLOWED,
         ),
-        POLICY_SECRET,
     )
+    bundle = sign_policy_bundle(rules, POLICY_SECRET)
     counter = itertools.count(1)
 
     def token_factory() -> str:
         return f"decision-token-{next(counter)}"
 
-    return PolicyToolGate(
+    gate = PolicyToolGate(
         PolicyEvaluator(bundle, POLICY_SECRET),
         executor=lambda operation, token: world.migrate(operation.resource),
         token_factory=token_factory,
     )
+    allowed = frozenset(
+        rule.resource
+        for rule in bundle.rules
+        if rule.decision is PolicyDecision.ALLOWED
+    )
+    return gate, allowed
 
 
 # ---------------------------------------------------------------------------
@@ -1386,6 +1409,19 @@ def run_scenario(scenario_id: str, *, db_path: Path | str) -> ScenarioResult:
             for event in run_events
             if event.kind == "state.transition"
         )
+        policy_violations = 0
+        if ctx.policy is not None:
+            # An executed (non-crash) migration outside the signed
+            # ALLOWED resources is an outside-policy execution; the
+            # gate's audit trail already proves every DENIED attempt
+            # never reached the executor, so the world events are the
+            # execution truth.
+            policy_violations = sum(
+                1
+                for event in world.events
+                if event.kind == "migration.commit"
+                and event.payload.get("migration") not in ctx.policy_allowed_resources
+            )
         return ScenarioResult(
             scenario_id=scenario_id,
             run_id=RUN_ID,
@@ -1408,6 +1444,8 @@ def run_scenario(scenario_id: str, *, db_path: Path | str) -> ScenarioResult:
             provider_actual_cost=sum(
                 usage.cost_usd for usage in world.provider_actuals()
             ),
+            budget_cap=ctx.budget_cap,
+            policy_violations=policy_violations,
         )
     finally:
         store.close()

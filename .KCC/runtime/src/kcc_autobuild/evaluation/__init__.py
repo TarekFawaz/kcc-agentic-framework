@@ -18,6 +18,14 @@ from kcc_autobuild.evaluation.fake_world import (
     StoreDecision,
     WorldEvent,
 )
+from kcc_autobuild.evaluation.metrics import (
+    EvaluationMetrics,
+    GateCheck,
+    RolloutEligibility,
+    RolloutStage,
+    ScenarioAutonomyEvidence,
+    eligible_for,
+)
 from kcc_autobuild.evaluation.runner import (
     RUN_ID,
     SCENARIO_DRIVERS,
@@ -35,19 +43,25 @@ from kcc_autobuild.evaluation.scenarios import (
 __all__ = [
     "BillingRecord",
     "CIResult",
+    "EvaluationMetrics",
     "FakeWorld",
+    "GateCheck",
     "MigrationCrashError",
     "MigrationResult",
     "ProviderCallResult",
     "RUN_ID",
+    "RolloutEligibility",
+    "RolloutStage",
     "SCENARIOS_BY_ID",
     "SCENARIO_CATALOG",
     "SCENARIO_DRIVERS",
     "SCENARIO_INJECTIONS",
+    "ScenarioAutonomyEvidence",
     "ScenarioResult",
     "StoreDecision",
     "WorldEvent",
     "ProjectClass",
     "Scenario",
+    "eligible_for",
     "run_scenario",
 ]

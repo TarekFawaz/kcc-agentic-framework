@@ -176,6 +176,8 @@ bash .KCC/tools/check-run-conformance.sh --scope harness
 
 ## Related
 
+- [Autobuild autonomy metrics and rollout gates](./rollout.md) - R1/R2/R3
+  gate table and the R3 production-authority proposal policy
 - [DeepSeek harness](./deepseek-harness.md) - dsh adapter, sync,
   install, profile proof, and worker boundary details
 - [Codex, Claude Code, OpenCode, and Ollama](../codex-claude-opencode-ollama.md) - generated native surfaces
