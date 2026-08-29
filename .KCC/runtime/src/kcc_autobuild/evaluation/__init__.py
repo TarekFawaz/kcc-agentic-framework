@@ -18,6 +18,13 @@ from kcc_autobuild.evaluation.fake_world import (
     StoreDecision,
     WorldEvent,
 )
+from kcc_autobuild.evaluation.runner import (
+    RUN_ID,
+    SCENARIO_DRIVERS,
+    SCENARIO_INJECTIONS,
+    ScenarioResult,
+    run_scenario,
+)
 from kcc_autobuild.evaluation.scenarios import (
     SCENARIOS_BY_ID,
     SCENARIO_CATALOG,
@@ -32,10 +39,15 @@ __all__ = [
     "MigrationCrashError",
     "MigrationResult",
     "ProviderCallResult",
+    "RUN_ID",
     "SCENARIOS_BY_ID",
     "SCENARIO_CATALOG",
+    "SCENARIO_DRIVERS",
+    "SCENARIO_INJECTIONS",
+    "ScenarioResult",
     "StoreDecision",
     "WorldEvent",
     "ProjectClass",
     "Scenario",
+    "run_scenario",
 ]
