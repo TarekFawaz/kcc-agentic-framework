@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { HARNESSES, parse, UsageError, workspace } from "./args";
+import { HARNESSES, parse, target, UsageError, workspace } from "./args";
 import { doctor } from "./commands/doctor";
 import { init } from "./commands/init";
 import { runTailor } from "./commands/tailor";
@@ -40,7 +40,11 @@ Run
                       Supervise any harness command the same way.
   tool <name> [args]  Run any tool from .KCC/tools (bash-style flags on every OS).
 
-Common options: --dir <path> (workspace; default: current folder), --help, --version
+Target folder: every command works on the current folder by default.
+  Give another one as a path (kcc init claude C:\\work\\app, kcc tailor ../app,
+  kcc doctor ../app) or with --dir <path> (required form for run, limits, mcp, tool).
+  init creates the folder if it does not exist.
+Other options: --help, --version
 Docs: docs/cli.md`;
 
 async function main(argv: string[]): Promise<number> {
@@ -78,20 +82,24 @@ async function main(argv: string[]): Promise<number> {
       return run(rest);
     case "sync": {
       const { positionals, values } = parse(rest, [], ["dir", "harness"]);
-      const harness = (values.harness as string | undefined) ?? positionals[0] ?? "all";
+      const t = target(positionals, values.dir, true);
+      const harness = (values.harness as string | undefined) ?? t.harness ?? "all";
       if (!HARNESSES.includes(harness)) throw new UsageError(`unknown harness '${harness}'. Use one of: ${HARNESSES.join(", ")}`);
-      const root = workspace(values.dir);
+      const root = workspace(t.dir);
       return runTool(root, "sync-adapters", ["--harness", harness, "--repo-root", root]).status;
     }
     case "validate": {
-      const { values } = parse(rest, [], ["dir", "mode"]);
-      const root = workspace(values.dir);
+      const { positionals, values } = parse(rest, [], ["dir", "mode"]);
+      const root = workspace(target(positionals, values.dir, false).dir);
       return runTool(root, "validate-kcc", ["--repo-root", root, ...(typeof values.mode === "string" ? ["--mode", values.mode] : [])]).status;
     }
     case "tool": {
+      // `kcc tool --dir <path> <name> ...` targets another workspace.
+      let toolDir: string | undefined;
+      if (rest[0] === "--dir") toolDir = rest.splice(0, 2)[1];
       const [name, ...targs] = rest;
       if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) throw new UsageError("usage: kcc tool <name> [args]   (a script name from .KCC/tools, without extension)");
-      const r = runTool(workspace(undefined), name, targs);
+      const r = runTool(workspace(toolDir), name, targs);
       if (r.stderr) console.error(r.stderr);
       return r.status;
     }

@@ -29,59 +29,47 @@ updated source into the inline mermaid blocks in `README.md`.
 | [`kcc-operating-model.mmd`](./kcc-operating-model.mmd) | The full three-layer model: Kernel + Capabilities + Cells with the Inspector learning loop | `README.md` (operating model section) |
 | [`kcc-single-cell.mmd`](./kcc-single-cell.mmd) | One repository as one KCC cell: source-of-truth flow into harness outputs with meta-agent backchannel | `README.md` (single cell section) |
 
-## Draw.io (animated / exportable)
+## Draw.io (animated hero)
 
-`kcc-lifecycle.drawio` is the source file for the **animated lifecycle
-GIF** shown in the README header / LinkedIn post / website. It is XML
-authored in [draw.io](https://app.diagrams.net) (also distributed as
-diagrams.net).
+`kcc-lifecycle.drawio` is the source of the **animated GIF** at the top of
+the root README. It has one page per animation step (19 pages). Every page
+holds the same shapes; only the colours differ: grey = waiting, strong
+colour = active now, pale colour = done.
 
 | File | What it shows |
 |---|---|
-| [`kcc-lifecycle.drawio`](./kcc-lifecycle.drawio) | The 8-stage lifecycle (interrogate to review) with token-budget gates and the always-on meta-agent band |
+| [`kcc-lifecycle.drawio`](./kcc-lifecycle.drawio) | Set up once (`kcc` install, init, tailor, harness adapters), the meta-agent band, the ten-step lifecycle with budget gates through merge and deploy, the scripted exit checks, auto-continue on usage limits, and the learning loop |
+| [`kcc-lifecycle.gif`](./kcc-lifecycle.gif) | The pages above played in order |
+| [`make-lifecycle.ts`](./make-lifecycle.ts) | Generator for both files |
 
-### How to edit
+### How to change it
 
-1. Open [`https://app.diagrams.net`](https://app.diagrams.net) (no
-   install needed) or the desktop app from
-   [`https://github.com/jgraph/drawio-desktop/releases`](https://github.com/jgraph/drawio-desktop/releases).
-2. File -> Open From -> Device -> select `kcc-lifecycle.drawio`.
-3. Edit. Save in-place (same `.drawio` filename).
+The layout, texts, colours, and step order are plain data at the top of
+`make-lifecycle.ts`. Edit them, then regenerate:
 
-### How to export to an animated GIF
+```bash
+bun run docs/diagrams/make-lifecycle.ts          # rewrites kcc-lifecycle.drawio
+bun run docs/diagrams/make-lifecycle.ts --gif    # also exports every page and rebuilds the GIF
+```
 
-draw.io does not export GIF directly. Use one of these workflows:
+`--gif` needs the [draw.io desktop app](https://github.com/jgraph/drawio-desktop/releases)
+(set `DRAWIO` to its executable if it is not in the default install
+location) and `ffmpeg` on PATH. It exports each page to PNG with the draw.io
+command line and joins the frames with ffmpeg.
 
-#### Option A - Multi-page export plus ffmpeg (highest quality)
+You can also open `kcc-lifecycle.drawio` in draw.io and edit pages by hand,
+but the next run of the generator overwrites hand edits. For a lasting
+change, edit the generator.
 
-1. In draw.io, duplicate the page once per animation step (e.g. 8
-   pages: stage 1 highlighted, then stage 1+2, then stage 1+2+3, ...).
-   Highlight the active stage with a fill color change on each page.
-2. File -> Export As -> PNG -> "All pages". Save each as
-   `frame-01.png`, `frame-02.png`, ... in `docs/diagrams/frames/`.
-3. Combine into GIF with ffmpeg:
+### Exporting by hand
+
+1. `draw.io --export --format png --page-index <n> --width 1600 --output frames/frame-<nn>.png kcc-lifecycle.drawio`
+   for each page.
+2. Join the frames:
 
    ```bash
-   ffmpeg -framerate 1 -i frames/frame-%02d.png \
-     -vf "fps=2,scale=1200:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" \
-     docs/diagrams/kcc-lifecycle.gif
+   ffmpeg -framerate 1.3 -i frames/frame-%02d.png      -vf "fps=10,scale=1456:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"      kcc-lifecycle.gif
    ```
-
-#### Option B - ScreenToGif (Windows, point-and-click)
-
-1. Install [ScreenToGif](https://www.screentogif.com/).
-2. Open `kcc-lifecycle.drawio` in draw.io and step through your
-   prepared pages manually using arrow keys.
-3. Use ScreenToGif's "Recorder" to capture the draw.io window while
-   you click through pages.
-4. Trim, set frame delays, save as GIF.
-
-#### Option C - drawio-export plus an online GIF maker (cross-platform)
-
-1. Install [drawio-export](https://github.com/rlespinasse/docker-drawio-desktop-headless)
-   (headless CLI) and export each page as PNG.
-2. Upload PNGs to any GIF maker (e.g.
-   [`https://ezgif.com/maker`](https://ezgif.com/maker)) and assemble.
 
 ### Conventions
 

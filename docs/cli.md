@@ -69,8 +69,13 @@ terminal (`kcc run --input "<idea>"`).
 | `kcc tool <name> [args]` | Runs any script from `.KCC/tools/` with the right shell for this system |
 | `kcc version`, `kcc help` | Version and usage |
 
-Every command accepts `--dir <path>`; the default is the current folder or
-the nearest parent that holds `.KCC/`.
+The target is the current folder, or the nearest parent that holds `.KCC/`.
+To work on another folder, give its path after the command (`kcc init claude
+../app`, `kcc tailor ../app`, `kcc doctor ../app`, `kcc upgrade ../app`,
+`kcc sync claude ../app`, `kcc validate ../app`) or use `--dir <path>`.
+`run`, `limits`, `mcp`, and `tool` take only `--dir`, because their other
+arguments are passed on (`kcc tool --dir ../app quality-gate --json`).
+`kcc init` creates the target folder when it does not exist.
 
 ### `kcc init`
 

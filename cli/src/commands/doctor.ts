@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parse } from "../args";
+import { parse, target } from "../args";
 import { drift, readLock } from "../lock";
 import { payloadVersion } from "../payload";
 import { findRoot, isWindows, powershellExe, which } from "../platform";
@@ -21,8 +21,8 @@ function count(dir: string, ext: string): number {
 
 /** Health check of a KCC workspace. Output follows the tool contract; exit 1 when something must be fixed. */
 export function doctor(argv: string[]): number {
-  const { values } = parse(argv, ["json"], ["dir"]);
-  const start = typeof values.dir === "string" ? values.dir : process.cwd();
+  const { positionals, values } = parse(argv, ["json"], ["dir"]);
+  const start = target(positionals, values.dir, false).dir ?? process.cwd();
   const root = findRoot(start);
   const findings: Finding[] = [];
   const add = (id: string, severity: Finding["severity"], file: string, message: string): void => {

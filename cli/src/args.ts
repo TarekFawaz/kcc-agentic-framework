@@ -24,6 +24,22 @@ export function parse(argv: string[], flags: string[], options: string[]): Parse
 
 export const HARNESSES = ["claude", "codex", "opencode", "generic", "ollama", "all"];
 
+/**
+ * Splits positionals into an optional harness name and an optional target
+ * path, in either order: `kcc init claude ../app`, `kcc tailor ../app`.
+ * `--dir` wins over a positional path.
+ */
+export function target(positionals: string[], dirFlag: string | boolean | undefined, allowHarness: boolean): { harness?: string; dir?: string } {
+  let harness: string | undefined;
+  let dir = typeof dirFlag === "string" ? dirFlag : undefined;
+  for (const p of positionals) {
+    if (allowHarness && harness === undefined && HARNESSES.includes(p)) harness = p;
+    else if (dir === undefined) dir = p;
+    else throw new UsageError(`unexpected argument '${p}' (the target folder is already '${dir}')`);
+  }
+  return { harness, dir };
+}
+
 /** The workspace: `--dir`, or the nearest parent that already holds `.KCC/`. */
 export function workspace(dir: string | boolean | undefined, mustExist = true): string {
   const start = resolve(typeof dir === "string" ? dir : process.cwd());

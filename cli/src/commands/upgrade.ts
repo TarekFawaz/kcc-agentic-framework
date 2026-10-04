@@ -1,4 +1,4 @@
-import { parse, workspace } from "../args";
+import { parse, target, workspace } from "../args";
 import { applyPayload, readLock } from "../lock";
 import { payloadVersion } from "../payload";
 import { runTool } from "../platform";
@@ -7,8 +7,8 @@ import { reapplyTailoring } from "./tailor";
 import { reportApply } from "./init";
 
 export async function upgrade(argv: string[]): Promise<number> {
-  const { values } = parse(argv, ["force", "dry-run", "no-sync"], ["dir"]);
-  const root = workspace(values.dir);
+  const { positionals, values } = parse(argv, ["force", "dry-run", "no-sync"], ["dir"]);
+  const root = workspace(target(positionals, values.dir, false).dir);
   const before = readLock(root)?.payload_version ?? "unversioned";
   const dryRun = values["dry-run"] === true;
 

@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { HARNESSES, parse, UsageError } from "../args";
+import { HARNESSES, parse, target, UsageError } from "../args";
 import { applyPayload, type ApplyResult } from "../lock";
 import { payloadVersion } from "../payload";
 import { runTool } from "../platform";
@@ -22,9 +22,11 @@ export function reportApply(res: ApplyResult, verb: string): void {
 
 export async function init(argv: string[]): Promise<number> {
   const { positionals, values } = parse(argv, ["force", "no-sync", "mcp", "yes", "from-baseline"], ["dir", "harness", "context"]);
-  const harness = (values.harness as string | undefined) ?? positionals[0] ?? "all";
+  const t = target(positionals, values.dir, true);
+  const harness = (values.harness as string | undefined) ?? t.harness ?? "all";
   if (!HARNESSES.includes(harness)) throw new UsageError(`unknown harness '${harness}'. Use one of: ${HARNESSES.join(", ")}`);
-  const root = resolve(typeof values.dir === "string" ? values.dir : process.cwd());
+  const root = resolve(t.dir ?? process.cwd());
+  mkdirSync(root, { recursive: true });
 
   const first = !existsSync(join(root, ".KCC", "kcc.lock"));
   const res = applyPayload(root, { force: values.force === true });

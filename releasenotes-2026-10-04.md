@@ -23,6 +23,24 @@ now in the framework, KCC installs as a command-line program instead of a
 folder you copy, and the framework can be fitted to the solution it is used
 on.
 
+## 0.5.1 (2026-10-04) - fix for macOS and Linux
+
+Use 0.5.1. Release 0.5.0 works on Windows only.
+
+- **Fixed:** on macOS and Linux, `kcc tailor`, `kcc sync`, and `kcc upgrade`
+  ended with an error because the bash `sync-adapters` script exited with
+  code 1. Two causes: the Codex step returned a failure when the optional
+  Codex-skills flag was not set, and regenerating `orchestrator.json` failed
+  when the file held no run-state keys. Windows was not affected.
+- **Added:** a target folder can be given as a path: `kcc init claude
+  ../app`, `kcc tailor ../app`, `kcc doctor ../app`, `kcc upgrade ../app`.
+  `kcc init` creates the folder if needed, and `kcc tool --dir <path>`
+  targets another workspace.
+- **Added:** `kcc <command> --help` shows the usage, and `--Help` /
+  `--VERSION` are accepted in any letter case.
+- **Added:** the release workflow generates the winget manifest and the
+  Homebrew formula.
+
 ## Highlights
 
 | Area | What you get |

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parse as parseYaml } from "yaml";
-import { parse, UsageError, workspace } from "../args";
+import { parse, target, UsageError, workspace } from "../args";
 import { detectFromBaseline, detectFromRepo, detectFromText, type Detected } from "../context/detect";
 import { DEPLOYMENTS, PROJECT_TYPES, SENSITIVITIES, STACKS, defaultContext, mergeContext, type SolutionContext } from "../context/model";
 import { planTailoring, type TailoringPlan } from "../context/rules";
@@ -184,8 +184,8 @@ function printPlan(ctx: SolutionContext, plan: TailoringPlan): void {
 }
 
 export async function runTailor(argv: string[]): Promise<number> {
-  const { values } = parse(argv, ["from-baseline", "reset", "show", "yes", "dry-run", "no-sync", "json"], ["dir", "context"]);
-  const root = workspace(values.dir);
+  const { positionals, values } = parse(argv, ["from-baseline", "reset", "show", "yes", "dry-run", "no-sync", "json"], ["dir", "context"]);
+  const root = workspace(target(positionals, values.dir, false).dir);
   const settings = readSettings(root) ?? {};
   const sync = (): number => (values["no-sync"] === true ? 0 : runTool(root, "sync-adapters", ["--repo-root", root]).status);
 

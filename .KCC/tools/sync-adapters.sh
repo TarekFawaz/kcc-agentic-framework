@@ -554,7 +554,8 @@ status: active
 
   local json="$REPO_ROOT/coordination/orchestrator.json" runtime=""
   # Preserve butler-owned runtime keys (active-session pointer).
-  [[ -f "$json" ]] && runtime="$(grep -oE '"active_session[a-z_]*": *("[^"]*"|null)' "$json" | paste -sd ',' -)"
+  # No runtime keys is the normal case; grep's exit 1 must not end the script under pipefail.
+  [[ -f "$json" ]] && runtime="$({ grep -oE '"active_session[a-z_]*": *("[^"]*"|null)' "$json" || true; } | paste -sd ',' -)"
   {
     echo '{'
     echo '  "schema_version": "2.0",'
@@ -726,7 +727,8 @@ name = "spec-driven-framework"
 entrypoint = "AGENTS.md"
 EOF
   fi
-  (( INSTALL_CODEX_SKILLS == 1 )) && echo "[codex    ] project-local Codex skills initialized"
+  # An `&&` list as the last statement would make the function return 1 and end the script under `set -e`.
+  if (( INSTALL_CODEX_SKILLS == 1 )); then echo "[codex    ] project-local Codex skills initialized"; fi
 }
 
 sync_opencode() {

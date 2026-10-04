@@ -10,10 +10,10 @@ traceability, cost awareness, quality gates, or reusable learning.
 
 **Official KCC page:** [tikasway.dev/kcc](https://tikasway.dev/kcc)
 
-![KCC lifecycle animation](./docs/diagrams/kcc-lifecycle.gif)
+![KCC animation: set up once with the kcc command line, then run the governed lifecycle from idea to deploy](./docs/diagrams/kcc-lifecycle.gif)
 
 ```text
-idea -> interrogate -> spec -> budget -> plan -> budget -> implement -> test -> review
+kcc init -> kcc tailor -> idea -> interrogate -> spec -> budget -> plan -> budget -> implement -> test -> review -> merge -> deploy
 ```
 
 KCC is local-first. The source of truth lives in `.KCC/`, and the framework
@@ -243,11 +243,11 @@ framework.
 
 | Surface | Current state |
 |---|---|
-| Framework release | 0.5.0 (implements the KCC v0.4 operating-model specification) |
+| Framework release | 0.5.1 (implements the KCC v0.4 operating-model specification) |
 | Source agents | 18 |
 | Source skills | 25 |
 | Dialects | 26 |
-| Command line | `kcc` 0.5.0: Windows x64, macOS arm64/x64, Linux x64/arm64 |
+| Command line | `kcc` 0.5.1: Windows x64, macOS arm64/x64, Linux x64/arm64 |
 | Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama |
 | Structural validation | Passing with 0 errors and 0 warnings (PowerShell + bash, cell + repo modes) |
 | Current maturity | Public alpha / field-pilot reference implementation |

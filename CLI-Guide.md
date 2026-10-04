@@ -9,7 +9,7 @@ tags:
   - how-to
 created: 2026-10-04
 updated: 2026-10-04
-version: 0.5.0
+version: 0.5.1
 status: active
 ---
 
@@ -78,14 +78,14 @@ kcc version
 ```
 
 ```text
-kcc 0.5.0 (framework 0.5.0)
+kcc 0.5.1 (framework 0.5.1)
 ```
 
 ### Script installer options
 
 | Need | Windows | macOS / Linux |
 |--|--|--|
-| A specific version | `install.ps1 -Version 0.5.0` | `sh install.sh --version 0.5.0` |
+| A specific version | `install.ps1 -Version 0.5.1` | `sh install.sh --version 0.5.1` |
 | Another folder | `-InstallDir C:\tools\kcc` | `--dir /opt/kcc` |
 | Do not change PATH | `-NoPath` | (PATH is never changed) |
 | Install a binary you built | `-From cli\dist\kcc.exe` | `--from cli/dist/kcc` |
@@ -126,6 +126,30 @@ kcc init claude
 
 Use the harness you work with: `claude`, `codex`, `opencode`, `generic`,
 `ollama`, or `all`.
+
+### Target folder
+
+Every command works on the current folder unless you name another one. Give
+the path after the command; `kcc init` creates the folder if it is missing.
+
+```text
+kcc init claude C:\work\billing-api
+kcc tailor C:\work\billing-api
+kcc doctor ../billing-api
+kcc upgrade ../billing-api
+kcc sync claude ../billing-api
+```
+
+`--dir <path>` does the same and is the form to use with `run`, `limits`,
+`mcp`, and `tool`, whose other arguments are passed on:
+
+```text
+kcc run --dir ../billing-api --input "add invoice export"
+kcc tool --dir ../billing-api quality-gate --spec SPEC-003
+```
+
+Run from inside a subfolder and `kcc` finds the project by walking up to the
+nearest folder that holds `.KCC/`.
 
 This creates:
 
@@ -296,7 +320,7 @@ tools directly. The server runs on your machine only. More:
 | Write a restore point by hand | `kcc tool kcc-checkpoint --reason manual` |
 | Move the run to another harness | `kcc tool kcc-handover --to codex --dry-run` |
 | Check a commit message | `kcc tool check-commit-msg --message "SPEC-003 Story-001: add parser"` |
-| Work on a project in another folder | add `--dir <path>` to any command |
+| Work on a project in another folder | add the path (`kcc doctor ../app`) or `--dir <path>` |
 
 `kcc tool <name>` runs any script from `.KCC/tools/`. Write flags the same
 way on every system (`--spec`, `--dry-run`, `--json`).
