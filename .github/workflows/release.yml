@@ -1,0 +1,87 @@
+# Builds the self-contained kcc binaries and attaches them to a GitHub release.
+# Runs when a version tag (v0.5.0) is pushed. The tag must match cli/package.json.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Tag matches the CLI version
+        working-directory: cli
+        run: |
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match cli/package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Validate the framework
+        run: bash .KCC/tools/validate-kcc.sh --mode repo
+
+      - name: Install, typecheck, test
+        working-directory: cli
+        run: |
+          bun install --frozen-lockfile
+          bun run pack
+          bun x tsc --noEmit
+          bun test
+
+      - name: Build every target
+        working-directory: cli
+        run: bun run build:all
+
+      - name: Checksums
+        working-directory: cli/dist
+        run: sha256sum kcc-* > checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            cli/dist/kcc-*
+            cli/dist/checksums.txt
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.ps1" -OutFile install.ps1
+          ./install.ps1 -Version "${{ github.ref_name }}"
+          echo "$env:LOCALAPPDATA\kcc\bin" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+
+      - name: Install on macOS and Linux
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh -s -- --version "${{ github.ref_name }}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Init, tailor, and check a fresh workspace
+        shell: bash
+        run: |
+          mkdir work && cd work
+          kcc init claude
+          kcc tailor --yes
+          kcc doctor
+          kcc validate

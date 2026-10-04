@@ -28,6 +28,7 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 - [What You Get](#what-you-get)
 - [Quick Start](#quick-start)
 - [How To Use KCC](./docs/how-to-use-kcc.md)
+- [The kcc Command Line](./docs/cli.md)
 - [KCC Tools Reference](./docs/kcc-tools-reference.md)
 - [Why KCC](#why-kcc)
 - [How KCC Works](#how-kcc-works)
@@ -47,23 +48,53 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 | Token Guard | Cost and token estimates appear before expensive planning or implementation. |
 | Butler memory | Reusable decisions and patterns survive beyond a single agent context window. |
 | Multi-harness adapters | One `.KCC` source generates Codex, Claude Code, OpenCode, generic, and Ollama surfaces. |
+| `kcc` command line | One self-contained program for Windows, macOS, and Linux installs, upgrades, tailors, and runs the framework. |
+| Context tailoring | `kcc tailor` keeps only the agents, skills, and dialects that fit your solution. |
+| Scripted quality gates | Traceability, wave scope, implementation lock, and a production quality gate are tool results, not prose. |
+| Auto-continue | `kcc run` detects a usage limit on any harness, waits for the reset, and resumes the run. |
+| Git workflow | Branch, commit-message, pre-commit, and pre-push checks, plus CI and deploy pipeline templates. |
+| Local MCP server | `kcc mcp` serves protocols by section, the gate tools, and every skill to any MCP-capable harness. |
 
 ## Quick Start
 
+Install the `kcc` command line once per machine.
+
+Windows (PowerShell):
+
 ```powershell
-git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
-cd my-project
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 claude
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 opencode
-powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 ollama
+irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 | iex
 ```
 
-Then open your preferred harness and start with an idea:
+macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.sh | sh
+```
+
+Then, in any project folder:
+
+```text
+kcc init claude        # or codex | opencode | generic | ollama | all
+kcc tailor             # fit the framework to this solution
+kcc doctor
+```
+
+Open your harness and start with an idea:
 
 ```text
 auto build a CLI that converts CSV to JSON
 ```
+
+or drive the same lifecycle from the terminal, with automatic resume after a
+usage limit:
+
+```text
+kcc run --input "build a CLI that converts CSV to JSON"
+```
+
+The binary carries the framework, so there is nothing to clone. Cloning this
+repository and running `.KCC/tools/framework-init` still works and is the
+offline path. Command reference: [docs/cli.md](./docs/cli.md).
 
 See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
 generic/Ollama, and Mac/Linux paths.
@@ -179,7 +210,8 @@ locally:
 |---|---|
 | `.KCC/kernel/` | Source of truth for contracts, protocols, adapters, templates, dialects, and governance docs. |
 | `.KCC/capabilities/` | Source of truth for local reusable agents and skills. |
-| `.KCC/tools/` | Init, sync, validation, migration, backchannel, and session tools. |
+| `.KCC/tools/` | Init, sync, validation, gate, continuity, git, migration, backchannel, and session tools. |
+| `cli/` | Source of the `kcc` command line; it embeds `.KCC/` when built. |
 | Root docs | Public explanation, quick start, contribution docs, and project policy. |
 
 Generated harness folders such as `.claude/`, `.codex/`, `.opencode/`,
@@ -191,9 +223,11 @@ framework.
 
 | Surface | Current state |
 |---|---|
-| Source agents | 17 |
-| Source skills | 22 |
-| Dialects | 23 |
+| Framework release | 0.5.0 (implements the KCC v0.4 operating-model specification) |
+| Source agents | 18 |
+| Source skills | 25 |
+| Dialects | 26 |
+| Command line | `kcc` 0.5.0: Windows x64, macOS arm64/x64, Linux x64/arm64 |
 | Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama |
 | Structural validation | Passing with 0 errors and 0 warnings (PowerShell + bash, cell + repo modes) |
 | Current maturity | Public alpha / field-pilot reference implementation |
@@ -206,8 +240,13 @@ The detailed implementation status lives in
 The cell moves work through a fixed lifecycle:
 
 ```text
-interrogate -> create -> estimate -> plan -> estimate -> implement -> test -> review -> deploy
+interrogate -> create -> estimate -> plan -> estimate -> implement -> test -> review -> merge -> deploy
 ```
+
+`merge` (`/spec-merge`) and `deploy` (`/spec-deploy`) are optional steps a
+human starts after an approved review. A human can report a defect at any
+point with `/bug-report`; it becomes a Bug backlog item that goes through a
+regression test, the fix, and the same gates.
 
 The animated lifecycle view is shown near the top of this README. Editable
 diagram sources live in [docs/diagrams/](./docs/diagrams/).
@@ -245,6 +284,9 @@ The public source package should contain the framework source and docs:
 |-- sandbox/
 `-- settings.json
 
+cli/
+install.ps1
+install.sh
 README.md
 QUICKSTART.md
 example-solutions.md
@@ -290,6 +332,13 @@ under `docs/` instead of committing live harness folders at the root.
 | `.KCC/capabilities/skills/`            | Neutral source files for slash-command style skills.                                                |
 | `.KCC/tools/`                          | Canonical tool entrypoints for Windows PowerShell and Mac/Linux bash.                               |
 | `.KCC/sandbox/`                        | Docker sandbox files and sandbox runtime docs.                                                      |
+| `cli/`                                 | The `kcc` command line (TypeScript, built into self-contained binaries with Bun).                   |
+| `install.ps1`, `install.sh`            | Installers for Windows and for macOS/Linux.                                                         |
+| `docs/cli.md`                          | `kcc` command reference: init, tailor, upgrade, doctor, run, limits, mcp, tool.                     |
+| `docs/tailoring.md`                    | How to fit the framework to a solution.                                                             |
+| `docs/mcp.md`                          | The local MCP server.                                                                               |
+| `docs/git-workflow.md`                 | Branching, commit, hook, and pipeline conventions.                                                  |
+| `docs/upgrade-v0.5.md`                 | What changed in release 0.5.0 and how to upgrade an existing cell.                                  |
 | `docs/how-to-use-kcc.md`               | Scenario guide for fresh ideas, existing solutions, and adapting workflows.                         |
 | `docs/kcc-tools-reference.md`          | PowerShell and bash tool reference with arguments and examples.                                     |
 | `docs/agentic-ai-operating-model.md`   | Search-friendly overview of the KCC operating-model claim.                                          |
@@ -313,7 +362,16 @@ under `docs/` instead of committing live harness folders at the root.
 
 ## Initialize or Sync
 
-Windows:
+With the command line:
+
+```text
+kcc init codex
+kcc sync
+kcc validate
+kcc upgrade
+```
+
+With the scripts (offline, or from a clone of this repository), Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 -Harness codex
@@ -354,17 +412,27 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 
 - trace-driven Inspector automation
 - tracker adapters for Jira, Azure DevOps, Asana, Linear, and GitHub Issues
-- production pipeline templates for deploy
-- real Mac/Linux host validation for the native bash path
+- real Mac/Linux host validation for the native bash path and for the
+  macOS/Linux `kcc` binaries (the release workflow builds and smoke-tests
+  them; they have not been exercised on real projects)
 - multi-cell rollout examples across separate team repos
-- native `kcc` CLI packaging
+- an organisation-shared registry of capabilities and policy (the MCP server
+  is local to each developer)
+- package-manager distribution of `kcc` (npm, winget, Homebrew)
+- turnkey deployments: the CI and deploy pipeline templates are starting
+  points with placeholders
 
 ## Learn More
 
 | Topic | Start here |
 |---|---|
 | How to use KCC | [docs/how-to-use-kcc.md](./docs/how-to-use-kcc.md) |
-| KCC command-line tools | [docs/kcc-tools-reference.md](./docs/kcc-tools-reference.md) |
+| The `kcc` command line | [docs/cli.md](./docs/cli.md) |
+| Tailoring to a solution | [docs/tailoring.md](./docs/tailoring.md) |
+| Local MCP server | [docs/mcp.md](./docs/mcp.md) |
+| Git workflow and pipelines | [docs/git-workflow.md](./docs/git-workflow.md) |
+| Upgrading to 0.5.0 | [docs/upgrade-v0.5.md](./docs/upgrade-v0.5.md) |
+| Script tools | [docs/kcc-tools-reference.md](./docs/kcc-tools-reference.md) |
 | Agentic AI operating model | [docs/agentic-ai-operating-model.md](./docs/agentic-ai-operating-model.md) |
 | Spec-driven AI development | [docs/spec-driven-ai-development.md](./docs/spec-driven-ai-development.md) |
 | AI agent governance | [docs/ai-agent-governance.md](./docs/ai-agent-governance.md) |

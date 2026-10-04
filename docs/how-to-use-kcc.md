@@ -1,8 +1,14 @@
 # How To Use KCC
 
 This guide explains the main ways to use a materialized KCC cell after you run
-`framework-init` and generate adapter files for Codex, Claude Code, OpenCode,
-generic `.agents`, or Ollama-backed runners.
+`kcc init` (or the `framework-init` script) and generate adapter files for
+Codex, Claude Code, OpenCode, generic `.agents`, or Ollama-backed runners.
+
+Before the first idea, fit the framework to the solution with `kcc tailor`
+([tailoring.md](./tailoring.md)). Every `auto ...` form below can also be
+driven from a terminal with `kcc run --input "<same argument>"`, which adds
+automatic wait-and-resume when the harness hits a usage limit
+([cli.md](./cli.md)).
 
 KCC is local-first. You use the generated adapter surface for your harness, but
 the source of truth remains `.KCC/kernel/` and `.KCC/capabilities/`.
@@ -215,7 +221,10 @@ KCC skill from `AGENTS.md`.
 | `/spec-test` | Verify implementation against epic and backlog acceptance criteria. | `/spec-test SPEC-003` |
 | `/spec-review` | Run a lighter diff/spec review. | `/spec-review SPEC-003` |
 | `/spec-status` | Show status across specs, plans, reviews, and verdicts. | `/spec-status` |
+| `/spec-merge` | After an approved review: check branch and commits, merge wave lanes, and draft the pull request. Never pushes. | `/spec-merge SPEC-003` |
 | `/spec-deploy` | Generate deployment pipeline and IaC stubs from approved infrastructure decisions. | `/spec-deploy SPEC-003`, `/spec-deploy SPEC-003 --ci=github-actions --cloud=aws` |
+| `/bug-report` | Report a defect at any point; it becomes a Bug backlog item that goes through regression test, fix, test, and review. | `/bug-report SPEC-003 export drops the last row`, `/bug-report <description> --severity major` |
+| `/tailor-workflow` | Draft solution-specific agent addenda, agents, and skills from the recorded context. Drafts only. | `/tailor-workflow`, `/tailor-workflow focus on release steps` |
 | `/solution-onboard` | Build a baseline understanding of an existing solution. | `/solution-onboard .`, `/solution-onboard ../App --depth=deep`, `/solution-onboard . --skip-inspector` |
 | `/adapt-workflow` | Draft-migrate another agentic workflow into KCC format. | `/adapt-workflow ../OtherProject`, `/adapt-workflow ../OtherProject --format=cursor` |
 | `/architecture-review` | Review architecture artifacts for semantic conformance and drift. | `/architecture-review` |

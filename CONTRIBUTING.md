@@ -197,15 +197,32 @@ Butler's accuracy calibration loop (Mode D) is at PASS scaffolded with the
 - Add a Linux distro detection sub-section to the install hint (Ubuntu /
   Debian / RHEL / Alpine).
 
-### 10. CLI contributions (when v1.1+ lands)
+### 10. CLI contributions
 
-A native Node + TypeScript CLI named **`kcc`** (package `@tikasway/kcc`)
-is planned per [`CLI-PLAN.md`](./CLI-PLAN.md). Once v1.1 work begins:
+The **`kcc`** command line lives in [`cli/`](./cli/) (TypeScript, compiled
+into self-contained binaries with Bun). Reference:
+[`docs/cli.md`](./docs/cli.md).
 
-- Port one PowerShell tool at a time to TypeScript with feature parity.
-- Maintain PowerShell as canonical for v1.x - CLI is a parallel path,
-  not a replacement, until v2.0.
-- Use the same `.KCC/settings.json` schema.
+```bash
+cd cli
+bun install
+bun x tsc --noEmit
+bun test                  # packs .KCC/ into the binary payload, then runs the tests
+bun run build             # dist/kcc for this machine
+bun run test/mcp-smoke.ts dist/kcc <a workspace created with kcc init>
+```
+
+- The scripts under `.KCC/tools/` stay the source of truth for generation
+  and gates. The CLI calls them; do not re-implement a script's logic in
+  TypeScript.
+- Anything the CLI adds (install, upgrade, tailoring, supervision, MCP)
+  needs a test in `cli/test/`.
+- Rebuild after changing anything under `.KCC/`: the binary embeds it.
+- A new usage-limit wording goes into `.KCC/kernel/limit-patterns.json`,
+  not into code.
+- A release is a tag `vX.Y.Z` equal to `cli/package.json`'s version;
+  `.github/workflows/release.yml` builds and publishes the binaries.
+- Use the same `.KCC/settings.json` schema as the scripts.
 
 ### 11. Propose an upstream contribution to KCC v0.4
 

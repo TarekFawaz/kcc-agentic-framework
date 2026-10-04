@@ -5,12 +5,31 @@ tags:
   - distribution
   - mcp
 created: 2026-09-21
-updated: 2026-09-21
-version: 0.2.0
-status: ready-to-run
+updated: 2026-10-04
+version: 0.3.0
+status: partly-done
 ---
 
 # Plan: from "copy `.KCC/`" to CLI + MCP + tailored frameworks
+
+## Status (2026-10-04, release 0.5.0)
+
+| Item | State |
+|--|--|
+| P0 port of the 2026-09-21 upgrade | Done |
+| E1 cross-OS test harness for the tools | Open. The CLI has unit and install tests; the tool fixture suites are still not repo tests |
+| E2 `kcc` CLI core | Done as a self-contained binary (Bun-compiled TypeScript), installed by `install.ps1` / `install.sh`, not as an npm package. `init`, `sync`, `validate`, `run`, `tool`, `.KCC/kcc.lock` |
+| E3 upgrade + doctor | Done with conflict detection: locally edited files are kept and listed. Three-way merge is open. `kcc vendor` is not needed: `kcc init` always writes the full `.KCC/` |
+| E4 local MCP server | Done: `kcc mcp`, section-addressable resources, gate tools, skills as prompts, `kcc init --mcp`. `kcc_run` exposes status, plan, and answer only; `kcc_tailor` is read-only |
+| E5 tailoring | Done: `kcc tailor` (questions, context file, onboarding baseline) plus the `/tailor-workflow` skill. Token saving per spawn is not yet measured (AC-3) |
+| E6 hosted registry, E7 server adapter | Open |
+
+Decisions taken (section 7): 1. TypeScript, shipped as a compiled binary so
+no runtime is needed on the machine. 2. The scripts stay the source of
+truth; the CLI and the MCP server wrap them. 3. The vendored `.KCC/` stays
+and is what `kcc init` writes; a thin footprint without it is open.
+4 and 5 are open. See [../cli.md](../cli.md), [../tailoring.md](../tailoring.md),
+[../mcp.md](../mcp.md).
 
 ## 1. Problem
 
