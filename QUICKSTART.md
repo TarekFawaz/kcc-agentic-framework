@@ -21,7 +21,8 @@ interrogate -> create -> token-budget -> plan -> token-budget -> implement -> te
 Framework release 0.5.0 adds the `kcc` command line, context tailoring,
 scripted quality gates, automatic resume after a usage limit, a git
 workflow with hooks, pipeline templates, and a local MCP server. Coming from
-an earlier copy? Read [docs/upgrade-v0.5.md](./docs/upgrade-v0.5.md).
+an earlier copy? Read [docs/upgrade-v0.5.md](./docs/upgrade-v0.5.md). The
+full change list is in [releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md).
 
 Each stage has a dedicated agent role. Meta-agents (Butler + Token Guard)
 wrap every turn at minimum token burn. Multi-harness - Claude Code, Codex
@@ -66,7 +67,10 @@ my-project/
 |-- QUICKSTART.md              <- this file
 |-- PLAN.md                    <- future activities and roadmap
 |-- progress.md                <- single status landing page
-|-- CLI-PLAN.md                <- future native CLI roadmap
+|-- CLI-Guide.md               <- installing and using the kcc command line
+|-- releasenotes-2026-10-04.md <- what changed in release 0.5.0
+|-- install.ps1  install.sh    <- script installers for kcc
+|-- cli/                       <- source of the kcc command line
 |-- LICENSE  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md  MAINTAINERS.md
 |-- .gitignore  .markdownlint.json
 |-- .KCC/
@@ -97,17 +101,18 @@ After first run, the framework adds:
 
 ### 1. Install `kcc` and initialize (recommended path)
 
-Windows (PowerShell):
+| System | Package manager | Script installer |
+|---|---|---|
+| Windows | `winget install Tikasway.KCC` | `irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 \| iex` |
+| macOS / Linux | `brew install tarekfawaz/kcc/kcc` | `curl -fsSL https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.sh \| sh` |
 
-```powershell
-irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 | iex
-```
+All four need a published release; winget also needs the package to be
+accepted in Microsoft's repository. Before that, or offline, build the
+program from `cli/` and install it with `install.ps1 -From` or
+`install.sh --from`. The step-by-step guide, including troubleshooting, is
+[CLI-Guide.md](./CLI-Guide.md).
 
-macOS and Linux:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.sh | sh
-```
+Check the install with `kcc version`.
 
 Then, in your project folder:
 
@@ -122,11 +127,14 @@ kcc doctor           # checks the installation and names the fix for each proble
 | `kcc upgrade` | A new framework version. Files you edited are kept and listed. |
 | `kcc sync` | After editing `.KCC/kernel/` or `.KCC/capabilities/`. |
 | `kcc run --input "<idea>"` | Driving the lifecycle from a terminal; it waits and resumes when the harness hits a usage limit. |
+| `kcc limits` | Seeing usage, the last limit hit, and when the run resumes. |
+| `kcc tool repo-bootstrap --apply init-local` | `git init` on `main` plus the KCC git hooks (secret scan, commit-message check, protected-branch guard). |
 | `kcc mcp --register` | Giving your harness the local MCP server. |
 | `kcc tool <name> ...` | Running any `.KCC/tools` script with the right shell. |
 
-Full reference: [docs/cli.md](./docs/cli.md), [docs/tailoring.md](./docs/tailoring.md),
-[docs/mcp.md](./docs/mcp.md). If you used `kcc init`, skip to step 5 or
+Guide: [CLI-Guide.md](./CLI-Guide.md). Reference: [docs/cli.md](./docs/cli.md),
+[docs/tailoring.md](./docs/tailoring.md), [docs/mcp.md](./docs/mcp.md),
+[docs/git-workflow.md](./docs/git-workflow.md). If you used `kcc init`, skip to step 5 or
 straight to *First Idea*. Steps 1b-4 are the script path, for offline use
 or when working from a clone.
 
@@ -281,14 +289,16 @@ OpenCode also reads `AGENTS.md`. Same prompt as Path B.
          |                 Phases + Epics -> upfront budget + effort estimate (man-days, +/-20%)
          v
   /spec-create             writes IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs.md (index)
-         |                 + SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md (epic)
-         |                 + backlog.md + Backlog/Story-* + Backlog/Enabler-*
+         |                 + ROADMAP.md (execution plan + token plan across specs)
+         |                 + SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md (one lean spec: delivery,
+         |                   acceptance criteria, backlog table)
+         |                 + Backlog/Story-* + Backlog/Enabler-*
          v
   [token-budget gate]      /token-estimate forecast -> human approve / revise / abort
          |                 (or AutoPolicy auto-approve within cap)
          v
-  /spec-plan               planner refines parallelization.md, writes plan.md
-         |                 including ## Atomic test cases mapped to AC IDs
+  /spec-plan               planner writes plan.md: ordered changes, file-disjoint
+         |                 ## Waves, and ## Atomic test cases mapped to AC IDs
          v
   [token-budget gate]      refined estimate -> approve / revise / abort
          v
@@ -296,15 +306,26 @@ OpenCode also reads `AGENTS.md`. Same prompt as Path B.
          |                 turns atomic test cases into real tests via
          |                 testing-unit / testing-integration dialects
          v
-  /spec-test               verifier runs tests, fills review.md (PASS/FAIL per AC + per test)
+  /spec-test               verifier runs tests, check-traceability, and quality-gate;
+         |                 fills review.md (PASS/FAIL per AC + per test, ## Evidence)
          |
          v
   /spec-review             quick diff review against epic + story/enabler criteria
          |
          v
+  (optional) /spec-merge   repo-steward checks branch + commits, merges wave lanes,
+         |                 writes the pull-request draft (pr.md); NEVER pushes
+         v
   (optional) /spec-deploy  infrastructure-implementer writes pipeline + IaC stubs;
                            NEVER auto-executes; human runs the actual deploy
+
+  any time: /bug-report    a human-found bug becomes a Bug backlog item ->
+                           regression test -> fix -> test -> review
 ```
+
+Each step's exit check is a script (`check-run-conformance`,
+`check-traceability`, `check-wave-scope`, `check-impl-lock`, `quality-gate`),
+so a step is done when its tool says so, not when an agent says so.
 
 ---
 
@@ -345,7 +366,13 @@ always begin with interrogation.
 | `auto IDEA-{ID}` | Resume an existing idea from the first missing artifact. |
 | `auto SPEC-{ID}` | Continue an existing spec from its current lifecycle step. |
 | `auto all` | Take every spec whose status is not Done through `plan -> review`. |
+| `auto resume` | Continue from the latest restore point (after a usage limit, a crash, or a harness switch). |
 | `auto` (no args) | Print usage and exit - no agent dispatch, no file writes. |
+
+The same inputs work from a terminal: `kcc run --input "<idea | path | IDEA-ID | SPEC-ID | all>"`
+runs the lifecycle state by state through your harness's command line, and
+`kcc run --resume` is the terminal form of `auto resume`. When the harness
+hits a usage limit, `kcc run` waits for the reset and resumes on its own.
 
 ### Parameters and their impact
 
@@ -363,8 +390,9 @@ Parallelism is driven by the operating scenario, the planner's wave plan, **and*
 the `--parallel` flag:
 
 - **Scenario 1 without `--parallel`:** spec creation is sequential (one
-  `/spec-create` per epic); at step 13 the run shows the proposed sessions from
-  `parallelization.md` and asks `approve windows / sequential / abort`.
+  `/spec-create` per epic); before implementation the run shows the proposed
+  sessions from `plan.md -> ## Waves` and the idea's `ROADMAP.md` and asks
+  `approve windows / sequential / abort`.
 - **Scenarios 2 & 3 (`--silent --assume`):** maximum parallel sessions allowed by
   default; the pre-flight warning covers your consent. In Scenario 3 the
   `--budget` cap still bounds the whole wave set. (Spec creation is still
@@ -376,7 +404,7 @@ the `--parallel` flag:
 - The fan-out mechanics (L1 across specs, L2 across independent stories/enablers,
   wave/barrier semantics, file-disjoint merge safety) are defined in
   [[.KCC/kernel/protocols/parallel-execution]] and the per-spec
-  `parallelization.md`.
+  `plan.md -> ## Waves`.
 
 ### Gates that never go silent
 
@@ -516,12 +544,19 @@ lives in [example-solutions.md](./example-solutions.md).
 | Raw ideas | `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md` |
 | Idea index (status board) | `ideation/ideas.md` |
 | Specs grouped per idea | `specs/IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs.md` |
-| Epic spec | `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md` |
-| Story / enabler backlog | `specs/.../SPEC-{ID}-{slug}/Backlog/Story-*.md` + `Enabler-*.md` |
-| Plan (with atomic test cases) | `specs/.../SPEC-{ID}-{slug}/plan.md` |
-| Verification report | `specs/.../SPEC-{ID}-{slug}/review.md` |
-| Token budget log | `specs/.../SPEC-{ID}-{slug}/budget.md` |
-| Handover envelope log | `specs/.../SPEC-{ID}-{slug}/handovers.md` |
+| Execution plan + token plan per idea | `specs/IDEA-{ID}-{slug}-Specs/ROADMAP.md` |
+| Spec (delivery, acceptance criteria, backlog table) | `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md` |
+| Story / enabler / bug backlog | `specs/.../SPEC-{ID}-{slug}/Backlog/Story-*.md`, `Enabler-*.md`, `Bug-*.md` |
+| Plan (waves + atomic test cases) | `specs/.../SPEC-{ID}-{slug}/plan.md` |
+| Verification report (with Evidence) | `specs/.../SPEC-{ID}-{slug}/review.md` |
+| Pull-request draft (optional) | `specs/.../SPEC-{ID}-{slug}/pr.md` |
+| Token estimates and approvals | `ROADMAP.md` token plan, the trace session, and the backchannel |
+| Handover envelopes | `coordination/handover/` |
+| Restore points | `coordination/checkpoints/CP-{NNN}.md` |
+| Run state, gates, last usage limit | `coordination/run/`, `coordination/gates/` |
+| Orchestrator map (agents, spawn profiles, routes) | `coordination/orchestrator.md` + `orchestrator.json` |
+| Tailoring record | `.KCC/settings.json -> tailoring`, `.KCC/.tailored-out/` |
+| Installed framework version + checksums | `.KCC/kcc.lock` |
 | Deploy summary (optional) | `specs/.../SPEC-{ID}-{slug}/deploy.md` |
 | Source code (per idea) | `src/IDEA-{ID}-{slug}/...` |
 | Agent traces | `Traces/Session-{slug}-{datetime}/` (7 artifact files) |

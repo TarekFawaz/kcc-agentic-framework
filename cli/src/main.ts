@@ -44,7 +44,14 @@ Common options: --dir <path> (workspace; default: current folder), --help, --ver
 Docs: docs/cli.md`;
 
 async function main(argv: string[]): Promise<number> {
-  const [cmd, ...rest] = argv;
+  const [first, ...rest] = argv;
+  // `--Help` and `--VERSION` work too; command names stay lower-case.
+  const cmd = first?.startsWith("-") ? first.toLowerCase() : first;
+  // `kcc <command> --help` shows the usage. `run` and `tool` pass --help on to the script.
+  if (cmd && !["run", "tool"].includes(cmd) && rest.some((a) => /^(--help|-h)$/i.test(a))) {
+    console.log(HELP);
+    return 0;
+  }
   switch (cmd) {
     case undefined:
     case "help":

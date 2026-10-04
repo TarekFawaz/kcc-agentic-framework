@@ -77,6 +77,10 @@ else
   cp "$tmp/$asset" "$target"
 fi
 chmod +x "$target"
+# The binaries are cross-compiled and unsigned; Apple Silicon refuses to run unsigned code.
+if [ "$os" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$target" >/dev/null 2>&1 || true
+fi
 
 echo "Installed: $target"
 "$target" version

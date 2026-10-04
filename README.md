@@ -28,7 +28,9 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 - [What You Get](#what-you-get)
 - [Quick Start](#quick-start)
 - [How To Use KCC](./docs/how-to-use-kcc.md)
-- [The kcc Command Line](./docs/cli.md)
+- [CLI Guide: install and use kcc](./CLI-Guide.md)
+- [Release Notes 0.5.0](./releasenotes-2026-10-04.md)
+- [kcc Command Reference](./docs/cli.md)
 - [KCC Tools Reference](./docs/kcc-tools-reference.md)
 - [Why KCC](#why-kcc)
 - [How KCC Works](#how-kcc-works)
@@ -59,17 +61,31 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 
 Install the `kcc` command line once per machine.
 
-Windows (PowerShell):
+Windows:
 
 ```powershell
-irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 | iex
+winget install Tikasway.KCC
 ```
 
 macOS and Linux:
 
 ```bash
+brew install tarekfawaz/kcc/kcc
+```
+
+No package manager? Use the script installers instead:
+
+```powershell
+irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 | iex
+```
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.sh | sh
 ```
+
+All of these need a published release (winget also needs the package to be
+accepted in Microsoft's repository). Until then, build from `cli/` as
+described in [CLI-Guide.md](./CLI-Guide.md).
 
 Then, in any project folder:
 
@@ -94,7 +110,11 @@ kcc run --input "build a CLI that converts CSV to JSON"
 
 The binary carries the framework, so there is nothing to clone. Cloning this
 repository and running `.KCC/tools/framework-init` still works and is the
-offline path. Command reference: [docs/cli.md](./docs/cli.md).
+offline path.
+
+Step-by-step guide: [CLI-Guide.md](./CLI-Guide.md). Command reference:
+[docs/cli.md](./docs/cli.md). What changed in this release:
+[releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md).
 
 See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
 generic/Ollama, and Mac/Linux paths.
@@ -287,6 +307,8 @@ The public source package should contain the framework source and docs:
 cli/
 install.ps1
 install.sh
+CLI-Guide.md
+releasenotes-2026-10-04.md
 README.md
 QUICKSTART.md
 example-solutions.md
@@ -333,7 +355,9 @@ under `docs/` instead of committing live harness folders at the root.
 | `.KCC/tools/`                          | Canonical tool entrypoints for Windows PowerShell and Mac/Linux bash.                               |
 | `.KCC/sandbox/`                        | Docker sandbox files and sandbox runtime docs.                                                      |
 | `cli/`                                 | The `kcc` command line (TypeScript, built into self-contained binaries with Bun).                   |
-| `install.ps1`, `install.sh`            | Installers for Windows and for macOS/Linux.                                                         |
+| `install.ps1`, `install.sh`            | Script installers for Windows and for macOS/Linux (winget and Homebrew are the package-manager routes). |
+| `CLI-Guide.md`                         | Installing and using `kcc`, step by step, with troubleshooting.                                     |
+| `releasenotes-2026-10-04.md`           | Release 0.5.0: what is new, breaking changes, known limits.                                         |
 | `docs/cli.md`                          | `kcc` command reference: init, tailor, upgrade, doctor, run, limits, mcp, tool.                     |
 | `docs/tailoring.md`                    | How to fit the framework to a solution.                                                             |
 | `docs/mcp.md`                          | The local MCP server.                                                                               |
@@ -418,7 +442,10 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 - multi-cell rollout examples across separate team repos
 - an organisation-shared registry of capabilities and policy (the MCP server
   is local to each developer)
-- package-manager distribution of `kcc` (npm, winget, Homebrew)
+- live winget and Homebrew channels: the release workflow prepares the
+  winget manifest and the Homebrew formula, but the tap repository, the
+  publishing secrets, and Microsoft's acceptance of the package are still
+  outstanding; there is no npm package
 - turnkey deployments: the CI and deploy pipeline templates are starting
   points with placeholders
 
@@ -427,7 +454,9 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 | Topic | Start here |
 |---|---|
 | How to use KCC | [docs/how-to-use-kcc.md](./docs/how-to-use-kcc.md) |
-| The `kcc` command line | [docs/cli.md](./docs/cli.md) |
+| Installing and using `kcc` | [CLI-Guide.md](./CLI-Guide.md) |
+| Release notes 0.5.0 | [releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md) |
+| `kcc` command reference | [docs/cli.md](./docs/cli.md) |
 | Tailoring to a solution | [docs/tailoring.md](./docs/tailoring.md) |
 | Local MCP server | [docs/mcp.md](./docs/mcp.md) |
 | Git workflow and pipelines | [docs/git-workflow.md](./docs/git-workflow.md) |

@@ -8,7 +8,14 @@ on Windows, bash on macOS and Linux) to run the framework's own scripts.
 
 ## Install
 
-Windows (PowerShell):
+With a package manager (once the release is published in each):
+
+```text
+winget install Tikasway.KCC          # Windows
+brew install tarekfawaz/kcc/kcc      # macOS and Linux
+```
+
+Or with the script installers. Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 | iex
@@ -194,6 +201,22 @@ rebuild after changing anything under `.KCC/`. A release is cut by pushing a
 tag `vX.Y.Z` that matches `cli/package.json`; `.github/workflows/release.yml`
 builds, checksums, publishes, and smoke-tests the installers on all three
 systems.
+
+### Publishing to winget and Homebrew
+
+The release workflow also runs `scripts/packaging.ts`, which writes the
+winget manifest and the Homebrew formula with the release's checksums and
+attaches them to the release. Two optional jobs publish them; each runs only
+when its secret exists in the repository settings.
+
+| Channel | One-time setup | Secret |
+|--|--|--|
+| Homebrew | Create the public repository `TarekFawaz/homebrew-kcc` (it may be empty) | `HOMEBREW_TAP_TOKEN`: a token with write access to that repository |
+| winget | None. Each version opens a pull request against `microsoft/winget-pkgs`, which Microsoft reviews before it becomes installable | `WINGET_TOKEN`: a classic token with the `public_repo` scope |
+
+Without the secrets, publish by hand: copy `kcc.rb` from the release into
+`Formula/kcc.rb` of the tap, and run
+`wingetcreate submit <folder with the three .yaml files>`.
 
 ## Relation to the scripts
 

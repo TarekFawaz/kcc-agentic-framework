@@ -47,6 +47,10 @@ jobs:
         working-directory: cli/dist
         run: sha256sum kcc-* > checksums.txt
 
+      - name: Package-manager files (winget manifest, Homebrew formula)
+        working-directory: cli
+        run: bun run scripts/packaging.ts
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -54,6 +58,68 @@ jobs:
           files: |
             cli/dist/kcc-*
             cli/dist/checksums.txt
+            cli/dist/packaging/winget/*.yaml
+            cli/dist/packaging/homebrew/kcc.rb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging
+          path: cli/dist/packaging
+
+  # Pushes the formula to the tap repository (TarekFawaz/homebrew-kcc).
+  # Runs only when the HOMEBREW_TAP_TOKEN secret exists (a token with write access to the tap).
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: env.TAP_TOKEN != ''
+        with:
+          name: packaging
+          path: packaging
+
+      - uses: actions/checkout@v4
+        if: env.TAP_TOKEN != ''
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-kcc
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update the formula
+        if: env.TAP_TOKEN != ''
+        run: |
+          mkdir -p tap/Formula
+          cp packaging/homebrew/kcc.rb tap/Formula/kcc.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/kcc.rb
+          git diff --cached --quiet || git commit -m "kcc ${GITHUB_REF_NAME#v}"
+          git push
+
+  # Opens the pull request against microsoft/winget-pkgs for this version.
+  # Runs only when the WINGET_TOKEN secret exists (a classic token with public_repo scope).
+  # Microsoft reviews the pull request before the version becomes installable.
+  winget:
+    needs: build
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: env.WINGET_TOKEN != ''
+        with:
+          name: packaging
+          path: packaging
+
+      - name: Submit the manifest
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN packaging/winget
 
   smoke:
     needs: build
