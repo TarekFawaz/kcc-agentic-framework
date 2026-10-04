@@ -128,7 +128,7 @@ expected_agents=(
   token-guard.md ux-ui-designer.md verifier.md
 )
 expected_skills=(
-  adapt-workflow.md architecture-review.md auto.md butler-brief.md butler-remember.md
+  adapt-workflow.md architecture-review.md auto.md bug-report.md butler-brief.md butler-remember.md
   critical-human-gate.md dashboard.md idea-interrogator.md
   infrastructure-interrogator.md inspect.md security-interrogator.md
   solution-onboard.md spec-create.md spec-deploy.md
@@ -310,6 +310,40 @@ for pattern in '.tmp-*' '**/__pycache__/' '*.pyc' '*.db' '*.db-journal' '.test-t
     fi
   fi
 done
+
+# Contract lint: headings required by check-run-conformance.ps1 (the single
+# source of the rule set) must be instructed by the owning agent or its refs.
+crc_ps="$REPO_ROOT/.KCC/tools/check-run-conformance.ps1"
+agents_src="$REPO_ROOT/.KCC/capabilities/agents"
+if [[ -f "$crc_ps" && -d "$agents_src" ]]; then
+  while IFS=$'\t' read -r owner heading; do
+    [[ -n "$owner" && -n "$heading" ]] || continue
+    owner_text="$(cat "$agents_src/$owner.md" "$agents_src"/refs/"$owner"-*.md 2>/dev/null || true)"
+    [[ -n "$owner_text" ]] || continue
+    if ! grep -qF "## $heading" <<<"$owner_text"; then
+      add_error "Contract drift: check-run-conformance requires '## $heading' (owner $owner) but .KCC/capabilities/agents/$owner.md and its refs never instruct that heading."
+    fi
+  done < <(tr -d '\r' < "$crc_ps" | awk '
+    { lines[NR]=$0 }
+    END {
+      for (i=1; i<=NR; i++) {
+        owner=""
+        for (j=i; j<i+4 && j<=NR; j++) {
+          if (match(lines[j], /Add-Violation +'"'"'[^'"'"']+'"'"' +'"'"'error'"'"' +'"'"'[a-z-]+'"'"'/)) {
+            s=substr(lines[j], RSTART, RLENGTH); n=split(s, parts, "'"'"'"); owner=parts[6]; break
+          }
+        }
+        if (owner=="") continue
+        if (lines[i] ~ /foreach *\(\$h in @\(/) {
+          l=lines[i]; sub(/.*@\(/, "", l); sub(/\)\).*/, "", l)
+          n=split(l, hs, "'"'"'")
+          for (k=2; k<=n; k+=2) print owner "\t" hs[k]
+        } else if (lines[i] ~ /Add-Violation/ && lines[i] ~ /no '"'"'## [^'"'"'{}]+'"'"' section/) {
+          l=lines[i]; sub(/.*no '"'"'## /, "", l); sub(/'"'"' section.*/, "", l); print owner "\t" l
+        }
+      }
+    }')
+fi
 
 echo "Checks complete."
 echo "Errors: ${#errors[@]}"

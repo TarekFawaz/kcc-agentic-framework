@@ -22,8 +22,8 @@ tags:
   - framework/skill
   - progress-tracking
 created: 2026-06-06
-updated: 2026-06-07
-version: 1.1.0
+updated: 2026-09-21
+version: 1.2.0
 status: active
 ---
 
@@ -53,8 +53,9 @@ CDNs, opens offline in any browser).
 
 2. The tool reads, at generation time:
    - `ideation/ideas.md` + each `ideation/IDEA-*/idea-*.md` (ideas + status)
-   - `specs/specs.md` + each `specs/IDEA-*-Specs/SPEC-*/SPEC-*.md` +
-     `backlog.md` + `Backlog/Story-*.md` / `Enabler-*.md` (spec + item status)
+   - `specs/specs.md` + each `specs/IDEA-*-Specs/ROADMAP.md` + `SPEC-*/SPEC-*.md`
+     (`## Backlog` table; legacy v5 `backlog.md`) + `Backlog/Story-*` /
+     `Enabler-*` / `Bug-*.md` (spec, item, and bug status)
    - `coordination/backchannel.jsonl` (activity events)
    - `Traces/Session-*/` (per-session trace summaries)
    - `TestResults/IDEA-*/SPEC-*/test-run-summary.md` (PASS/FAIL verdicts)

@@ -24,7 +24,7 @@ license: "Licensed under the terms in LICENSE"
 > awaiting architect
 
 > This is a real **per-spec design document**, not a link stub. The
-> spec-writer creates it as a stub from this template; the architect fills it.
+> spec-writer seeds the section skeleton (headings only); the architect fills it.
 > It must SHOW the spec's slice of the design inline (fenced ```mermaid``` +
 > prose), never link-only.
 >

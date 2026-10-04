@@ -180,6 +180,7 @@ $expectedSkills = @(
     'adapt-workflow.md',
     'architecture-review.md',
     'auto.md',
+    'bug-report.md',
     'butler-brief.md',
     'butler-remember.md',
     'critical-human-gate.md',
@@ -367,18 +368,67 @@ if ($staleMatches.Count -gt 0) {
     Add-Error ("Stale retired .KCC/framework references found: " + ($staleMatches -join ', '))
 }
 
-$parserFiles = @(
-    '.KCC/tools/framework-init.ps1',
-    '.KCC/tools/sync-adapters.ps1',
-    '.KCC/tools/adapt-workflow.ps1',
-    '.KCC/tools/backchannel-append.ps1',
-    '.KCC/tools/build-dashboard.ps1',
-    '.KCC/tools/memory-append.ps1',
-    '.KCC/tools/show-backchannel.ps1',
-    '.KCC/tools/start-agent-session.ps1',
-    '.KCC/tools/toolchain-preflight.ps1',
-    '.KCC/tools/validate-kcc.ps1'
-)
+# -----------------------------------------------------------------------------
+# Contract lint: every heading a gate tool requires must be one its owning
+# agent is told to produce (agent body or its refs/ templates). Catches drift
+# such as a checker demanding '## Effort' while the agent writes
+# '## Effort Estimate'.
+# -----------------------------------------------------------------------------
+$crcPath = Join-Path $RepoRoot '.KCC/tools/check-run-conformance.ps1'
+$agentsSrc = Join-Path $RepoRoot '.KCC/capabilities/agents'
+if ((Test-Path -LiteralPath $crcPath) -and (Test-Path -LiteralPath $agentsSrc)) {
+    $crcLines = [System.IO.File]::ReadAllLines($crcPath)
+    $required = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $crcLines.Length; $i++) {
+        $line = $crcLines[$i]
+        $owner = $null
+        for ($j = $i; $j -lt [Math]::Min($i + 4, $crcLines.Length); $j++) {
+            $om = [regex]::Match($crcLines[$j], "Add-Violation\s+'[^']+'\s+'error'\s+'([a-z-]+)'")
+            if ($om.Success) { $owner = $om.Groups[1].Value; break }
+        }
+        if (-not $owner) { continue }
+        $lm = [regex]::Match($line, 'foreach\s*\(\$h in @\(([^)]*)\)\)')
+        if ($lm.Success) {
+            foreach ($hm in [regex]::Matches($lm.Groups[1].Value, "'([^']+)'")) {
+                [void]$required.Add([pscustomobject]@{ Heading = $hm.Groups[1].Value; Owner = $owner })
+            }
+            continue
+        }
+        if ($line -match 'Add-Violation') {
+            foreach ($hm in [regex]::Matches($line, "no '## ([^'{}]+)' section")) {
+                [void]$required.Add([pscustomobject]@{ Heading = $hm.Groups[1].Value; Owner = $owner })
+            }
+        }
+    }
+    $ownerText = @{}
+    foreach ($r in $required) {
+        if (-not $ownerText.ContainsKey($r.Owner)) {
+            $buf = New-Object System.Text.StringBuilder
+            $agentFile = Join-Path $agentsSrc ($r.Owner + '.md')
+            if (Test-Path -LiteralPath $agentFile) { [void]$buf.Append([System.IO.File]::ReadAllText($agentFile)) }
+            $refsDir = Join-Path $agentsSrc 'refs'
+            if (Test-Path -LiteralPath $refsDir) {
+                foreach ($rf in @(Get-ChildItem -LiteralPath $refsDir -Filter ($r.Owner + '-*.md') -File)) {
+                    [void]$buf.Append([System.IO.File]::ReadAllText($rf.FullName))
+                }
+            }
+            $ownerText[$r.Owner] = $buf.ToString()
+        }
+        $text = $ownerText[$r.Owner]
+        if (-not $text) { continue }
+        if ($text.IndexOf('## ' + $r.Heading) -lt 0) {
+            Add-Error ("Contract drift: check-run-conformance requires '## {0}' (owner {1}) but .KCC/capabilities/agents/{1}.md and its refs never instruct that heading." -f $r.Heading, $r.Owner)
+        }
+    }
+}
+
+# Parse every PowerShell tool so new tools are covered without list edits.
+$parserFiles = @()
+$toolsDirForParse = Join-Path $RepoRoot '.KCC/tools'
+if (Test-Path -LiteralPath $toolsDirForParse) {
+    $parserFiles = @(Get-ChildItem -LiteralPath $toolsDirForParse -Filter '*.ps1' -File -Recurse |
+        ForEach-Object { '.KCC/tools/' + $_.FullName.Substring($toolsDirForParse.Length + 1).Replace([string][char]92, '/') })
+}
 
 foreach ($relativePath in $parserFiles) {
     $path = Join-Path $RepoRoot $relativePath

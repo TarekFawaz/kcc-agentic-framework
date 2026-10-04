@@ -7,7 +7,7 @@ tags:
   - contract
 created: 2026-05-25
 updated: 2026-06-07
-version: 0.5.0
+version: 0.6.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -25,6 +25,7 @@ Required frontmatter:
 name: kebab-case-name
 role: short role phrase
 model-class: strong-reasoning | balanced | fast-implementation | local-strong | local-fast
+effort: low | medium | high | xhigh | max   # optional; defaults per model-class
 description: one-line purpose
 tools-required:
   - read
@@ -32,6 +33,13 @@ tools-required:
 inputs: expected input
 outputs: expected artifacts
 ```
+
+Spawn profile: `model-class` + `effort` resolve to a concrete model and
+reasoning effort per harness at sync time. The resolved profiles and the
+spawn protocol (fresh context, handover packet, lean return, escalation
+ladder) are published in `coordination/orchestrator.md` and
+`coordination/orchestrator.json`. Callers spawn by agent name and never
+restate model or effort inline.
 
 Required body sections:
 

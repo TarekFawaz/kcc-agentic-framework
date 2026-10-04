@@ -153,7 +153,7 @@ The v1.2 milestone lands hand-validated reference templates for each
 | Stage | Owner | Output | Feeds deploy? |
 |--|--|--|--|
 | `/infrastructure-interrogator` | infrastructure-planner | `InfrastructureDecisionBrief.md` | YES - required input |
-| `/spec-create` | spec-writer | spec folder note + backlog | Reads the brief; deploy stage references it later |
+| `/spec-create` | spec-writer | spec file + `Backlog/` items | Reads the brief; deploy stage references it later |
 | `/spec-plan` | planner | `plan.md` | Plan may include deployment notes; does not produce pipeline files |
 | `/spec-implement` | implementer | code under `src/IDEA-{ID}-{slug}/` | Code only - no infra |
 | `/spec-test` | verifier | test results | Must pass before deploy |

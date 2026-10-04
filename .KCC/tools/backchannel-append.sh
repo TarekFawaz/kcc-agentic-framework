@@ -82,12 +82,11 @@ touch "$LOG"
 
 next_num=1
 if [[ -s "$LOG" ]]; then
-  while IFS= read -r line; do
-    id="$(printf '%s\n' "$line" | sed -nE 's/.*"id"[[:space:]]*:[[:space:]]*"BC-([0-9]+)".*/\1/p' | tail -n 1)"
-    if [[ -n "$id" ]]; then
-      next_num=$((10#$id + 1))
-    fi
-  done < <(tail -n 50 "$LOG")
+  # One pass, no per-line fork: the last line in the tail that carries an id wins.
+  id="$(tail -n 50 "$LOG" | sed -nE 's/.*"id"[[:space:]]*:[[:space:]]*"BC-([0-9]+)".*/\1/p' | tail -n 1)"
+  if [[ -n "$id" ]]; then
+    next_num=$((10#$id + 1))
+  fi
 fi
 
 printf -v ID 'BC-%05d' "$next_num"

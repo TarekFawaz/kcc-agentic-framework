@@ -10,8 +10,8 @@ tags:
   - framework/protocol
   - cross-harness
 created: 2026-05-24
-updated: 2026-05-24
-version: 1.1.0
+updated: 2026-09-21
+version: 1.2.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -33,10 +33,11 @@ under **different harnesses or models** exchange work. Examples:
 - Architect-Claude and Architect-Codex both review the same design, then a
   third agent reconciles their dissent.
 
-There is **no automated bridge** between harnesses. The human is the
-transport layer: they copy the envelope from one session and paste it into
-the next. The envelope is plain markdown so any harness - Claude Code,
-Codex CLI, OpenCode, Ollama-backed runners - can both produce and consume it.
+Envelopes are stored in `coordination/handover/HO-{NNN}.md` (never a
+per-spec `handovers.md`, which is retired). `kcc-handover -To <harness>`
+writes one plus a restore point and can launch the target session (see
+[[session-continuity]]); otherwise the human copies/pastes it. The envelope is
+plain markdown so any harness can produce and consume it.
 
 This protocol defines the envelope schema, the copy/paste handoff procedure,
 the fan-out convention for parallel second opinions, and the failure-mode
@@ -85,7 +86,7 @@ The spec or idea this work pertains to, linked when possible.
 
 ```markdown
 ## Spec reference
-SPEC-003 - `specs/SPEC-003-rate-limiter.md`
+SPEC-003 - `specs/IDEA-007-limits-Specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md`
 ```
 
 If the work is pre-spec (still in ideation) reference the idea folder:
@@ -133,10 +134,10 @@ short snippets inline, and link to spec / plan / ideation artifacts.
 
 ```markdown
 ## Input context
-- `specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md` (full file, ~120 lines)
-- `specs/SPEC-003-rate-limiter/backlog.md` (stories/enablers relevant to the handoff)
+- `specs/IDEA-007-limits-Specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md` (spec file incl. Backlog table)
+- `.../SPEC-003-rate-limiter/Backlog/Story-002-throttle.md` (item relevant to the handoff)
 - `src/api/middleware/throttle.ts` lines 1-80 (current implementation)
-- `specs/SPEC-003-rate-limiter/plan.md` section "Ordered Changes" steps 1-4
+- `.../SPEC-003-rate-limiter/plan.md` section "Ordered Changes" steps 1-4
 - Inline excerpt of `CLAUDE.md` quality gate on backpressure (pasted below)
 
 > Quality gate: all rate limiters must surface 429 with Retry-After header.
@@ -341,6 +342,7 @@ ask the human whether this was meant as an envelope or as ad-hoc input.
 ## See also
 
 - [[handover-examples]] - three fully worked envelopes.
+- [[session-continuity]] - `kcc-handover`, restore points, `coordination/handover/`.
 - [[token-budget]] - how `## Token cost so far` is populated.
 - [[obsidian-standard]] - vault frontmatter and linking convention.
 - `.KCC/kernel/README.md` - neutral agent and skill file formats.

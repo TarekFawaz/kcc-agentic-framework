@@ -42,7 +42,7 @@ wants Codex GPT-5 to critique it before locking the decision.
 HANDOVER-2026-05-24-001-A
 
 ## Spec reference
-SPEC-003 - `specs/SPEC-003-rate-limiter.md`
+SPEC-003 - `specs/IDEA-001-api-hardening-Specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md`
 
 ## From
 architect / claude-opus-4-7 / Claude Code
@@ -54,7 +54,7 @@ architect / gpt-5.0 / Codex CLI
 plan
 
 ## Input context
-- `specs/SPEC-003-rate-limiter.md` (full file, ~120 lines) - acceptance
+- `specs/IDEA-001-api-hardening-Specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md` (full file, ~120 lines) - acceptance
   criteria include sub-100ms p99 latency and Retry-After header on 429s.
 - `src/api/middleware/throttle.ts` lines 1-80 - current naive in-memory
   counter implementation (gets reset on every pod restart, hence this spec).
@@ -133,7 +133,7 @@ Lean into that - I want a harsh failure-mode critique, not validation.
 HANDOVER-2026-05-24-001-A-RETURN
 
 ## Spec reference
-SPEC-003 - `specs/SPEC-003-rate-limiter.md`
+SPEC-003 - `specs/IDEA-001-api-hardening-Specs/SPEC-003-rate-limiter/SPEC-003-rate-limiter.md`
 
 ## From
 architect / gpt-5.0 / Codex CLI
@@ -233,7 +233,7 @@ Claude Opus because Claude Code has the filesystem `edit` tool wired up.
 HANDOVER-2026-05-24-002
 
 ## Spec reference
-SPEC-004 - `specs/SPEC-004-openapi-generation.md`
+SPEC-004 - `specs/IDEA-001-api-hardening-Specs/SPEC-004-openapi-generation/SPEC-004-openapi-generation.md`
 
 ## From
 planner / gpt-5.0 / Codex CLI
@@ -245,8 +245,8 @@ implementer / claude-opus-4-7 / Claude Code
 implement
 
 ## Input context
-- `specs/SPEC-004-openapi-generation.md` (full file, ~95 lines).
-- `specs/SPEC-004-zod-validation/plan.md` (the plan being handed off - full content
+- `specs/IDEA-001-api-hardening-Specs/SPEC-004-openapi-generation/SPEC-004-openapi-generation.md` (full file, ~95 lines).
+- `specs/IDEA-001-api-hardening-Specs/SPEC-004-zod-validation/plan.md` (the plan being handed off - full content
   pasted below since the receiving harness should read it from disk but
   also has it inline as a fallback).
 - `src/api/routes/` (12 route files, listed in plan step 1).
@@ -254,7 +254,7 @@ implement
 - Dependency check from `specs/specs.md`: SPEC-002 (Zod schemas) is **Done**;
   no other blockers.
 
-### Inline copy of `specs/SPEC-004-zod-validation/plan.md`
+### Inline copy of `specs/IDEA-001-api-hardening-Specs/SPEC-004-zod-validation/plan.md`
 
 > ### Dependency Check
 > SPEC-002 (Zod schemas on every route) is Done. No blockers.
@@ -351,7 +351,7 @@ restart point must be conveyed.
 HANDOVER-2026-05-24-003
 
 ## Spec reference
-SPEC-005 - `specs/SPEC-005-job-queue.md`
+SPEC-005 - `specs/IDEA-002-async-jobs-Specs/SPEC-005-job-queue/SPEC-005-job-queue.md`
 
 ## From
 implementer / qwen3-max / Ollama
@@ -365,8 +365,8 @@ implement
 ## Input context
 
 ### Spec and plan (read from disk)
-- `specs/SPEC-005-job-queue.md` (full file, ~140 lines).
-- `specs/SPEC-005-cli-output/plan.md` - 8 ordered steps. Steps 1-3 are DONE
+- `specs/IDEA-002-async-jobs-Specs/SPEC-005-job-queue/SPEC-005-job-queue.md` (full file, ~140 lines).
+- `specs/IDEA-002-async-jobs-Specs/SPEC-005-cli-output/plan.md` - 8 ordered steps. Steps 1-3 are DONE
   (commits below). Steps 4-8 are the work to take over.
 
 ### Commits already landed on branch `spec/SPEC-005`
@@ -381,7 +381,7 @@ implement
 - `src/jobs/runner.ts` - worker loop with backoff. Has a TODO at line 47
   about graceful shutdown that step 6 of the plan is supposed to resolve.
 
-### Remaining plan steps (4-8) - verbatim from `specs/SPEC-005-cli-output/plan.md`
+### Remaining plan steps (4-8) - verbatim from `specs/IDEA-002-async-jobs-Specs/SPEC-005-cli-output/plan.md`
 
 > 4. **File:** `src/jobs/redis-queue.ts` (new)
 >    **Change:** Implement `RedisQueue` satisfying `JobQueue`, backed by

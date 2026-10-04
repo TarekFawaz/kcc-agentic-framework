@@ -10,8 +10,8 @@ tags:
   - infrastructure
   - documentation
 created: 2026-05-29
-updated: 2026-05-29
-version: 1.0.0
+updated: 2026-09-21
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -54,6 +54,11 @@ flag the gap.
 ```text
 .KCC/kernel/templates/pipelines/
 |-- README.md                       <- this file
+|-- quality-gate/                   <- mandatory first stage, one file per CI provider
+|   |-- github-actions/quality-gate.yml.tmpl
+|   |-- azure-devops/azure-pipelines.quality-gate.yml.tmpl
+|   |-- gitlab-ci/.gitlab-ci.quality-gate.yml.tmpl
+|   `-- jenkins/Jenkinsfile.quality-gate.tmpl
 |-- aws/
 |   |-- github-actions/
 |   |   `-- pipeline.yml.tmpl
@@ -84,6 +89,32 @@ Each template file is a CI-native pipeline document (`pipeline.yml.tmpl`,
 `{{spec_slug}}`, `{{idea_id}}`, `{{idea_slug}}`, `{{target}}`, and
 `{{dialect}}` substitution placeholders.
 
+## Mandatory quality-gate stage
+
+Every provider template runs the KCC quality gate
+([`quality-gate.sh`](../../../tools/quality-gate.sh), bash on a Linux runner)
+before any build, plan, or deploy stage. Ready-to-use stage templates live
+under `quality-gate/`:
+
+| CI provider | Template |
+|--|--|
+| GitHub Actions | `quality-gate/github-actions/quality-gate.yml.tmpl` |
+| Azure DevOps | `quality-gate/azure-devops/azure-pipelines.quality-gate.yml.tmpl` |
+| GitLab CI | `quality-gate/gitlab-ci/.gitlab-ci.quality-gate.yml.tmpl` |
+| Jenkins | `quality-gate/jenkins/Jenkinsfile.quality-gate.tmpl` |
+
+Rules every template (including future `{target}/{ci}` cells) must keep:
+
+- Run with `--require`: a missing scanner is an error in CI, never deferred.
+- Fail the job on exit `1` (violations) **and** exit `3` (deferred). Deferred
+  is not a pass anywhere, and CI has no human to defer to.
+- Install scanners (gitleaks, osv-scanner, semgrep, syft, trivy) with pinned
+  versions and checksum verification, declared in the reviewed pipeline file.
+  Locally they are installed only through the toolchain-preflight human gate.
+- Restore the declared stack's toolchain and project dependencies before the
+  gate; the gate never installs dependencies.
+- Publish `quality-gate.json` and `TestResults/` as build evidence.
+
 ## Contributing a template
 
 To land a real template for a cell of the matrix:
@@ -95,6 +126,10 @@ To land a real template for a cell of the matrix:
    CI's canonical filename: `azure-pipelines.yml.tmpl`,
    `.gitlab-ci.yml.tmpl`).
 3. Required stages per template, even if no-op for some targets:
+   - **quality-gate** - FIRST stage, mandatory in every provider template:
+     `bash .KCC/tools/quality-gate.sh --spec {{spec_id}} --require`; the job
+     fails on exit 1 (violations) and on exit 3 (deferred). Copy it from the
+     provider file under `quality-gate/` (see above).
    - **lint** - run dialect-appropriate linters
    - **test** - run dialect-appropriate test suite
    - **build** - produce the deployable artifact

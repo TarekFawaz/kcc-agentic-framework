@@ -386,6 +386,21 @@ Use this table:
 |--|--|--|--|--|--|
 | QG-001 | {testable gate} | {test, command, metric, review evidence} | {scope} | [[adrs/ADR-0001-example|ADR-0001]] | active |
 
+### Quality gate catalog (framework defaults)
+
+The architect copies every gate that applies into `architecture/quality-gates.md`.
+The verifier enforces them. A gate can be dropped only through an ADR.
+
+| ID | Gate | Evidence (mechanical where possible) | Applies to |
+|--|--|--|--|
+| QG-ARCH-CONFORMANCE | The implemented stack matches the ADR-declared stack | Declared vs implemented languages, frameworks, API style, persistence | every spec |
+| QG-ARCH-DOCS | The architecture docs are reviewed and substantive | architecture-critic verdict **CONFORMANT** on record (or a human override); `architecture/architecture.md` is a narrative document, not a hub or a sub-1 KB stub; diagrams are embedded ```mermaid``` blocks with a `Source:` line; **no** `.mmd` files and **no** `architecture/diagrams/`; the supporting docs for the active depth are present and substantive (`fitness-functions.md`, `nfrs.md`, `technical-budgets.md`, `guardrails.md`, `quality-gates.md`, `adrs/` + `adrs.md`); `check-run-conformance -Scope architecture` exits 0 | every spec |
+| QG-TRACE | Every AC is proven by a passing test | `check-traceability -Spec` exits 0 | every spec |
+| QG-QUALITY | Build, lint, tests, coverage floor, lockfile, secrets, dependency audit, SAST | `quality-gate -Spec` exits 0 (exit 3 = deferred, **not** a pass). Coverage floor: `.KCC/settings.json` -> `quality.coverage_min_pct` (default 80) unless this file sets `coverage_min_pct: NN` | every spec with code |
+| QG-PROD | Production readiness | Health/readiness endpoint or CLI self-check; structured logging with no secrets in logs; configuration from environment or config files with no hard-coded secrets or hosts; graceful shutdown and timeouts on external calls; reversible data migrations with documented rollback; a documented rollback/redeploy path; for deployables, SBOM plus image/fs scan (`quality-gate` QG-SBOM/QG-IMAGE) | deployable, service, or API specs; `n/a` with a reason otherwise |
+| QG-API-CONFORMANCE | The API matches its contract (OpenAPI/AsyncAPI) | Contract tests or schema validation | specs with an API |
+| QG-BUGS | No open blocker or major bugs | `check-run-conformance -Scope bugs` exits 0 | every spec |
+
 ---
 
 ## Related

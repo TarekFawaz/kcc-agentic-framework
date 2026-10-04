@@ -133,7 +133,9 @@ license: "Licensed under the terms in LICENSE"
 ```
 
 Every bug file MUST link back (via `[[..]]` wikilink) to its story/enabler
-backlog file and to the spec folder note.
+backlog file and to the spec file. A failing AC also gets a
+`Backlog/Bug-*.md` item that links here as its `Evidence` (spec-layout ->
+*Bug item shape*).
 
 ---
 

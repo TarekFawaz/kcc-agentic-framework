@@ -1,0 +1,90 @@
+# KCC quality gate - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/quality-gate/azure-devops/azure-pipelines.quality-gate.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Runs .KCC/tools/quality-gate.sh with --require on a Linux agent and FAILS the
+# job on exit 1 (violations) AND exit 3 (deferred). Deferred is never a pass in CI.
+# Scanner installs are pinned and declared in this reviewed pipeline file.
+# Can be used standalone or as the first stage of a {target}/azure-devops pipeline.
+
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: ['*']
+
+variables:
+  KCC_SPEC: '{{spec_id}}'          # empty = gate the whole repo root
+  GITLEAKS_VERSION: '8.21.2'
+  OSV_SCANNER_VERSION: '1.9.2'
+  SEMGREP_VERSION: '1.99.0'
+  SYFT_VERSION: '1.18.1'
+  TRIVY_VERSION: '0.58.1'
+
+stages:
+  - stage: quality_gate
+    displayName: KCC quality gate
+    jobs:
+      - job: quality_gate
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 45
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          # Declared-stack toolchain for {{dialect}} (keep only what applies), e.g.
+          #   - task: NodeTool@0        inputs: { versionSpec: '20.x' }
+          #   - task: UsePythonVersion@0 inputs: { versionSpec: '3.12' }
+          #   - task: UseDotNet@2       inputs: { version: '8.0.x' }
+          # Restore project dependencies here; the gate never installs them.
+
+          - bash: |
+              set -euo pipefail
+              bin="$HOME/.local/bin"; mkdir -p "$bin"; cd "$(mktemp -d)"
+              fetch() { curl -sSfL --retry 3 -o "$2" "$1"; }
+              fetch "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+              fetch "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" gitleaks.sums
+              sha256sum --ignore-missing -c gitleaks.sums
+              tar -xzf gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz -C "$bin" gitleaks
+              fetch "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" osv-scanner_linux_amd64
+              fetch "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_SHA256SUMS" osv.sums
+              sha256sum --ignore-missing -c osv.sums
+              install -m 0755 osv-scanner_linux_amd64 "$bin/osv-scanner"
+              fetch "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_${SYFT_VERSION}_linux_amd64.tar.gz
+              fetch "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt" syft.sums
+              sha256sum --ignore-missing -c syft.sums
+              tar -xzf syft_${SYFT_VERSION}_linux_amd64.tar.gz -C "$bin" syft
+              fetch "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
+              fetch "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" trivy.sums
+              sha256sum --ignore-missing -c trivy.sums
+              tar -xzf trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -C "$bin" trivy
+              python3 -m venv "$HOME/.kcc-semgrep"
+              "$HOME/.kcc-semgrep/bin/pip" install --quiet "semgrep==${SEMGREP_VERSION}"
+              ln -sf "$HOME/.kcc-semgrep/bin/semgrep" "$bin/semgrep"
+              echo "##vso[task.prependpath]$bin"
+            displayName: Install pinned KCC scanners (checksum-verified)
+
+          - bash: |
+              set +e -uo pipefail   # capture the exit code; decide below
+              args=(--require --json)
+              if [ -n "${KCC_SPEC}" ]; then args+=(--spec "${KCC_SPEC}"); fi
+              bash .KCC/tools/quality-gate.sh "${args[@]}" > quality-gate.json
+              rc=$?
+              cat quality-gate.json
+              case "$rc" in
+                0) echo "quality gate: pass" ;;
+                3) echo "##vso[task.logissue type=error]quality gate DEFERRED (a scanner/toolchain is missing) - not acceptable in CI"; exit 1 ;;
+                *) echo "##vso[task.logissue type=error]quality gate FAILED (exit $rc)"; exit 1 ;;
+              esac
+            displayName: KCC quality gate (--require; exit 1 and 3 both fail)
+
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            displayName: Publish quality-gate evidence
+            inputs:
+              targetPath: $(System.DefaultWorkingDirectory)
+              artifact: kcc-quality-gate
+              publishLocation: pipeline
+            # Narrow targetPath to TestResults/ once the spec path is known.

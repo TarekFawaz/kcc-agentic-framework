@@ -39,18 +39,27 @@ done
 SOURCE_ABS="$(cd "$SOURCE" 2>/dev/null && pwd || (cd "$(dirname "$SOURCE")" && printf '%s/%s\n' "$(pwd)" "$(basename "$SOURCE")"))"
 
 detect_format() {
-  local root="$1"
+  # Marker precedence per adaptation-guide.md -> Recognized source formats.
+  local root="$1" found=""
   if [[ "$FORMAT" != "auto" ]]; then echo "$FORMAT"; return; fi
-  [[ -d "$root/.cursor/rules" ]] && { echo "cursor"; return; }
-  [[ -d "$root/.claude/agents" || -d "$root/.claude/skills" ]] && { echo "claude"; return; }
-  [[ -d "$root/.codex/skills" || -f "$root/AGENTS.md" ]] && { echo "codex"; return; }
-  [[ -d "$root/.opencode" || -f "$root/opencode.json" || -f "$root/opencode.toml" ]] && { echo "opencode"; return; }
-  [[ -f "$root/.aider.conf.yml" || -f "$root/CONVENTIONS.md" ]] && { echo "aider"; return; }
-  [[ -d "$root/prompts" || -d "$root/agents" || -d "$root/skills" ]] && { echo "generic"; return; }
+  [[ -d "$root/.cursor/rules" || -f "$root/.cursorrules" ]] && found="$found cursor"
+  [[ -d "$root/.claude/agents" || -d "$root/.claude/skills" || -d "$root/.claude/commands" ]] && found="$found claude"
+  [[ -d "$root/.codex" || -f "$root/codex.toml" ]] && found="$found codex"
+  [[ -d "$root/.opencode" || -f "$root/opencode.json" || -f "$root/opencode.jsonc" || -f "$root/opencode.toml" ]] && found="$found opencode"
+  [[ -f "$root/AIDER.md" || -f "$root/.aider.conf.yml" ]] && found="$found aider"
+  [[ -f "$root/.agents/manifest.json" || -d "$root/.agents/agents" ]] && found="$found generic"
+  set -- $found
+  if (( $# > 1 )); then echo "WARN: multiple harness workflows detected:$found - importing '$1'; rerun with --format for the others." >&2; fi
+  if (( $# >= 1 )); then echo "$1"; return; fi
+  if [[ -f "$root/AGENTS.md" ]]; then
+    echo "Root AGENTS.md without .codex/, codex.toml, .opencode/ or opencode.json|toml markers is ambiguous. Rerun with --format codex|opencode|generic." >&2
+    exit 2
+  fi
   echo "generic"
 }
 
 EFFECTIVE_FORMAT="$(detect_format "$SOURCE_ABS")"
+[[ -n "$EFFECTIVE_FORMAT" ]] || exit 2
 MIGRATIONS_DIR="$REPO_ROOT/migrations"
 mkdir -p "$MIGRATIONS_DIR"
 

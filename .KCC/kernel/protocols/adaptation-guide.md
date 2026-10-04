@@ -32,14 +32,27 @@ workflow, and the field/model mapping tables the migrator applies.
 
 ## Recognized source formats
 
-| Format    | Detection signal                                              | Notes |
-|--|--|--|
-| Cursor    | `.cursor/rules/*.mdc`                                         | One `.mdc` per rule; YAML-ish frontmatter + body |
-| Claude Code | `.claude/agents/*.md` and/or `.claude/skills/*/SKILL.md`    | Already very close to neutral format |
-| Codex CLI | Root `AGENTS.md` (single catalog) - no `.opencode/` sibling   | Catalog-style; one document, many agent rows |
-| OpenCode  | Root `AGENTS.md` **plus** `.opencode/` or `opencode.toml`     | Same file convention as Codex, disambiguated by sibling files |
-| Aider     | `AIDER.md` and/or `.aider*` (e.g. `.aider.conf.yml`)          | Conventions + per-task prompt files |
-| Generic   | `prompts/*.md` or `agents/*.md` with no other signal          | Free-form; expect low confidence and more `needs-review` |
+Detection is **marker-based across every harness**. A repo can carry several
+harnesses at once, so collect **all** matching markers, then import each
+detected format (one `IMPORT-{NNN}` per format), or ask which to import.
+
+| Format | Strong markers (any one = detected) | Weak markers (need a strong one or a hint) | Notes |
+|--|--|--|--|
+| Claude Code | `.claude/agents/*.md`, `.claude/skills/*/SKILL.md`, `.claude/commands/*.md`, `.claude/settings.json` | root `CLAUDE.md` | Closest to neutral format |
+| Codex CLI | `.codex/` (agents, skills, `config.toml`), root `codex.toml`, `~/.codex`-style `config.toml` copied into the repo | root `AGENTS.md` | `AGENTS.md` alone is shared with OpenCode and generic runners |
+| OpenCode | `.opencode/` (agents, commands, skills), `opencode.json`, `opencode.jsonc`, `opencode.toml` | root `AGENTS.md` | |
+| Cursor | `.cursor/rules/*.mdc`, `.cursorrules` | | One rule per file |
+| Aider | `.aider.conf.yml`, `.aider*`, `AIDER.md` | `CONVENTIONS.md` | Conventions + per-task prompts |
+| Ollama | `ollama/agents.json`, `Modelfile` | | Model bindings only |
+| Generic | `.agents/manifest.json`, `.agents/agents/*.md` | `prompts/*.md`, `agents/*.md` | Free-form; expect `needs-review` |
+
+**Resolution order:**
+1. A `--format` hint wins, but warn when its markers are absent.
+2. Each format with a strong marker is detected, including several at once.
+3. Root `AGENTS.md` with no strong marker is ambiguous (Codex, OpenCode, or
+   generic): stop and ask.
+4. Weak markers only: stop and ask.
+5. No markers: stop with "no recognised workflow".
 
 ### Minimal examples
 
@@ -57,11 +70,11 @@ You are the architect. Trace data flow ...
 
 ```md
 ---
-model: claude-opus-4-6
+name: planner
 description: Implementation planner
-allowed-tools:
-  - Read
-  - Glob
+model: opus
+effort: high
+tools: Read, Glob
 ---
 # Planner
 ...

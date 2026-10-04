@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-plan
 description: >
- Create an implementation plan (including an atomic test-case enumeration) for an epic spec and its story/enabler backlog. Usage: /spec-plan SPEC-003
+ Create an implementation plan (including an atomic test-case enumeration) with file-disjoint `## Waves` for a v6 spec and its `Backlog/` items. Usage: /spec-plan SPEC-003
 argument-placeholder: <ARGS>
 delegates-to:
   - planner
@@ -18,8 +18,8 @@ tags:
   - framework/skill
   - lifecycle/plan
 created: 2026-05-24
-updated: 2026-05-29
-version: 3.5.0
+updated: 2026-09-21
+version: 4.0.0
 status: active
 ---
 
@@ -36,23 +36,18 @@ Plan the implementation for spec <ARGS>.
    `specs/SPEC-{ID}-{slug}/`), tell the user to migrate via spec-writer and
    stop.
 2. Verify the following exist inside the spec folder:
-   - `SPEC-{ID}-{slug}.md` (same-name folder note);
-   - `backlog.md`;
-   - `Backlog/` subfolder with `Story-*.md` and/or `Enabler-*.md` files
-     (note capital B in `Backlog/`, capitalized first letter in
-     `Story-` / `Enabler-`);
-   - `parallelization.md`;
+   - `SPEC-{ID}-{slug}.md` with a `## Backlog` table (legacy v5: `backlog.md`);
+   - `Backlog/` with `Story-*`, `Enabler-*`, and/or `Bug-*.md` files;
    - the per-idea index `../IDEA-{ID}-{slug}-Specs.md`.
-   If any are missing, stop and ask to regenerate the spec using the
-   current spec-layout protocol.
+   If any are missing, stop and ask spec-writer to regenerate per spec-layout.
 3. Read every `Backlog/Story-*.md` and `Backlog/Enabler-*.md`. Confirm each
-   item has acceptance criteria with `AC-N` IDs, Success Factors, Test
-   Hints, Impacted Files using `src/IDEA-{ID}-{slug}/...`, dependencies,
-   selected dialect, complexity, parallel eligibility, and a passing
-   INVEST check. Missing fields must be repaired by spec-writer before
+   item has `AC-N` IDs, Test Hints, Impacted Files using
+   `src/IDEA-{ID}-{slug}/...`, dependencies, dialect, and a passing INVEST
+   check. Missing fields must be repaired by spec-writer before
    planning.
 4. Verify `/token-estimate SPEC-{ID}` has one of these approvals recorded
-   in the current session trace or in `budget.md` for the plan stage:
+   in the session trace (`HumanDecisions.md` / `TokenUsage.md`) or
+   `ROADMAP.md` Token Plan for the plan stage:
    - explicit human approval; or
    - AutoPolicy `auto-approved` with cumulative hosted-model spend still
      inside the approved budget cap.
@@ -67,11 +62,11 @@ Plan the implementation for spec <ARGS>.
      `.KCC/kernel/protocols/dialects/`, always including `testing-unit` and
      `testing-integration`, and adding `testing-performance` /
      `testing-security` if any backlog item scopes them;
-   - refine `parallelization.md` so sub-agent sessions reference working
-     directory `src/IDEA-{ID}-{slug}/`;
-   - emit a mandatory `## Atomic test cases` table mapping every AC on every
-     story and enabler to one or more Test IDs (`T-001`, ...) at level
-     unit / integration / performance / security;
+   - write `## Waves` in `plan.md` (file-disjoint; no `parallelization.md`);
+   - emit `## Atomic test cases` mapping every AC to Test IDs (<= 8 per
+     item, SZ-4, else a split request to spec-writer; Bug items start with a
+     failing regression Test ID);
+   - self-check with `check-run-conformance -Scope plan`;
    - avoid unnecessary dependencies between stories/enablers.
 7. Display a summary of the plan: backlog items covered, selected dialects
    (including which `testing-*`), ordered changes, proposed parallel

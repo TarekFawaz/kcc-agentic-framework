@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-test
 description: >
- Verify an epic spec implementation against epic criteria, story/enabler acceptance criteria (under `Backlog/`), and the planner's atomic test-case enumeration. Usage: /spec-test SPEC-003
+ Verify a v6 spec implementation against spec ACs, backlog item ACs (under `Backlog/`), the planner's atomic test cases, `check-traceability`, and `quality-gate`. Usage: /spec-test SPEC-003
 argument-placeholder: <ARGS>
 delegates-to:
   - verifier
@@ -18,8 +18,8 @@ tags:
   - framework/skill
   - lifecycle/test
 created: 2026-05-24
-updated: 2026-06-07
-version: 3.8.0
+updated: 2026-09-21
+version: 4.0.0
 status: active
 ---
 
@@ -31,10 +31,9 @@ Verify implementation of spec <ARGS>.
 
 1. Locate `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` from the
    supplied SPEC-ID by scanning the per-idea spec groups under `specs/`.
-2. Verify the same-name folder note, `backlog.md`, `Backlog/Story-*.md`,
-   `Backlog/Enabler-*.md`, `parallelization.md`, `plan.md` (with a
-   populated `## Atomic test cases` table), and the per-idea index
-   `../IDEA-{ID}-{slug}-Specs.md` all exist.
+2. Verify `SPEC-{ID}-{slug}.md`, `Backlog/*.md`, and `plan.md` (with
+   `## Waves` and `## Atomic test cases`) exist (legacy v5: `backlog.md`
+   fallback).
 3. Verify the architecture artifacts referenced by the spec exist for the
    selected architecture depth. Architecture diagrams are **named `.md` files
    with embedded inline ```mermaid``` blocks** (e.g.
@@ -73,19 +72,17 @@ Verify implementation of spec <ARGS>.
 4d. **Architecture-conformance check (`QG-ARCH-CONFORMANCE` - default gate on
    every spec).** Per
    [[../../kernel/protocols/architecture-governance|architecture-governance]],
-   the architecture ADR(s) dictate the stack. The verifier reads the declared
-   stack from `architecture/architecture.md` + the relevant ADR(s) (languages,
-   frameworks, API style, persistence, architecture style) and compares it with
-   what was actually implemented under `src/IDEA-{ID}-{slug}/` (package
-   manifests, file types, framework imports, datastore integration). The
-   implementation MUST match the declared stack, or **CHANGES_NEEDED** with a
-   finding: "implementation stack (X) does not match architecture ADR (Y); fix
-   the implementation or record an approved ADR documenting the change." A
-   divergence is excused ONLY by an Accepted (or Proposed + human-approved) ADR
-   documenting it - a stack change is a prohibited silent assumption. A
-   **TOOLCHAIN_DEFERRED** state does NOT excuse a stack mismatch: deferred means
-   the declared stack was written but not built, not that a different stack was
-   built.
+   the ADR-declared stack (`architecture/architecture.md` + ADRs) must match
+   what is implemented under `src/IDEA-{ID}-{slug}/` (manifests, file types,
+   imports, datastore), else **CHANGES_NEEDED**. Excused ONLY by an Accepted
+   (or Proposed + human-approved) ADR. **TOOLCHAIN_DEFERRED** never excuses a
+   stack mismatch.
+4e. **Verifier-run gates.** The verifier itself runs
+   `check-traceability -Spec SPEC-{ID}` and `quality-gate -Spec SPEC-{ID}`
+   and records each command + exit code in `review.md -> ## Evidence`.
+   `quality-gate` exit 3 -> **QUALITY_DEFERRED** (never a pass). QG-PROD and
+   QG-ARCH-DOCS per `.KCC/kernel/protocols/architecture-governance.md` ->
+   *Quality gate catalog*.
 5. Delegate to the **verifier** agent with the spec ID, backlog item files,
    selected dialects (always `testing-unit` + `testing-integration`, plus
    `testing-performance` / `testing-security` if loaded by the plan), the
@@ -94,14 +91,17 @@ Verify implementation of spec <ARGS>.
    per [[.KCC/kernel/protocols/test-results-layout]]:
    - `test-run-summary.md` — every AC with PASS/FAIL and a link to any bug
      file;
-   - one bug md PER issue, named `Story-{ID}-AC-{n}-Bug-{ID}.md` (or the
-     `Enabler-` variant), each linked to its AC + story/enabler;
+   - one evidence md PER issue, `Story-{ID}-AC-{n}-Bug-{ID}.md` (or
+     `Enabler-`), plus a `Backlog/Bug-{NNN}-{slug}.md` item (`Source:
+     verifier`) for each failing AC;
    - all screenshots under `screenshots/`, never the repo root.
-   `review.md` remains the verdict file and links into this tree.
-7. Display the verdict: APPROVED, CHANGES_NEEDED, or TOOLCHAIN_DEFERRED (the
-   latter when tools were missing and install was deferred - NOT a pass) with a
-   summary of:
-   - failing epic ACs;
+   `review.md` (created by the verifier) is the verdict file; self-check
+   `check-run-conformance -Scope review`.
+7. Display the verdict: APPROVED (only if traceability pass, quality-gate
+   exit 0, no open blocker/major bug, QG-PROD + QG-ARCH-DOCS pass),
+   CHANGES_NEEDED, QUALITY_DEFERRED, or TOOLCHAIN_DEFERRED (deferred = NOT a
+   pass) with a summary of:
+   - failing spec ACs and open Bug items;
    - failing story/enabler ACs (per `Story-NNN` / `Enabler-NNN`);
    - failing Test IDs from the atomic test-case table;
    - links to the per-bug files and `test-run-summary.md` under

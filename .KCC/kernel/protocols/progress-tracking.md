@@ -104,7 +104,7 @@ The taxonomy is intentionally small. Anything more nuanced (e.g. "QA",
 - **spec-writer** - creates the per-idea spec index when the idea's
   first spec is materialized; flips the idea row in `ideation/ideas.md`
   to `Handed off`; creates the spec row in `specs/specs.md`,
-  in the per-idea index, and in the per-spec folder note; sets
+  in the per-idea index, and in the spec file's `## Backlog` table; sets
   story/enabler rows to `Drafting` (during decomposition) and
   `Ready` (on completion).
 - **planner** - does not change status, but adds plan-readiness
@@ -170,11 +170,11 @@ Per the spec-layout protocol, this file already has a Specs table. Keep
 the same shape but add a `Stories (R/IP/D)` / `Enablers (R/IP/D)` rollup
 column so the index reflects the actual progress of each spec's backlog.
 
-### Per-spec folder note - `SPEC-{ID}-{slug}.md`
+### Per-spec file - `SPEC-{ID}-{slug}.md`
 
-The per-spec aggregator rolls up the spec's own story/enabler rows.
-Per the spec-layout protocol, the folder note already has a `Stories
-and Enablers` table; this protocol adds a status snapshot above it:
+The spec file's `## Backlog` table (spec-layout v6) is the per-spec
+aggregator; the header table's `Status` carries the spec status. Keep the
+snapshot below in one line per field so the file stays within SZ-5:
 
 ```markdown
 ## Status snapshot
@@ -182,7 +182,8 @@ and Enablers` table; this protocol adds a status snapshot above it:
 - **Spec status**: Ready | In progress | Blocked | In review | Done | Abandoned
 - **Stories**: {n total} - Ready: {n}, In progress: {n}, In review: {n}, Done: {n}, Blocked: {n}
 - **Enablers**: {n total} - Ready: {n}, In progress: {n}, In review: {n}, Done: {n}, Blocked: {n}
-- **Plan**: drafted | ready | refresh-needed
+- **Bugs**: open blocker/major: {n}
+- **Plan**: absent | ready | refresh-needed
 - **Review**: awaiting | passed | failed
 ```
 

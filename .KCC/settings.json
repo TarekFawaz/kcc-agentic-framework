@@ -24,5 +24,55 @@
       "budget_cap_amount": null,
       "budget_cap_currency": "USD"
     }
+  },
+  "repo": {
+    "bootstrap": "ask",
+    "decision": null,
+    "remote": null
+  },
+  "spec_sizing": {
+    "max_items": 6,
+    "max_files_per_item": 5,
+    "max_tests_per_item": 8,
+    "max_spec_lines": 150
+  },
+  "quality": {
+    "coverage_min_pct": 80,
+    "scanners": {
+      "secrets": "gitleaks",
+      "dependencies": "osv-scanner",
+      "sast": "semgrep",
+      "sast_runner": "local"
+    },
+    "fail_on": {
+      "secrets": "any",
+      "dependencies": "high",
+      "sast": "error"
+    }
+  },
+  "continuity": {
+    "soft_pct": 95,
+    "hard_pct": 99,
+    "resume_grace_seconds": 120,
+    "default_wait_minutes": 300,
+    "max_resumes": 5,
+    "permission_mode": "acceptEdits",
+    "resume": {
+      "claude": "claude -p --resume {session_id} --permission-mode {permission_mode} \"{resume_prompt}\"",
+      "codex": "codex exec resume {session_id} \"{resume_prompt}\"",
+      "opencode": "opencode run --session {session_id} \"{resume_prompt}\"",
+      "generic": null
+    },
+    "start": {
+      "claude": "claude -p --permission-mode {permission_mode} \"{resume_prompt}\"",
+      "codex": "codex exec \"{resume_prompt}\"",
+      "opencode": "opencode run \"{resume_prompt}\"",
+      "generic": null
+    }
+  },
+  "run": {
+    "max_attempts": 3,
+    "state_timeout_minutes": 60,
+    "harness": "claude"
   }
 }

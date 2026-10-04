@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-create
 description: >
- Create a new epic-level spec folder with a same-name folder note and JIRA-style story/enabler backlog under its per-idea `IDEA-{ID}-{slug}-Specs/` parent folder, from an idea handoff, detailed human prompt, source file, source folder, or SpecWriterStarter.md. Usage: /spec-create <problem description or file-or-folder path or SpecWriterStarter.md>
+ Create one or more lean v6 specs (smallest user-valuable delivery each: one `SPEC-{ID}-{slug}.md` + `Backlog/` items, sized SZ-1..5) plus the per-idea `ROADMAP.md` under `IDEA-{ID}-{slug}-Specs/`, from an idea handoff, detailed human prompt, source file, source folder, or SpecWriterStarter.md. Usage: /spec-create <problem description or file-or-folder path or SpecWriterStarter.md>
 argument-placeholder: <ARGS>
 delegates-to:
   - technical-interrogator
@@ -23,14 +23,14 @@ tags:
   - framework/skill
   - lifecycle/create
 created: 2026-05-24
-updated: 2026-05-29
-version: 3.5.0
+updated: 2026-09-21
+version: 4.0.0
 status: active
 ---
 
 # Spec Create
 
-Create a new epic-level spec for: <ARGS>
+Create v6 spec(s) for: <ARGS>
 
 ## Steps
 
@@ -53,12 +53,10 @@ Create a new epic-level spec for: <ARGS>
    - Detailed prompt: treat `<ARGS>` itself as the source material.
    Direct file/folder/prompt usage is valid. Do not force `/idea-interrogator`
    when the human intentionally starts at `/spec-create`.
-3. For idea handoffs, treat `QuickRoadmap.md` as the high-level epic map. If
-   it identifies multiple likely specs, build a spec startup list first, ask
-   the human which epics to create now, and create each selected spec as its
-   own folder under the per-idea `IDEA-{ID}-{slug}-Specs/`. For direct
-   sources, infer candidate epics from the supplied material and ask only if
-   there is more than one plausible epic.
+3. For idea handoffs, treat `QuickRoadmap.md` as the high-level map. The
+   spec-writer slices it into the smallest user-valuable deliveries (one spec
+   each, SZ-1..5) and orders them in `ROADMAP.md`; ask the human which to
+   create now only when the slicing is ambiguous.
 4. Invoke `/technical-interrogator` to collect technical decision inputs
    before spec writing. If an idea folder already contains
    `TechnicalDecisionBrief.md`, reuse it unless the human asks to refresh it.
@@ -85,40 +83,28 @@ Create a new epic-level spec for: <ARGS>
    `testing-security` when scoped), and required Mermaid diagrams are
    created or updated before spec writing.
 7. Check existing per-idea specs groups under `specs/IDEA-*-Specs/` and
-   their backlogs to avoid duplicate epics, stories, or enablers. If
+   their backlogs to avoid duplicate specs or items. If
    `solution/solution.md` exists, include the solution baseline in the
    spec-writer context.
 8. Delegate to the **spec-writer** agent with the full source context,
    architect outputs, parent `IDEA-{ID}` + slug, and next SPEC-ID.
-9. After each epic folder is created, confirm:
-   - `specs/IDEA-{ID}-{slug}-Specs/` exists.
-   - `specs/IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs.md` exists (the
-     only file allowed to link back to `ideation/IDEA-{ID}-{slug}/...`).
-   - `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md`
-     exists and links up only to the per-idea index.
-   - `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/backlog.md` exists.
-   - `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/Backlog/Story-*.md`
-     and/or `.../Backlog/Enabler-*.md` exist (note capital `B` in
-     `Backlog/`, capitalized first letter in `Story-` and `Enabler-`).
-   - Each story / enabler file contains AC-N IDs, Success Factors, INVEST
-     Check, Impacted Files using `src/IDEA-{ID}-{slug}/...`, Test Hints
-     (unit + integration always, perf/security only if scoped), and
-     Handoff Notes.
-   - `parallelization.md` exists and lists dependency waves plus proposed
-     sub-agent sessions with working directory `src/IDEA-{ID}-{slug}/`.
-   - `plan.md`, `review.md`, `budget.md`, and `handovers.md` stubs exist.
-   - `specs/specs.md` has the new spec linked through its per-idea section.
+9. Confirm with `.KCC/tools/check-run-conformance -Scope specs` (exit 0);
+   route each violation to its `fix_owner`. It checks: per-idea index (only
+   upstream link), `ROADMAP.md` (Execution Plan + Token Plan), each
+   `SPEC-{ID}-{slug}.md` (Delivery Brief, ACs, Backlog table with Wave
+   column, Architecture), `Backlog/Story-*|Enabler-*.md` (AC-N, INVEST,
+   Impacted Files, Test Hints), `arch.md` skeleton, SZ-1..5, and **no**
+   stubs or retired files (`plan.md`/`review.md` come later from their
+   owners; `backlog.md`, `parallelization.md`, `budget.md`, `handovers.md`
+   are v5-only).
 10. Stop after spec creation unless the caller is the `auto` skill and the
     next gate is ready. The next normal step is `/token-estimate SPEC-{ID}`
     before `/spec-plan`; do not plan or implement from `/spec-create`
     directly.
 11. If any invoked agent reports confidence below the configured threshold
     (95% by default), invoke `/critical-human-gate` and pause the lifecycle.
-12. Display the created epic summary: ID, title, priority, parent idea,
-    per-idea spec group, source, story count, enabler count, acceptance
-    criteria count, selected dialects (including which `testing-*`),
-    complexity spread, proposed parallel waves, and whether additional
-    roadmap epics remain uncreated.
+12. Display per spec: ID, delivery, priority, parent idea, item counts, AC
+    count, dialects (incl. `testing-*`), waves, and the ROADMAP order/lanes.
 
 ## Constraints
 

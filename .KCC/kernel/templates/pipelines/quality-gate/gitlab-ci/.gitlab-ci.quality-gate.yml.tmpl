@@ -1,0 +1,72 @@
+# KCC quality gate - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/quality-gate/gitlab-ci/.gitlab-ci.quality-gate.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Runs .KCC/tools/quality-gate.sh with --require on a Linux runner and FAILS the
+# job on exit 1 (violations) AND exit 3 (deferred). Deferred is never a pass in CI.
+# Include it from a {target}/gitlab-ci pipeline (include: local: ...) or use standalone.
+
+stages:
+  - quality
+
+kcc-quality-gate:
+  stage: quality
+  image: ubuntu:24.04
+  timeout: 45m
+  variables:
+    KCC_SPEC: "{{spec_id}}"        # empty = gate the whole repo root
+    GIT_DEPTH: "0"
+    GITLEAKS_VERSION: "8.21.2"
+    OSV_SCANNER_VERSION: "1.9.2"
+    SEMGREP_VERSION: "1.99.0"
+    SYFT_VERSION: "1.18.1"
+    TRIVY_VERSION: "0.58.1"
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends bash ca-certificates curl git python3 python3-venv >/dev/null
+    # Declared-stack toolchain for {{dialect}} and project dependency restore go here
+    # (or use a stack image such as node:20 / python:3.12 / mcr.microsoft.com/dotnet/sdk:8.0).
+    - |
+      set -euo pipefail
+      bin="$HOME/.local/bin"; mkdir -p "$bin"; work="$(mktemp -d)"; cd "$work"
+      fetch() { curl -sSfL --retry 3 -o "$2" "$1"; }
+      fetch "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+      fetch "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" gitleaks.sums
+      sha256sum --ignore-missing -c gitleaks.sums
+      tar -xzf gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz -C "$bin" gitleaks
+      fetch "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" osv-scanner_linux_amd64
+      fetch "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_SHA256SUMS" osv.sums
+      sha256sum --ignore-missing -c osv.sums
+      install -m 0755 osv-scanner_linux_amd64 "$bin/osv-scanner"
+      fetch "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_${SYFT_VERSION}_linux_amd64.tar.gz
+      fetch "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt" syft.sums
+      sha256sum --ignore-missing -c syft.sums
+      tar -xzf syft_${SYFT_VERSION}_linux_amd64.tar.gz -C "$bin" syft
+      fetch "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
+      fetch "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" trivy.sums
+      sha256sum --ignore-missing -c trivy.sums
+      tar -xzf trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -C "$bin" trivy
+      python3 -m venv "$HOME/.kcc-semgrep"
+      "$HOME/.kcc-semgrep/bin/pip" install --quiet "semgrep==${SEMGREP_VERSION}"
+      ln -sf "$HOME/.kcc-semgrep/bin/semgrep" "$bin/semgrep"
+      cd "$CI_PROJECT_DIR"
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - |
+      set +e -uo pipefail   # capture the exit code; decide below
+      args=(--require --json)
+      if [ -n "${KCC_SPEC}" ]; then args+=(--spec "${KCC_SPEC}"); fi
+      bash .KCC/tools/quality-gate.sh "${args[@]}" > quality-gate.json
+      rc=$?
+      cat quality-gate.json
+      case "$rc" in
+        0) echo "quality gate: pass" ;;
+        3) echo "ERROR: quality gate DEFERRED (a scanner/toolchain is missing) - not acceptable in CI"; exit 1 ;;
+        *) echo "ERROR: quality gate FAILED (exit $rc)"; exit 1 ;;
+      esac
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - quality-gate.json
+      - TestResults/

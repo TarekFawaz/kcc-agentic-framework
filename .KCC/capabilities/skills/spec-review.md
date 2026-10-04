@@ -18,8 +18,8 @@ tags:
   - framework/skill
   - lifecycle/review
 created: 2026-05-24
-updated: 2026-05-29
-version: 3.3.0
+updated: 2026-09-21
+version: 4.0.0
 status: active
 ---
 
@@ -30,10 +30,9 @@ Quick review of <ARGS> implementation.
 ## Steps
 
 1. Locate the spec folder under
-   `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` and read the same-name
-   folder note, `backlog.md`, `Backlog/Story-*.md`, `Backlog/Enabler-*.md`,
-   `parallelization.md`, `plan.md` (including its `## Atomic test cases`
-   table), and the per-idea index `../IDEA-{ID}-{slug}-Specs.md`.
+   `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` and read
+   `SPEC-{ID}-{slug}.md`, `Backlog/*.md` (incl. `Bug-*`), and `plan.md`
+   (`## Waves`, `## Atomic test cases`); legacy v5: `backlog.md` fallback.
 2. Run `git diff main..HEAD -- <impacted files from spec>` when git is
    available, scoped to `src/IDEA-{ID}-{slug}/...` plus any cross-cutting
    files declared in the spec.
@@ -42,16 +41,16 @@ Quick review of <ARGS> implementation.
    `testing-integration`, and `testing-performance` / `testing-security` if
    the plan loaded them) and apply their review/bug-fix checklists to the
    changed files.
-4. For each epic acceptance criterion (`AC-N`), state whether the diff
+4. For each spec acceptance criterion (`AC-N`), state whether the diff
    addresses it: YES / PARTIAL / NO.
-5. For each `Backlog/Story-*.md` and `Backlog/Enabler-*.md`, state whether
+5. For each `Backlog/` item, state whether
    each of its `AC-N`s appears satisfied: YES / PARTIAL / NO.
 6. Spot-check the atomic test-case table: for a sample of Test IDs, confirm
    a matching test exists (search by Test ID in test names / annotations
    under `src/IDEA-{ID}-{slug}/`).
 7. List any changed files not declared in the spec's impacted files or
    outside `src/IDEA-{ID}-{slug}/`.
-8. Verify architecture `.mmd` diagrams and greenfield
+8. Verify architecture diagrams (inline ```mermaid``` in `.md`; no `.mmd`) and greenfield
    `src/IDEA-{ID}-{slug}/`, `docs/`, and per-idea `README.md` requirements
    when applicable.
 9. Output a brief summary directly; do not create a file unless the user

@@ -213,7 +213,7 @@ be authored inline directly in `arch.md` (no separate file is needed unless the
 diagram is reused elsewhere).
 
 The skeleton lives at [[.KCC/kernel/templates/spec-arch|spec-arch.md]];
-spec-writer copies it as the stub at spec-folder creation and the architect
+spec-writer seeds its section skeleton at spec creation and the architect
 fills it.
 
 ---
@@ -432,7 +432,7 @@ above for the full spec and content bar). In summary it:
 The architect copies these templates as a starting point:
 
 - [[.KCC/kernel/templates/architecture-document|architecture-document.md]] - the Architecture Document skeleton for `architecture/architecture.md`.
-- [[.KCC/kernel/templates/spec-arch|spec-arch.md]] - the per-spec `arch.md` skeleton (spec-writer copies as the stub; architect fills).
+- [[.KCC/kernel/templates/spec-arch|spec-arch.md]] - the per-spec `arch.md` skeleton (spec-writer seeds the section skeleton; architect fills).
 - [[.KCC/kernel/templates/c4-context|c4-context.md]]
 - [[.KCC/kernel/templates/c4-container|c4-container.md]]
 - [[.KCC/kernel/templates/flowchart-business|flowchart-business.md]]

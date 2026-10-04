@@ -79,9 +79,9 @@ permission:
 
 | Neutral class         | OpenCode model id                              |
 |--|--|
-| `strong-reasoning`    | `anthropic/claude-opus-4-8`                    |
-| `balanced`            | `openai/gpt-5-5`                  |
-| `fast-implementation` | `openai/gpt-5`                   |
+| `strong-reasoning`    | `anthropic/claude-opus-5`                      |
+| `balanced`            | `anthropic/claude-sonnet-5`                    |
+| `fast-implementation` | `anthropic/claude-haiku-4-5`                   |
 | `local-strong`        | `ollama/qwen2.5:72b` (see [[ollama]])          |
 | `local-fast`          | `ollama/qwen2.5:7b` (see [[ollama]])           |
 

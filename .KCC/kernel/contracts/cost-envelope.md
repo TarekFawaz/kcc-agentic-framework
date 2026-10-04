@@ -25,5 +25,6 @@ Rules:
 - Later estimates may auto-approve only while cumulative hosted-model spend
   remains within the cap.
 - Local model rows track tokens only unless a separate infra cost model exists.
-- Cost decisions must be recorded in `budget.md`, `HumanDecisions.md` when a
-  trace exists, and the backchannel when applicable.
+- Cost decisions must be recorded in `ROADMAP.md` (Token Plan), trace
+  `TokenUsage.md` / `HumanDecisions.md`, and the backchannel when applicable
+  (per-spec `budget.md` is retired).

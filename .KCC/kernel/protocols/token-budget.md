@@ -9,8 +9,8 @@ tags:
   - framework/protocol
   - lifecycle/meta
 created: 2026-05-24
-updated: 2026-06-07
-version: 1.6.0
+updated: 2026-09-21
+version: 1.7.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -29,7 +29,7 @@ This protocol is the **canonical, reproducible formula** the [[token-guard]] age
 |--|--|--|
 | `criteria`        | count of epic criteria plus story/enabler criteria       | 12      |
 | `files`           | count of entries under `## Impacted Files` in spec       | 4       |
-| `backlog_items`   | count of stories plus enablers in `backlog.md` and `backlog/` item files | 7       |
+| `backlog_items`   | count of stories plus enablers in the spec `## Backlog` table / `Backlog/` files (legacy v5: `backlog.md`) | 7       |
 | `risk`            | `low` / `med` / `high` - from the spec's Risk section    | med     |
 | `plan_steps`      | count of numbered steps in plan file (null if no plan)   | 12      |
 | `dialect_complexity` | highest backlog item complexity: `low`, `medium`, `high`, `extra-high` | medium |
@@ -53,8 +53,7 @@ base_input = 5000
 ```
 
 The 5000-token floor accounts for: loading `CLAUDE.md`/`AGENTS.md`,
-the spec folder note, `backlog.md`, backlog item files, `parallelization.md`,
-framework protocols, selected dialect files, and the agent's own system prompt.
+the spec file, `Backlog/` item files, `plan.md`, framework protocols, selected dialect files, and the agent's own system prompt.
 
 Dialect overhead covers loading the selected dialect guidance:
 
@@ -134,8 +133,8 @@ Report each cost as a range: `[cost x 0.7, cost x 1.3]` - i.e. +/-30%. This band
 
 When `auto` includes `--budget`, Token Guard may estimate from an IDEA folder
 before concrete specs exist. It uses the Mode A formula with conservative
-inputs inferred from `QuickRoadmap.md`, `SpecWriterStarter.md`, and any created
-spec stubs. If no concrete spec folder exists, use a +/-50% confidence band and
+inputs inferred from `QuickRoadmap.md`, `SpecWriterStarter.md`, and
+`ROADMAP.md` if created. If no concrete spec folder exists, use a +/-50% confidence band and
 label the estimate provisional. Later spec-level estimates still run and either
 consume the approved cap or stop when the cap is exceeded.
 
@@ -285,9 +284,24 @@ Apply the same +/-30% band. No risk, no step multipliers - it's a single shot.
 
 ---
 
+## Where estimates are recorded
+
+| Sink | Content |
+|--|--|
+| `specs/IDEA-{ID}-{slug}-Specs/ROADMAP.md` | `Est. tokens` per spec + `## Token Plan` (model/effort copied from `coordination/orchestrator.json`) |
+| `Traces/Session-*/TokenUsage.md` | estimates, actuals, auto-approvals, `## Trials counter` |
+| `Traces/Session-*/HumanDecisions.md` | human approve / revise / abort |
+| `ideation/IDEA-{ID}-{slug}/ROI.md` | Token Budget sections, `pending_tighten` |
+| `coordination/backchannel.jsonl` | `estimate-*` events |
+
+Per-spec `budget.md` is retired (legacy v5 specs may still have one; read only).
+
+---
+
 ## Default model-class assignment per lifecycle step
 
-Token Guard uses these defaults when the spec does not specify otherwise:
+Token Guard uses these defaults when neither the spec nor
+`coordination/orchestrator.json` (`agents[].spawn`, which wins) specifies otherwise:
 
 | Step        | Default class       | Override hint                                         |
 |--|--|--|
@@ -379,20 +393,21 @@ records `estimate-auto-approved` instead of asking again.
 
 ## Loop detection
 
-Token Guard maintains a per-spec-per-step **trials counter** in
-`specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/budget.md` under a
-`## Trials counter` section. The counter is incremented each time an agent
+Token Guard maintains a per-spec-per-step **trials counter** in the active
+trace `TokenUsage.md` under `## Trials counter` (restore points carry it
+across sessions). The counter is incremented each time an agent
 re-attempts the same lifecycle step for the same SPEC (e.g. planner re-runs
 `plan`, implementer re-runs `implement`, verifier re-runs `test`).
 
-Schema (YAML block inside `budget.md`):
+Schema (YAML block, keyed by spec):
 
 ```yaml
-trials:
-  plan: 0
-  implement: 0
-  test: 0
-  review: 0
+SPEC-{ID}:
+  trials:
+    plan: 0
+    implement: 0
+    test: 0
+    review: 0
 ```
 
 ### Trigger

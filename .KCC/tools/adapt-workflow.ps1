@@ -146,25 +146,31 @@ function Detect-Format {
         $name   = Split-Path -Leaf   $Root
         if ($name -like '*.mdc') { return 'cursor' }
         if ($name -ieq 'AGENTS.md') {
-            if ((Test-PathSafe $parent '.opencode') -or (Test-PathSafe $parent 'opencode.toml')) {
+            if ((Test-PathSafe $parent '.opencode') -or (Test-PathSafe $parent 'opencode.json') -or (Test-PathSafe $parent 'opencode.toml')) {
                 return 'opencode'
             }
-            return 'codex'
+            if ((Test-PathSafe $parent '.codex') -or (Test-PathSafe $parent 'codex.toml')) { return 'codex' }
+            return 'ambiguous'
         }
         if ($name -ieq 'AIDER.md') { return 'aider' }
         return 'generic'
     }
 
-    if (Test-PathSafe $Root '.cursor/rules')         { return 'cursor' }
-    if ((Test-PathSafe $Root '.claude/agents') -or (Test-PathSafe $Root '.claude/skills')) { return 'claude' }
-    if (Test-PathSafe $Root 'AGENTS.md') {
-        if ((Test-PathSafe $Root '.opencode') -or (Test-PathSafe $Root 'opencode.toml')) {
-            return 'opencode'
-        }
-        return 'codex'
+    # Marker precedence per adaptation-guide.md -> Recognized source formats.
+    # Strong markers first; a lone AGENTS.md is ambiguous (codex/opencode/generic).
+    $found = New-Object System.Collections.ArrayList
+    if ((Test-PathSafe $Root '.cursor/rules') -or (Test-PathSafe $Root '.cursorrules')) { [void]$found.Add('cursor') }
+    if ((Test-PathSafe $Root '.claude/agents') -or (Test-PathSafe $Root '.claude/skills') -or (Test-PathSafe $Root '.claude/commands')) { [void]$found.Add('claude') }
+    if ((Test-PathSafe $Root '.codex') -or (Test-PathSafe $Root 'codex.toml')) { [void]$found.Add('codex') }
+    if ((Test-PathSafe $Root '.opencode') -or (Test-PathSafe $Root 'opencode.json') -or (Test-PathSafe $Root 'opencode.jsonc') -or (Test-PathSafe $Root 'opencode.toml')) { [void]$found.Add('opencode') }
+    if ((Test-PathSafe $Root 'AIDER.md') -or (Test-PathSafe $Root '.aider.conf.yml')) { [void]$found.Add('aider') }
+    if ((Test-PathSafe $Root '.agents/manifest.json') -or (Test-PathSafe $Root '.agents/agents')) { [void]$found.Add('generic') }
+    if ($found.Count -gt 1) {
+        Write-Warning ("Multiple harness workflows detected: {0}. Importing '{1}'; rerun with -Format for the others." -f ($found -join ', '), $found[0])
     }
-    if ((Test-PathSafe $Root 'AIDER.md') -or (Test-PathSafe $Root '.aider.conf.yml')) { return 'aider' }
-    if ((Test-PathSafe $Root 'prompts') -or (Test-PathSafe $Root 'agents'))           { return 'generic' }
+    if ($found.Count -ge 1) { return $found[0] }
+    if (Test-PathSafe $Root 'AGENTS.md') { return 'ambiguous' }
+    if ((Test-PathSafe $Root 'prompts') -or (Test-PathSafe $Root 'agents')) { return 'generic' }
 
     return 'unknown'
 }
@@ -267,6 +273,10 @@ Write-Host ("Source:        {0}" -f $resolvedSource)
 Write-Host ("Hint:          {0}" -f $Format)
 Write-Host ("Effective fmt: {0}" -f $effectiveFormat)
 
+if ($effectiveFormat -eq 'ambiguous') {
+    Write-Host 'Root AGENTS.md without .codex/, codex.toml, .opencode/ or opencode.json|toml markers is ambiguous. Rerun with -Format codex|opencode|generic.'
+    exit 2
+}
 if ($effectiveFormat -eq 'unknown') {
     Write-Warning 'Could not detect a known agentic-workflow format.'
     Write-Warning 'Re-run with -Format <cursor|claude|codex|opencode|aider|generic>'
