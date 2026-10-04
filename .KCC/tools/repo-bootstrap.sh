@@ -11,6 +11,7 @@
 #   bash .KCC/tools/repo-bootstrap.sh --apply init-local|connect-remote|skip \
 #        [--remote-url URL] [--dry-run] [--emit] [--json]
 #   bash .KCC/tools/repo-bootstrap.sh --install-hook [--dry-run]
+#     (installs pre-commit, commit-msg, and pre-push; see git-workflow.md)
 #
 # Never pushes. Never reads, stores, or echoes credentials: auth is detected
 # by kind only (credential helper configured, `gh auth status` exit code,
@@ -28,6 +29,8 @@ DRY_RUN=0
 INSTALL_HOOK=0
 EMIT=0
 HOOK_MARKER="KCC-PRE-COMMIT"
+HOOK_NAMES="pre-commit commit-msg pre-push"
+hook_marker() { case "$1" in pre-commit) echo "KCC-PRE-COMMIT" ;; commit-msg) echo "KCC-COMMIT-MSG" ;; pre-push) echo "KCC-PRE-PUSH" ;; esac; }
 
 usage() {
   cat >&2 <<'EOF'
@@ -63,7 +66,7 @@ fi
 [[ -d "$REPO_ROOT" ]] || die_usage "repo root not found: $REPO_ROOT"
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 SETTINGS_FILE="$REPO_ROOT/.KCC/settings.json"
-HOOK_SRC="$SCRIPT_DIR/hooks/pre-commit"
+HOOK_SRC_DIR="$SCRIPT_DIR/hooks"
 
 json_escape() {
   local s="$1"
@@ -113,6 +116,7 @@ url_is_plausible() {
 # ---------------------------------------------------------------- detect
 GIT_CLI=missing; GIT_STATE=absent; COMMITS=0; BRANCH=""; REMOTE="none"; REMOTE_NAME=""; REMOTE_RAW=""
 AUTH=none; AUTH_LIST=""; HOOKS=missing; DIRTY=0; TOPLEVEL=""; HOOKS_DIR=""
+HOOKS_INSTALLED=""; HOOKS_MISSING=""
 DECISION=""
 
 settings_decision() {
@@ -127,6 +131,7 @@ settings_decision() {
 detect() {
   GIT_CLI=missing; GIT_STATE=absent; COMMITS=0; BRANCH=""; REMOTE="none"; REMOTE_NAME=""; REMOTE_RAW=""
   AUTH=none; AUTH_LIST=""; HOOKS=missing; DIRTY=0; TOPLEVEL=""; HOOKS_DIR=""
+  HOOKS_INSTALLED=""; HOOKS_MISSING=""
   DECISION="$(settings_decision || true)"
   have git || return 0
   GIT_CLI=present
@@ -146,6 +151,11 @@ detect() {
       case "$hp" in /*|[A-Za-z]:*) HOOKS_DIR="$hp" ;; *) HOOKS_DIR="$REPO_ROOT/$hp" ;; esac
       if [[ -f "$HOOKS_DIR/pre-commit" ]] && grep -q "$HOOK_MARKER" "$HOOKS_DIR/pre-commit" 2>/dev/null; then HOOKS=kcc-pre-commit; fi
     fi
+    local hn
+    for hn in $HOOK_NAMES; do
+      if [[ -n "$HOOKS_DIR" && -f "$HOOKS_DIR/$hn" ]] && grep -q "$(hook_marker "$hn")" "$HOOKS_DIR/$hn" 2>/dev/null; then HOOKS_INSTALLED="${HOOKS_INSTALLED:+$HOOKS_INSTALLED,}$hn"
+      else HOOKS_MISSING="${HOOKS_MISSING:+$HOOKS_MISSING,}$hn"; fi
+    done
   fi
   # Auth kinds (detected, never read).
   if [[ -n "$(git -C "$REPO_ROOT" config --get credential.helper 2>/dev/null || true)" ]]; then AUTH_LIST="${AUTH_LIST:+$AUTH_LIST,}credential-helper"; fi
@@ -270,30 +280,40 @@ EOF
   act "wrote KCC .gitignore"
 }
 
-install_hook() { # -> 0 ok, 1 failed
-  if [[ ! -f "$HOOK_SRC" ]]; then add_v RB-HOOK-SRC error human "$HOOK_SRC" "hook source .KCC/tools/hooks/pre-commit not found"; return 1; fi
-  if [[ "$GIT_STATE" != "repo" && $DRY_RUN -eq 0 ]]; then add_v RB-HOOK-NOREPO error human "." "not a git repository; run --apply init-local first"; return 1; fi
-  local dir="$HOOKS_DIR"
+install_one_hook() { # hook-name -> 0 ok, 1 failed
+  local hn="$1" marker src dir dst
+  marker="$(hook_marker "$hn")"
+  src="$HOOK_SRC_DIR/$hn"
+  if [[ ! -f "$src" ]]; then add_v RB-HOOK-SRC error human "$src" "hook source .KCC/tools/hooks/$hn not found"; return 1; fi
+  dir="$HOOKS_DIR"
   [[ -n "$dir" ]] || dir="$REPO_ROOT/.git/hooks"
-  local dst="$dir/pre-commit"
-  if [[ -f "$dst" ]] && grep -q "$HOOK_MARKER" "$dst" 2>/dev/null; then
-    if cmp -s "$HOOK_SRC" "$dst"; then act "KCC pre-commit hook already installed"; return 0; fi
-    if [[ $DRY_RUN -eq 1 ]]; then act "would update KCC pre-commit hook"; return 0; fi
-    cp "$HOOK_SRC" "$dst"; chmod +x "$dst" 2>/dev/null || true; act "updated KCC pre-commit hook"; return 0
+  dst="$dir/$hn"
+  if [[ -f "$dst" ]] && grep -q "$marker" "$dst" 2>/dev/null; then
+    if cmp -s "$src" "$dst"; then act "KCC $hn hook already installed"; return 0; fi
+    if [[ $DRY_RUN -eq 1 ]]; then act "would update KCC $hn hook"; return 0; fi
+    cp "$src" "$dst"; chmod +x "$dst" 2>/dev/null || true; act "updated KCC $hn hook"; return 0
   fi
   if [[ -f "$dst" ]]; then
-    if [[ -e "$dir/pre-commit.local" ]]; then
-      add_v RB-HOOK-CONFLICT error human "$dst" "a foreign pre-commit hook and pre-commit.local both exist; merge them by hand"
+    if [[ -e "$dir/$hn.local" ]]; then
+      add_v RB-HOOK-CONFLICT error human "$dst" "a foreign $hn hook and $hn.local both exist; merge them by hand"
       return 1
     fi
-    if [[ $DRY_RUN -eq 1 ]]; then act "would preserve existing pre-commit hook as pre-commit.local (chained)"
-    else mv "$dst" "$dir/pre-commit.local"; act "preserved existing pre-commit hook as pre-commit.local (chained)"; fi
+    if [[ $DRY_RUN -eq 1 ]]; then act "would preserve existing $hn hook as $hn.local (chained)"
+    else mv "$dst" "$dir/$hn.local"; act "preserved existing $hn hook as $hn.local (chained)"; fi
   fi
-  if [[ $DRY_RUN -eq 1 ]]; then act "would install KCC pre-commit hook"; return 0; fi
+  if [[ $DRY_RUN -eq 1 ]]; then act "would install KCC $hn hook"; return 0; fi
   mkdir -p "$dir"
-  cp "$HOOK_SRC" "$dst"; chmod +x "$dst" 2>/dev/null || true
-  HOOKS=kcc-pre-commit
-  act "installed KCC pre-commit hook"
+  cp "$src" "$dst"; chmod +x "$dst" 2>/dev/null || true
+  [[ "$hn" == "pre-commit" ]] && HOOKS=kcc-pre-commit
+  act "installed KCC $hn hook"
+  return 0
+}
+
+install_hook() { # all KCC hooks -> 0 ok, 1 when any failed
+  if [[ "$GIT_STATE" != "repo" && $DRY_RUN -eq 0 ]]; then add_v RB-HOOK-NOREPO error human "." "not a git repository; run --apply init-local first"; return 1; fi
+  local hn rc=0
+  for hn in $HOOK_NAMES; do install_one_hook "$hn" || rc=1; done
+  return $rc
 }
 
 initial_commit() {
@@ -326,7 +346,12 @@ do_init_local() {
   fi
   if [[ "$GIT_STATE" == "absent" ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then act "would run git init"
-    else g init -q; act "git init"; detect; fi
+    else
+      g init -q
+      # Older git names the first branch 'master', which the git-workflow defaults do not allow.
+      if [[ "$(g symbolic-ref --short HEAD 2>/dev/null || true)" == "master" ]]; then g symbolic-ref HEAD refs/heads/main; fi
+      act "git init"; detect
+    fi
   else
     act "git repository already present"
   fi
@@ -394,8 +419,8 @@ fi
 if [[ -n "$REMOTE_RAW" ]] && url_has_credentials "$REMOTE_RAW"; then
   add_v RB-REMOTE-CRED error human ".git/config" "remote '$REMOTE_NAME' URL embeds credentials ($REMOTE); remove them: git remote set-url $REMOTE_NAME <plain-url>, then use a credential helper / gh / ssh-agent"
 fi
-if [[ "$GIT_STATE" == "repo" && "$HOOKS" != "kcc-pre-commit" && "$MODE" == "detect" ]]; then
-  add_v RB-HOOK-MISSING warning human ".git/hooks/pre-commit" "KCC pre-commit hook not installed (run: repo-bootstrap --install-hook)"
+if [[ "$GIT_STATE" == "repo" && -n "$HOOKS_MISSING" && "$MODE" == "detect" ]]; then
+  add_v RB-HOOK-MISSING warning human ".git/hooks" "KCC hook(s) not installed: ${HOOKS_MISSING//,/, } (run: repo-bootstrap --install-hook)"
 fi
 GATE="$(gate_required)"
 
@@ -409,7 +434,9 @@ if [[ $JSON -eq 1 ]]; then
   printf '"git_cli":"%s","git":"%s","toplevel":%s,"commits":%s,"branch":%s,"remote":%s,' "$GIT_CLI" "$GIT_STATE" "$(jstr "$([[ -n "$TOPLEVEL" ]] && { [[ "$TOPLEVEL" == "$REPO_ROOT" ]] && echo . || echo "$TOPLEVEL"; } || true)")" "$COMMITS" "$(jstr "$BRANCH")" "$(jstr "$REMOTE")"
   printf '"auth":"%s","auth_detected":[' "$AUTH"
   first=1; for a in ${AUTH_LIST//,/ }; do [[ $first -eq 1 ]] || printf ','; first=0; printf '"%s"' "$a"; done
-  printf '],"hooks":"%s","dirty":%s,"decision":%s,"gate_required":%s,' "$HOOKS" "$DIRTY" "$(jstr "$DECISION")" "$GATE"
+  printf '],"hooks":"%s","hooks_installed":[' "$HOOKS"
+  first=1; for a in ${HOOKS_INSTALLED//,/ }; do [[ $first -eq 1 ]] || printf ','; first=0; printf '"%s"' "$a"; done
+  printf '],"dirty":%s,"decision":%s,"gate_required":%s,' "$DIRTY" "$(jstr "$DECISION")" "$GATE"
   printf '"choices":["init-local","connect-remote","skip"],"actions":['
   first=1; for a in ${ACTIONS[@]+"${ACTIONS[@]}"}; do [[ $first -eq 1 ]] || printf ','; first=0; printf '%s' "$(jstr "$a")"; done
   printf '],"errors":%d,"warnings":%d,"status":"%s","violations":[' "$ERRORS" "$WARNINGS" "$STATUS"
@@ -423,7 +450,7 @@ else
   echo "git: $GIT_STATE (cli $GIT_CLI)  commits: $COMMITS  branch: ${BRANCH:--}"
   echo "remote: $REMOTE"
   echo "auth: $AUTH${AUTH_LIST:+ (detected: $AUTH_LIST)}"
-  echo "hooks: $HOOKS  dirty: $DIRTY  decision: ${DECISION:-none}"
+  echo "hooks: $HOOKS (installed: ${HOOKS_INSTALLED:-none})  dirty: $DIRTY  decision: ${DECISION:-none}"
   for a in ${ACTIONS[@]+"${ACTIONS[@]}"}; do echo "action: $a"; done
   for i in "${!V_ID[@]}"; do echo "${V_SEV[$i]}: ${V_ID[$i]} ${V_MSG[$i]}"; done
   if [[ "$GATE" == "true" ]]; then echo "Gate: required -> ask the human once: init-local | connect-remote | skip"; fi

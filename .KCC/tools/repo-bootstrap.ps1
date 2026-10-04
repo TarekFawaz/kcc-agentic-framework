@@ -17,7 +17,8 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     -Apply connect-remote  as init-local, then add origin -RemoteUrl (URLs carrying
                            credentials or tokens are rejected). Never pushes.
     -Apply skip            record the decision; git features degrade to snapshots.
-    -InstallHook           install/refresh only the KCC pre-commit hook.
+    -InstallHook           install/refresh only the KCC hooks (pre-commit,
+                           commit-msg, pre-push; see git-workflow.md).
 
     Exit: 0 ok | 1 violation/failed action | 2 usage/environment.
     PowerShell 5.1 compatible. ASCII-only. No && operator, no ternary.
@@ -42,6 +43,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $Version = '1.0.0'
 $HookMarker = 'KCC-PRE-COMMIT'
+$HookNames = @('pre-commit', 'commit-msg', 'pre-push')
+$HookMarkers = @{ 'pre-commit' = 'KCC-PRE-COMMIT'; 'commit-msg' = 'KCC-COMMIT-MSG'; 'pre-push' = 'KCC-PRE-PUSH' }
 
 function Exit-Usage([string]$Message) {
     [Console]::Error.WriteLine('error: ' + $Message)
@@ -63,7 +66,7 @@ if (-not $RepoRoot) { $RepoRoot = Resolve-RepoRootFromTool }
 if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) { Exit-Usage "repo root not found: $RepoRoot" }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath.TrimEnd('\', '/')
 $SettingsFile = Join-Path (Join-Path $RepoRoot '.KCC') 'settings.json'
-$HookSrc = Join-Path (Join-Path $PSScriptRoot 'hooks') 'pre-commit'
+$HookSrcDir = Join-Path $PSScriptRoot 'hooks'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 $Violations = New-Object System.Collections.ArrayList
@@ -127,7 +130,7 @@ function Get-SettingsDecision {
 function Invoke-Detect {
     $script:S = @{ git_cli = 'missing'; git = 'absent'; toplevel = $null; commits = 0; branch = $null; remote = 'none'
                    remote_name = $null; remote_raw = $null; auth = 'none'; auth_list = @(); hooks = 'missing'; dirty = 0
-                   hooks_dir = $null; decision = (Get-SettingsDecision) }
+                   hooks_dir = $null; decision = (Get-SettingsDecision); hooks_installed = @(); hooks_missing = @() }
     if (-not (Test-Tool 'git')) { return }
     $script:S.git_cli = 'present'
     $r = Invoke-Git @('rev-parse', '--is-inside-work-tree')
@@ -164,6 +167,14 @@ function Invoke-Detect {
             $pc = Join-Path $script:S.hooks_dir 'pre-commit'
             if ((Test-Path -LiteralPath $pc) -and (Select-String -LiteralPath $pc -Pattern $HookMarker -SimpleMatch -Quiet)) { $script:S.hooks = 'kcc-pre-commit' }
         }
+        $inst = @(); $miss = @()
+        foreach ($hn in $HookNames) {
+            $hf = $null
+            if ($script:S.hooks_dir) { $hf = Join-Path $script:S.hooks_dir $hn }
+            if ($hf -and (Test-Path -LiteralPath $hf) -and (Select-String -LiteralPath $hf -Pattern $HookMarkers[$hn] -SimpleMatch -Quiet)) { $inst += $hn } else { $miss += $hn }
+        }
+        $script:S.hooks_installed = $inst
+        $script:S.hooks_missing = $miss
     }
     # Auth kinds (detected, never read).
     $list = @()
@@ -305,36 +316,45 @@ function Write-GitIgnore {
     Add-Action 'wrote KCC .gitignore'
 }
 
-function Install-Hook {
-    if (-not (Test-Path -LiteralPath $HookSrc)) { Add-V 'RB-HOOK-SRC' 'error' 'human' '.KCC/tools/hooks/pre-commit' 'hook source .KCC/tools/hooks/pre-commit not found'; return $false }
-    if (($S.git -ne 'repo') -and (-not $DryRun)) { Add-V 'RB-HOOK-NOREPO' 'error' 'human' '.' 'not a git repository; run -Apply init-local first'; return $false }
+function Install-OneHook([string]$Name) {
+    $marker = $HookMarkers[$Name]
+    $src = Join-Path $HookSrcDir $Name
+    if (-not (Test-Path -LiteralPath $src)) { Add-V 'RB-HOOK-SRC' 'error' 'human' ('.KCC/tools/hooks/' + $Name) ('hook source .KCC/tools/hooks/' + $Name + ' not found'); return $false }
     $dir = $S.hooks_dir
     if (-not $dir) { $dir = Join-Path (Join-Path $RepoRoot '.git') 'hooks' }
-    $dst = Join-Path $dir 'pre-commit'
-    if ((Test-Path -LiteralPath $dst) -and (Select-String -LiteralPath $dst -Pattern $HookMarker -SimpleMatch -Quiet)) {
-        $same = ([IO.File]::ReadAllText($HookSrc) -ceq [IO.File]::ReadAllText($dst))
-        if ($same) { Add-Action 'KCC pre-commit hook already installed'; return $true }
-        if ($DryRun) { Add-Action 'would update KCC pre-commit hook'; return $true }
-        [IO.File]::Copy($HookSrc, $dst, $true)
-        Add-Action 'updated KCC pre-commit hook'
+    $dst = Join-Path $dir $Name
+    if ((Test-Path -LiteralPath $dst) -and (Select-String -LiteralPath $dst -Pattern $marker -SimpleMatch -Quiet)) {
+        $same = ([IO.File]::ReadAllText($src) -ceq [IO.File]::ReadAllText($dst))
+        if ($same) { Add-Action ('KCC ' + $Name + ' hook already installed'); return $true }
+        if ($DryRun) { Add-Action ('would update KCC ' + $Name + ' hook'); return $true }
+        [IO.File]::Copy($src, $dst, $true)
+        Add-Action ('updated KCC ' + $Name + ' hook')
         return $true
     }
     if (Test-Path -LiteralPath $dst) {
-        $local = Join-Path $dir 'pre-commit.local'
-        if (Test-Path -LiteralPath $local) { Add-V 'RB-HOOK-CONFLICT' 'error' 'human' $dst 'a foreign pre-commit hook and pre-commit.local both exist; merge them by hand'; return $false }
-        if ($DryRun) { Add-Action 'would preserve existing pre-commit hook as pre-commit.local (chained)' }
-        else { Move-Item -LiteralPath $dst -Destination $local; Add-Action 'preserved existing pre-commit hook as pre-commit.local (chained)' }
+        $local = Join-Path $dir ($Name + '.local')
+        if (Test-Path -LiteralPath $local) { Add-V 'RB-HOOK-CONFLICT' 'error' 'human' $dst ('a foreign ' + $Name + ' hook and ' + $Name + '.local both exist; merge them by hand'); return $false }
+        if ($DryRun) { Add-Action ('would preserve existing ' + $Name + ' hook as ' + $Name + '.local (chained)') }
+        else { Move-Item -LiteralPath $dst -Destination $local; Add-Action ('preserved existing ' + $Name + ' hook as ' + $Name + '.local (chained)') }
     }
-    if ($DryRun) { Add-Action 'would install KCC pre-commit hook'; return $true }
+    if ($DryRun) { Add-Action ('would install KCC ' + $Name + ' hook'); return $true }
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [IO.File]::Copy($HookSrc, $dst, $true)
+    [IO.File]::Copy($src, $dst, $true)
     if ($env:OS -ne 'Windows_NT') {
         $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try { & chmod +x $dst 2>$null } catch { } finally { $ErrorActionPreference = $old }
     }
-    $script:S.hooks = 'kcc-pre-commit'
-    Add-Action 'installed KCC pre-commit hook'
+    if ($Name -eq 'pre-commit') { $script:S.hooks = 'kcc-pre-commit' }
+    Add-Action ('installed KCC ' + $Name + ' hook')
     return $true
+}
+
+# Installs every KCC hook; $false when any failed.
+function Install-Hook {
+    if (($S.git -ne 'repo') -and (-not $DryRun)) { Add-V 'RB-HOOK-NOREPO' 'error' 'human' '.' 'not a git repository; run -Apply init-local first'; return $false }
+    $ok = $true
+    foreach ($hn in $HookNames) { if (-not (Install-OneHook $hn)) { $ok = $false } }
+    return $ok
 }
 
 function Invoke-InitialCommit {
@@ -364,7 +384,14 @@ function Invoke-InitLocal([string]$Decision, [string]$Remote) {
     }
     if ($S.git -eq 'absent') {
         if ($DryRun) { Add-Action 'would run git init' }
-        else { [void](Invoke-Git @('init', '-q')); Add-Action 'git init'; Invoke-Detect }
+        else {
+            [void](Invoke-Git @('init', '-q'))
+            # Older git names the first branch 'master', which the git-workflow defaults do not allow.
+            $headRef = ''
+            try { $headRef = [string](& git -C $RepoRoot symbolic-ref --short HEAD 2>$null) } catch { $headRef = '' }
+            if ($headRef.Trim() -eq 'master') { [void](Invoke-Git @('symbolic-ref', 'HEAD', 'refs/heads/main')) }
+            Add-Action 'git init'; Invoke-Detect
+        }
     } else { Add-Action 'git repository already present' }
     Write-GitIgnore
     [void](Install-Hook)
@@ -438,8 +465,8 @@ if ($Apply) {
 if ($S.remote_raw -and (Test-UrlHasCredentials $S.remote_raw)) {
     Add-V 'RB-REMOTE-CRED' 'error' 'human' '.git/config' ("remote '" + $S.remote_name + "' URL embeds credentials (" + $S.remote + '); remove them: git remote set-url ' + $S.remote_name + ' <plain-url>, then use a credential helper / gh / ssh-agent')
 }
-if (($S.git -eq 'repo') -and ($S.hooks -ne 'kcc-pre-commit') -and ($mode -eq 'detect')) {
-    Add-V 'RB-HOOK-MISSING' 'warning' 'human' '.git/hooks/pre-commit' 'KCC pre-commit hook not installed (run: repo-bootstrap -InstallHook)'
+if (($S.git -eq 'repo') -and (@($S.hooks_missing).Count -gt 0) -and ($mode -eq 'detect')) {
+    Add-V 'RB-HOOK-MISSING' 'warning' 'human' '.git/hooks' ('KCC hook(s) not installed: ' + (@($S.hooks_missing) -join ', ') + ' (run: repo-bootstrap -InstallHook)')
 }
 $gate = Test-GateRequired
 
@@ -452,7 +479,7 @@ if ($Json) {
     $doc = [ordered]@{
         tool = 'repo-bootstrap'; version = $Version; scope = $mode; dry_run = [bool]$DryRun
         git_cli = $S.git_cli; git = $S.git; toplevel = $S.toplevel; commits = $S.commits; branch = $S.branch; remote = $S.remote
-        auth = $S.auth; auth_detected = @($S.auth_list); hooks = $S.hooks; dirty = $S.dirty; decision = $S.decision
+        auth = $S.auth; auth_detected = @($S.auth_list); hooks = $S.hooks; hooks_installed = @($S.hooks_installed); dirty = $S.dirty; decision = $S.decision
         gate_required = [bool]$gate; choices = @('init-local', 'connect-remote', 'skip'); actions = @($Actions)
         errors = $errors; warnings = $warnings; status = $status; violations = @($Violations)
     }
@@ -467,7 +494,9 @@ if ($Json) {
     Write-Output ('auth: ' + $S.auth + $al)
     $dec = 'none'
     if ($S.decision) { $dec = $S.decision }
-    Write-Output ('hooks: ' + $S.hooks + '  dirty: ' + $S.dirty + '  decision: ' + $dec)
+    $hi = 'none'
+    if (@($S.hooks_installed).Count -gt 0) { $hi = (@($S.hooks_installed) -join ',') }
+    Write-Output ('hooks: ' + $S.hooks + ' (installed: ' + $hi + ')  dirty: ' + $S.dirty + '  decision: ' + $dec)
     foreach ($a in $Actions) { Write-Output ('action: ' + $a) }
     foreach ($v in $Violations) { Write-Output ($v.severity + ': ' + $v.id + ' ' + $v.message) }
     if ($gate) { Write-Output 'Gate: required -> ask the human once: init-local | connect-remote | skip' }

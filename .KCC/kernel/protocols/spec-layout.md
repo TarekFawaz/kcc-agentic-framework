@@ -70,6 +70,7 @@ retired (see *Legacy v5 specs*).
 | `Backlog/Bug-*` | `/bug-report` skill, verifier | See *Bug item shape*. |
 | `plan.md` | planner | Ordered changes, `## Waves` (file-disjoint), `## Atomic test cases`. |
 | `review.md` | verifier | PASS/FAIL per AC, `## Evidence` (commands run + exit codes), verdict. |
+| `pr.md` (optional) | repo-steward | Pull-request draft written by `/spec-merge` after an `APPROVED` review. See [[git-workflow]]. |
 
 Token estimates and approvals go to `ROADMAP.md`, the trace session
 (`TokenUsage.md`, `HumanDecisions.md`), and the backchannel. Handover

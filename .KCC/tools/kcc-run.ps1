@@ -457,10 +457,22 @@ function Run-Check($chk, $ctx, [string]$label) {
 }
 
 # ---- harness ---------------------------------------------------------------------------
-$limitRe = 'usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+$limitReBuiltin = 'usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+# kernel/limit-patterns.json is the shared table (kcc-run, kcc-limit-watch, and the kcc CLI); the built-in is the fallback.
+function Get-LimitRe([string]$harness) {
+    $f = Join-Path $RepoRoot '.KCC/kernel/limit-patterns.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $limitReBuiltin }
+    try {
+        $j = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+        $parts = @()
+        foreach ($k in @('limit_regex.default', ('limit_regex.' + $harness))) { $p = $j.PSObject.Properties[$k]; if ($p -and $p.Value) { $parts += [string]$p.Value } }
+        if ($parts.Count -gt 0) { return ($parts -join '|') }
+    } catch { }
+    return $limitReBuiltin
+}
 function Test-LimitHit([string[]]$lines, [int]$rc) {
     $t = (@($lines | Select-Object -Last 60) -join "`n").ToLowerInvariant()
-    if ($t -match $limitRe) { return $true }
+    if ($t -match (Get-LimitRe $script:HarnessName)) { return $true }
     if ($rc -ne 0 -and $t -match '(^|[^0-9])429([^0-9]|$)') { return $true }
     return $false
 }
@@ -708,10 +720,15 @@ function Suspend-Run($st, $ctx, [string[]]$lines) {
     $self = $PSCommandPath; if (-not $self) { $self = $MyInvocation.MyCommand.Path }
     $resumeCmd = (QArg $psExe) + ' -NoProfile -ExecutionPolicy Bypass -File ' + (QArg $self) + ' -Resume -RepoRoot ' + (QArg $RepoRoot)
     $lw = Join-Path $ToolsDir 'kcc-limit-watch.ps1'
+    $resetJson = 'null'; if ($null -ne $reset) { $resetJson = [string]$reset }
+    Write-Lf (Join-Path $RunDir 'limit.json') ('{"harness":"' + $script:HarnessName + '","source":"kcc-run","at":' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + ',"resets_at":' + $resetJson + ',"resume_at":null,"resumes":0,"status":"waiting"}' + "`n")
+    # KCC_SUPERVISED=1: 'kcc run' owns the wait and the resume, so no detached watcher is armed.
+    $supervised = ($env:KCC_SUPERVISED -eq '1')
     $armOut = ''
     $oldEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try {
-        if ($null -ne $reset) { $o = & $lw -Arm -Harness $script:HarnessName -RepoRoot $RepoRoot -ResetAt ([string]$reset) -Command $resumeCmd 2>$null }
+        if ($supervised) { $o = 'supervised by kcc run; watcher not armed' }
+        elseif ($null -ne $reset) { $o = & $lw -Arm -Harness $script:HarnessName -RepoRoot $RepoRoot -ResetAt ([string]$reset) -Command $resumeCmd 2>$null }
         else { $o = & $lw -Arm -Harness $script:HarnessName -RepoRoot $RepoRoot -Command $resumeCmd 2>$null }
         $armOut = (@($o) | ForEach-Object { [string]$_ }) -join ' '
     } catch { $armOut = 'arm failed: ' + $_.Exception.Message } finally { $ErrorActionPreference = $oldEap }

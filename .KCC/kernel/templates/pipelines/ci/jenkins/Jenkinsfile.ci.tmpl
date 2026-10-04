@@ -1,0 +1,79 @@
+// KCC CI - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+// Template: .KCC/kernel/templates/pipelines/ci/jenkins/Jenkinsfile.ci.tmpl
+// KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+//
+// Instantiate as Jenkinsfile (or jenkins/SPEC-{ID}-{slug}-ci.Jenkinsfile).
+// Flow: quality gate -> restore -> build -> test -> package -> archive artifact.
+// The gate is NOT written out here. A Jenkinsfile cannot include stages from
+// another Jenkinsfile, so at instantiation:
+//   - replace the line "// {{quality_gate_variables}}" with the scanner
+//     version / KCC_BIN / PATH entries of the gate's environment block, and
+//   - replace the line "// {{quality_gate_stages}}" with the gate's two stages
+//     ('Install pinned KCC scanners', 'KCC quality gate'),
+// both copied unchanged from quality-gate/jenkins/Jenkinsfile.quality-gate.tmpl.
+// Until both lines are replaced this pipeline runs without the gate - do not use it.
+// Agent needs: bash, curl, git, python3 (+venv), sha256sum, and the stack toolchain.
+
+pipeline {
+  agent { label 'linux' }
+  options { timeout(time: 75, unit: 'MINUTES') }
+  environment {
+    KCC_SPEC = '{{spec_id}}'   // empty = gate the whole repo root
+    KCC_SRC  = 'src/{{idea_id}}-{{idea_slug}}'
+    // {{quality_gate_variables}}
+  }
+  stages {
+    // {{quality_gate_stages}}
+
+    // Toolchain for {{dialect}}: provide it on the agent (label) or with a
+    // tools { } block, pinned, e.g. nodejs 'node-20' | jdk 'temurin-21'.
+    stage('Restore dependencies') {
+      steps {
+        dir("${env.KCC_SRC}") {
+          sh '''#!/usr/bin/env bash
+            # PLACEHOLDER - e.g. npm ci | pip install -r requirements.txt | dotnet restore | go mod download
+            echo "ERROR: restore command not configured (replace this placeholder)"; exit 1
+          '''
+        }
+      }
+    }
+    stage('Build') {
+      steps {
+        dir("${env.KCC_SRC}") {
+          sh '''#!/usr/bin/env bash
+            # PLACEHOLDER - e.g. npm run build | python -m build | dotnet build -c Release --no-restore | go build ./...
+            echo "ERROR: build command not configured (replace this placeholder)"; exit 1
+          '''
+        }
+      }
+    }
+    stage('Test') {
+      steps {
+        dir("${env.KCC_SRC}") {
+          sh '''#!/usr/bin/env bash
+            # PLACEHOLDER - e.g. npm test | pytest | dotnet test --no-build -c Release | go test ./...
+            echo "ERROR: test command not configured (replace this placeholder)"; exit 1
+          '''
+        }
+      }
+    }
+    stage('Package') {
+      steps {
+        dir("${env.KCC_SRC}") {
+          sh '''#!/usr/bin/env bash
+            # PLACEHOLDER - write the deployable artifact into dist/
+            echo "ERROR: package command not configured (replace this placeholder)"; exit 1
+          '''
+        }
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'quality-gate.json, TestResults/**', allowEmptyArchive: true
+    }
+    success {
+      archiveArtifacts artifacts: "${env.KCC_SRC}/dist/**", fingerprint: true
+    }
+  }
+}

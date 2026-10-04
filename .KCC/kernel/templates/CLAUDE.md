@@ -44,7 +44,14 @@ re-read them.
   `auto resume` (continue from the latest restore point),
   `.KCC/tools/kcc-handover` (switch harness or CLI),
   `.KCC/tools/kcc-limit-watch` (unattended resume after a usage-limit reset),
-  and `.KCC/tools/repo-bootstrap` (git init/remote, asked once).
+  `.KCC/tools/repo-bootstrap` (git init/remote and hooks, asked once),
+  and the optional post-review steps `/spec-merge` (pull-request draft via
+  `repo-steward`; never pushes) and `/spec-deploy` (pipeline + IaC files;
+  never deploys).
+- **Git workflow:** protected `main`, work on `spec/SPEC-{ID}`, merge by pull
+  request after an `APPROVED` review, commit subjects
+  `SPEC-NNN Story-NNN: ...`. Rules, hooks, and settings:
+  `.KCC/kernel/protocols/git-workflow.md`.
 - **Source of truth:** `.KCC/kernel/` + `.KCC/capabilities/`. Regenerate with
   `powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 -Harness claude`
   (or `bash .KCC/tools/framework-init.sh claude`). This file is created only

@@ -4,7 +4,7 @@ name: spec-deploy
 description: >
   Generate deployment pipeline + IaC stubs for a spec from its approved
   infrastructure decision brief. Usage: /spec-deploy SPEC-{ID}
-  [--ci=github-actions|azure-devops|gitlab-ci]
+  [--ci=github-actions|azure-devops|gitlab-ci|jenkins]
   [--cloud=aws|azure|gcp|onprem-k8s|onprem-bare-metal]
 argument-placeholder: <ARGS>
 delegates-to:
@@ -25,8 +25,8 @@ tags:
   - lifecycle/deploy
   - infrastructure
 created: 2026-05-29
-updated: 2026-05-29
-version: 1.0.0
+updated: 2026-10-04
+version: 1.1.0
 status: active
 ---
 
@@ -44,14 +44,14 @@ executed by the agent.
 
 1. Parse the SPEC-ID (required). Accept `SPEC-{ID}` or `SPEC-{ID}-{slug}`.
 2. Parse optional flags:
-   - `--ci=github-actions|azure-devops|gitlab-ci` (default: read from
+   - `--ci=github-actions|azure-devops|gitlab-ci|jenkins` (default: read from
      InfrastructureDecisionBrief; fall back to `github-actions` only if the
      brief and flag both say nothing - and surface this as an
      assumption).
    - `--cloud=aws|azure|gcp|onprem-k8s|onprem-bare-metal` (default: read
      from InfrastructureDecisionBrief; abort if the brief says nothing).
-3. Reject Jenkins for v1.1 with the message
-   `spec-deploy: jenkins is deferred to v1.2+; pick github-actions, azure-devops, or gitlab-ci`.
+3. Reject any other `--ci` value with
+   `spec-deploy: unknown CI provider; pick github-actions, azure-devops, gitlab-ci, or jenkins`.
 
 ## Steps
 
@@ -73,9 +73,14 @@ executed by the agent.
    generation`.
 5. **Invoke `infrastructure-implementer`.** Pass: SPEC-ID, resolved
    InfrastructureDecisionBrief path, target, CI provider, devops dialect.
+   The agent instantiates the provider's `quality-gate`, `ci`, and `deploy`
+   templates from `.KCC/kernel/templates/pipelines/` (or a `{target}/{ci}`
+   cell when one exists).
 6. **Display `deploy.md`.** After the agent returns, show the summary
-   table from `deploy.md`, the list of files created, and the exact
-   verification commands a human will run.
+   table from `deploy.md`, the list of files created, the placeholders still
+   open, the approval controls the human must configure on the CI provider
+   before the deploy pipeline may be used, and the exact verification
+   commands a human will run.
 7. **Hard reminder.** Print:
    `Deployment is NOT executed. The agent only wrote pipeline and IaC files.
    YOU run the deployment commands. Review every artifact first.`
@@ -87,6 +92,8 @@ executed by the agent.
 - Human MUST explicitly opt in at step 4 - no AutoPolicy override.
 - The agent MUST emit `Confidence: NN%`. Below threshold triggers
   `/critical-human-gate` per the standard protocol.
+- The deploy pipeline MUST keep its manual-only trigger and the approval gate
+  on every production-like stage (staging, production).
 - The agent MUST NOT run `terraform apply`, `kubectl apply`,
   `az ... create`, `aws ... create`, or any other environment-mutating
   command. Only read-only / lint / format / dry-run commands are allowed
@@ -98,6 +105,8 @@ executed by the agent.
 - Infrastructure planner: [[../agents/infrastructure-planner]]
 - Infrastructure interrogator skill: [[infrastructure-interrogator]]
 - Deployment protocol: [[../../kernel/protocols/deployment]]
+- Git workflow protocol: [[../../kernel/protocols/git-workflow]]
+- Spec merge skill: [[spec-merge]]
 - Pipeline templates matrix: [[../../kernel/templates/pipelines/README|pipeline templates]]
 - Spec review skill: [[spec-review]]
 - Spec test skill: [[spec-test]]

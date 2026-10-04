@@ -1,0 +1,73 @@
+# KCC CI - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/ci/gitlab-ci/.gitlab-ci.ci.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as .gitlab-ci.yml (or include it from an existing one).
+# Flow: quality gate -> build -> test -> package (artifact) -> deploy stages.
+# The gate is NOT duplicated here: it is included from the file instantiated
+# from quality-gate/gitlab-ci/.gitlab-ci.quality-gate.yml.tmpl as
+# .gitlab/ci/kcc-quality-gate.yml. The deploy jobs come from
+# deploy/gitlab-ci/.gitlab-ci.deploy.yml.tmpl, instantiated as
+# .gitlab/ci/{{spec_id}}-{{spec_slug}}-deploy.yml; drop that include (and the
+# three deploy stages) when the spec is not deployed. This file owns the full
+# stage list and overrides the single-stage list of the gate file.
+
+include:
+  - local: '.gitlab/ci/kcc-quality-gate.yml'
+  - local: '.gitlab/ci/{{spec_id}}-{{spec_slug}}-deploy.yml'
+
+stages:
+  - quality
+  - build
+  - test
+  - package
+  - deploy-dev
+  - deploy-staging
+  - deploy-production
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+variables:
+  KCC_SRC: 'src/{{idea_id}}-{{idea_slug}}'
+
+.kcc-stack:
+  # Toolchain for {{dialect}}: use a pinned stack image, e.g.
+  #   node:20 | python:3.12 | mcr.microsoft.com/dotnet/sdk:8.0 | golang:1.22
+  image: ubuntu:24.04
+  before_script:
+    - cd "$KCC_SRC"
+    - |
+      # PLACEHOLDER - e.g. npm ci | pip install -r requirements.txt | dotnet restore | go mod download
+      echo "ERROR: restore command not configured (replace this placeholder)"; exit 1
+
+build:
+  extends: .kcc-stack
+  stage: build
+  script:
+    - |
+      # PLACEHOLDER - e.g. npm run build | python -m build | dotnet build -c Release --no-restore | go build ./...
+      echo "ERROR: build command not configured (replace this placeholder)"; exit 1
+
+test:
+  extends: .kcc-stack
+  stage: test
+  script:
+    - |
+      # PLACEHOLDER - e.g. npm test | pytest | dotnet test -c Release | go test ./...
+      echo "ERROR: test command not configured (replace this placeholder)"; exit 1
+
+package:
+  extends: .kcc-stack
+  stage: package
+  script:
+    - |
+      # PLACEHOLDER - write the deployable artifact into dist/
+      echo "ERROR: package command not configured (replace this placeholder)"; exit 1
+  artifacts:
+    name: kcc-package
+    expire_in: 30 days
+    paths:
+      - $KCC_SRC/dist/

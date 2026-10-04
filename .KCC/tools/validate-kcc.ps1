@@ -57,9 +57,25 @@ function Add-Warning([string]$Message) {
     [void]$warnings.Add($Message)
 }
 
+# Files 'kcc tailor' set aside for this solution (.KCC/tailoring.exclude) are not missing.
+$script:tailoredOut = $null
+function Test-TailoredOut([string]$RelativePath) {
+    if ($null -eq $script:tailoredOut) {
+        $script:tailoredOut = @{}
+        $excludeFile = Join-Path $RepoRoot '.KCC/tailoring.exclude'
+        if (Test-Path -LiteralPath $excludeFile) {
+            foreach ($line in (Get-Content -LiteralPath $excludeFile)) {
+                $t = $line.Trim()
+                if ($t -and -not $t.StartsWith('#')) { $script:tailoredOut['.KCC/' + $t] = $true }
+            }
+        }
+    }
+    return $script:tailoredOut.ContainsKey($RelativePath.Replace([char]92, [char]47))
+}
+
 function Test-RequiredPath([string]$RelativePath) {
     $path = Join-Path $RepoRoot $RelativePath
-    if (-not (Test-Path -LiteralPath $path)) {
+    if (-not (Test-Path -LiteralPath $path) -and -not (Test-TailoredOut $RelativePath)) {
         Add-Error "Missing required path: $RelativePath"
     }
 }
@@ -94,7 +110,14 @@ $cellRequiredPaths = @(
     '.KCC/tools/start-agent-session.ps1',
     '.KCC/tools/start-agent-session.sh',
     '.KCC/tools/validate-kcc.ps1',
-    '.KCC/tools/validate-kcc.sh'
+    '.KCC/tools/validate-kcc.sh',
+    '.KCC/tools/check-commit-msg.ps1',
+    '.KCC/tools/check-commit-msg.sh',
+    '.KCC/tools/check-branch.ps1',
+    '.KCC/tools/check-branch.sh',
+    '.KCC/tools/hooks/pre-commit',
+    '.KCC/tools/hooks/commit-msg',
+    '.KCC/tools/hooks/pre-push'
 )
 
 $repoRequiredPaths = @(
@@ -162,6 +185,7 @@ $expectedAgents = @(
     'infrastructure-planner.md',
     'migrator.md',
     'planner.md',
+    'repo-steward.md',
     'security-analyst.md',
     'solution-cartographer.md',
     'solution-inspector.md',
@@ -193,10 +217,12 @@ $expectedSkills = @(
     'spec-create.md',
     'spec-deploy.md',
     'spec-implement.md',
+    'spec-merge.md',
     'spec-plan.md',
     'spec-review.md',
     'spec-status.md',
     'spec-test.md',
+    'tailor-workflow.md',
     'technical-interrogator.md',
     'token-estimate.md',
     'ux-ui-interrogator.md'

@@ -1,0 +1,99 @@
+#!/bin/sh
+# KCC-PRE-PUSH v1.0.0
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Installed by .KCC/tools/repo-bootstrap (--install-hook / -InstallHook).
+# Runs, for the refs git is about to push (stdin lines
+# "<local ref> <local sha> <remote ref> <remote sha>"):
+#   1. check-branch --push   (a direct push to a protected branch is BLOCKED)
+#   2. quality-gate          (mode from .KCC/settings.json -> git.pre_push_gate:
+#                             fast = secrets scan of the working tree (default),
+#                             full = the whole gate, off = skipped)
+# Exit handling per tool: 0 ok | 1 violations -> push BLOCKED |
+# 3 deferred (scanner missing) -> allowed with a warning, NOT a pass |
+# 2 / other -> tool could not evaluate -> allowed with a loud warning.
+# A pre-existing hook preserved as pre-push.local runs first.
+# Bypass is an explicit human action only: git push --no-verify.
+# Protocol: .KCC/kernel/protocols/git-workflow.md
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+tools="$top/.KCC/tools"
+hookdir=$(dirname "$0")
+refs=$(cat)
+
+if [ -x "$hookdir/pre-push.local" ]; then
+  printf '%s\n' "$refs" | "$hookdir/pre-push.local" "$@" || exit $?
+fi
+
+if [ ! -d "$tools" ]; then
+  echo "kcc pre-push: warning: $tools not found; KCC checks skipped" >&2
+  exit 0
+fi
+
+# run_tool NAME "bash args" "powershell args" -> tool exit code, 127 if unavailable
+run_tool() {
+  name=$1
+  sh_args=$2
+  ps_args=$3
+  if [ -f "$tools/$name.sh" ] && command -v bash >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    bash "$tools/$name.sh" --repo-root "$top" $sh_args
+    return $?
+  fi
+  if [ -f "$tools/$name.ps1" ]; then
+    for ps in pwsh powershell powershell.exe; do
+      if command -v "$ps" >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        "$ps" -NoProfile -ExecutionPolicy Bypass -File "$tools/$name.ps1" -RepoRoot "$top" $ps_args
+        return $?
+      fi
+    done
+  fi
+  return 127
+}
+
+blocked=0
+judge() {
+  label=$1
+  rc=$2
+  case "$rc" in
+    0) ;;
+    1) echo "kcc pre-push: $label found violations - push BLOCKED" >&2; blocked=1 ;;
+    3) echo "kcc pre-push: warning: $label deferred (required tool missing) - push allowed, this is NOT a pass" >&2 ;;
+    127) echo "kcc pre-push: warning: $label not available - skipped" >&2 ;;
+    *) echo "kcc pre-push: WARNING: $label could not evaluate (exit $rc) - push allowed; fix the tool/environment" >&2 ;;
+  esac
+}
+
+# The pipeline's exit status is run_tool's (the last command).
+printf '%s\n' "$refs" | run_tool check-branch "--push" "-Push" >&2
+judge "check-branch --push" $?
+
+gate=fast
+if [ -f "$top/.KCC/settings.json" ]; then
+  g=$(tr -d '\r' < "$top/.KCC/settings.json" | sed -n 's/.*"pre_push_gate"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -n 1)
+  if [ -n "$g" ]; then gate=$g; fi
+fi
+case "$gate" in
+  off)
+    ;;
+  full)
+    run_tool quality-gate "" "" </dev/null >&2
+    judge "quality-gate" $?
+    ;;
+  fast)
+    run_tool quality-gate "--scope secrets" "-Scope secrets" </dev/null >&2
+    judge "quality-gate --scope secrets" $?
+    ;;
+  *)
+    echo "kcc pre-push: warning: unknown git.pre_push_gate '$gate' (fast | full | off) - using fast" >&2
+    run_tool quality-gate "--scope secrets" "-Scope secrets" </dev/null >&2
+    judge "quality-gate --scope secrets" $?
+    ;;
+esac
+
+if [ "$blocked" -ne 0 ]; then
+  echo "kcc pre-push: fix the findings above (or, as an explicit human decision, git push --no-verify)" >&2
+  exit 1
+fi
+exit 0

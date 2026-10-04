@@ -37,9 +37,15 @@ warnings=()
 add_error() { errors+=("$1"); }
 add_warning() { warnings+=("$1"); }
 
+# Files 'kcc tailor' set aside for this solution (.KCC/tailoring.exclude) are not missing.
+tailored_out() {
+  local f="$REPO_ROOT/.KCC/tailoring.exclude"
+  [[ -f "$f" ]] && tr -d '\r' < "$f" | grep -Fxq -- "${1#.KCC/}"
+}
+
 required_path() {
   local rel="$1"
-  [[ -e "$REPO_ROOT/$rel" ]] || add_error "Missing required path: $rel"
+  [[ -e "$REPO_ROOT/$rel" ]] || tailored_out "$rel" || add_error "Missing required path: $rel"
 }
 
 has_frontmatter_key() {
@@ -84,6 +90,13 @@ cell_required_paths=(
   ".KCC/tools/start-agent-session.sh"
   ".KCC/tools/validate-kcc.ps1"
   ".KCC/tools/validate-kcc.sh"
+  ".KCC/tools/check-commit-msg.ps1"
+  ".KCC/tools/check-commit-msg.sh"
+  ".KCC/tools/check-branch.ps1"
+  ".KCC/tools/check-branch.sh"
+  ".KCC/tools/hooks/pre-commit"
+  ".KCC/tools/hooks/commit-msg"
+  ".KCC/tools/hooks/pre-push"
 )
 repo_required_paths=(
   "README.md"
@@ -123,7 +136,7 @@ done
 expected_agents=(
   architect.md architecture-critic.md butler.md idea-interrogator.md implementer.md
   infrastructure-implementer.md infrastructure-planner.md migrator.md
-  planner.md security-analyst.md solution-cartographer.md
+  planner.md repo-steward.md security-analyst.md solution-cartographer.md
   solution-inspector.md spec-writer.md technical-interrogator.md
   token-guard.md ux-ui-designer.md verifier.md
 )
@@ -132,7 +145,7 @@ expected_skills=(
   critical-human-gate.md dashboard.md idea-interrogator.md
   infrastructure-interrogator.md inspect.md security-interrogator.md
   solution-onboard.md spec-create.md spec-deploy.md
-  spec-implement.md spec-plan.md spec-review.md spec-status.md spec-test.md
+  spec-implement.md spec-merge.md spec-plan.md spec-review.md spec-status.md spec-test.md tailor-workflow.md
   technical-interrogator.md token-estimate.md ux-ui-interrogator.md
 )
 

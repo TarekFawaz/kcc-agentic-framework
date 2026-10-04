@@ -75,6 +75,11 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
 
 ## Agent profiles
 
+Only the agents and skills listed here exist in this workspace. One that a
+protocol or skill names but these tables omit was set aside by `kcc tailor`
+(`.KCC/kernel/protocols/tailoring.md`): skip its step, record `skipped:
+tailored out` in the trace, and do not improvise its work.
+
 {{SPAWN_TABLE}}
 
 ## Skill routes

@@ -3,8 +3,8 @@
 description: >
   Defines the optional `deploy` lifecycle stage. Spells out supported cloud
   and on-prem targets, supported CI providers, where pipeline and IaC
-  artifacts land, the per-spec deploy summary file, the v1.1 template
-  matrix, and the integration with the rest of the spec lifecycle.
+  artifacts land, the per-spec deploy summary file, the pipeline
+  templates, and the integration with the rest of the spec lifecycle.
 
 # Obsidian metadata
 title: "Deployment Lifecycle Protocol"
@@ -18,8 +18,8 @@ tags:
   - infrastructure
   - documentation
 created: 2026-05-29
-updated: 2026-05-29
-version: 1.0.0
+updated: 2026-10-04
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -61,32 +61,41 @@ deployment, this protocol defines the contract.
 
 | Target | Status | Notes |
 |--|--|--|
-| AWS | v1.1 - TBD templates | Terraform / CloudFormation IaC |
-| Azure | v1.1 - TBD templates | Terraform / Bicep IaC |
-| GCP | v1.1 - TBD templates | Terraform IaC |
-| On-prem Kubernetes | v1.1 - TBD templates | Helm + manifests |
-| On-prem bare metal | v1.1 - TBD templates | Ansible playbooks |
-| Mobile app stores | **deferred to v1.3+** | Apple App Store, Google Play, etc. |
+| AWS | provider templates | Terraform / CloudFormation IaC |
+| Azure | provider templates | Terraform / Bicep IaC |
+| GCP | provider templates | Terraform IaC |
+| On-prem Kubernetes | provider templates | Helm + manifests |
+| On-prem bare metal | provider templates | Ansible playbooks |
+| Mobile app stores | not covered | Apple App Store, Google Play, etc. |
 
-Templates for each target live under `.KCC/kernel/templates/pipelines/{target}/{ci}/`.
-For v1.1 these are placeholder READMEs; v1.2 lands real templates per the
-matrix in [[../templates/pipelines/README|pipeline templates README]].
+"provider templates" means the pipeline comes from the target-neutral `ci/`
+and `deploy/` templates of the CI provider, and the deploy commands for the
+target stay placeholders for a human to fill. Target-specific cells
+(`.KCC/kernel/templates/pipelines/{target}/{ci}/`) are optional and none
+exists yet. See [[../templates/pipelines/README|pipeline templates README]].
 
 ## Supported CI providers
 
 | CI provider | Status | Pipeline location |
 |--|--|--|
-| GitHub Actions | v1.1 | `.github/workflows/SPEC-{ID}-{slug}.yml` |
-| Azure DevOps | v1.1 | `azure-pipelines/SPEC-{ID}-{slug}.yml` (or root `azure-pipelines.yml`) |
-| GitLab CI | v1.1 | `.gitlab-ci.yml` (extend / include per spec) |
-| Jenkins | **deferred to v1.2+** | TBD per matrix |
+| GitHub Actions | templates ready | `.github/workflows/kcc-quality-gate.yml`, `.github/workflows/SPEC-{ID}-{slug}-ci.yml`, `.github/workflows/SPEC-{ID}-{slug}-deploy.yml` |
+| Azure DevOps | templates ready | `azure-pipelines/SPEC-{ID}-{slug}-ci.yml` (or root `azure-pipelines.yml`), `azure-pipelines/SPEC-{ID}-{slug}-deploy.yml` |
+| GitLab CI | templates ready | `.gitlab-ci.yml`, `.gitlab/ci/kcc-quality-gate.yml`, `.gitlab/ci/SPEC-{ID}-{slug}-deploy.yml` |
+| Jenkins | templates ready | `Jenkinsfile` (or `jenkins/SPEC-{ID}-{slug}-ci.Jenkinsfile`), `jenkins/SPEC-{ID}-{slug}-deploy.Jenkinsfile` |
 
 ## Where artifacts land
 
 ```text
-.github/workflows/SPEC-{ID}-{slug}.yml          <- if CI = github-actions
-azure-pipelines/SPEC-{ID}-{slug}.yml            <- if CI = azure-devops
+.github/workflows/kcc-quality-gate.yml          <- if CI = github-actions
+.github/workflows/SPEC-{ID}-{slug}-ci.yml
+.github/workflows/SPEC-{ID}-{slug}-deploy.yml
+azure-pipelines/SPEC-{ID}-{slug}-ci.yml         <- if CI = azure-devops
+azure-pipelines/SPEC-{ID}-{slug}-deploy.yml
 .gitlab-ci.yml                                  <- if CI = gitlab-ci
+.gitlab/ci/kcc-quality-gate.yml
+.gitlab/ci/SPEC-{ID}-{slug}-deploy.yml
+Jenkinsfile | jenkins/SPEC-{ID}-{slug}-ci.Jenkinsfile   <- if CI = jenkins
+jenkins/SPEC-{ID}-{slug}-deploy.Jenkinsfile
 
 infrastructure/
 |-- terraform/SPEC-{ID}-{slug}/
@@ -115,23 +124,39 @@ See the
 [[../../capabilities/agents/infrastructure-implementer|infrastructure-implementer]]
 agent's `## Output Format` section for the full file shape.
 
-## Pipeline templates: v1.1 TBD, v1.2 lands real templates
+## Pipeline templates
 
-For v1.1, `.KCC/kernel/templates/pipelines/{target}/{ci}/` directories
-contain placeholder READMEs marked `TBD v1.2`. When
-`infrastructure-implementer` cannot find a real template, it generates a
-placeholder pipeline file with explanatory comments pointing at the matrix
-in [[../templates/pipelines/README|pipeline templates README]]. This is
-deliberate: shipping fabricated templates without the per-cloud expertise
-to validate them is worse than shipping honest placeholders.
+Templates live under `.KCC/kernel/templates/pipelines/` and are described in
+[[../templates/pipelines/README|pipeline templates README]]. For each CI
+provider (GitHub Actions, Azure DevOps, GitLab CI, Jenkins) there are three:
 
-The v1.2 milestone lands hand-validated reference templates for each
-(target x CI) cell of the matrix.
+| Template | What it does |
+|--|--|
+| `quality-gate/{ci}/` | Runs `quality-gate.sh --require`; exit 1 and exit 3 both fail the job. |
+| `ci/{ci}/` | Checkout, toolchain setup for the declared stack, the quality gate, restore, build, test, package, publish the artifact. Reuses the gate template instead of copying it. |
+| `deploy/{ci}/` | `dev` -> `staging` -> `production`. Manual start only. Staging and production sit behind the provider's approval / environment protection. Deploys the artifact a CI run published. |
+
+`infrastructure-implementer` instantiates all three for the selected
+provider. Restore, build, test, package, deploy, and smoke commands in the
+templates are placeholders that exit non-zero until replaced: build-side
+commands come from the selected dialect, deploy-side commands are proposed in
+`deploy.md` and put into the pipeline by a human after review. If a
+target-specific cell `{target}/{ci}/` exists it is used instead of the
+provider `deploy/` template.
+
+The agent does not configure the approval controls (environment reviewers,
+approvals and checks, protected environments, Jenkins submitters). `deploy.md`
+lists them as required human setup, and the deploy pipeline must not be used
+before they exist.
+
+The source branch model these pipelines assume (protected trunk, pull
+requests from `spec/SPEC-{ID}`) is defined in [[git-workflow]].
 
 ## Hard rules
 
 - **No auto-execution.** The deploy agent only writes files. The human runs
-  the deployment commands.
+  the deployment commands. Deploy pipelines have no push or pull-request
+  trigger; a person starts each run and approves each production-like stage.
 - **No bypass of `/spec-review`.** A spec without an `APPROVED` review
   cannot deploy.
 - **No bypass of the InfrastructureDecisionBrief.** A spec without an
@@ -169,6 +194,7 @@ The v1.2 milestone lands hand-validated reference templates for each
 - DevOps k8s/on-prem dialect: [[dialects/devops-k8s-onprem-agnostic]]
 - Pipeline templates matrix: [[../templates/pipelines/README|pipeline templates]]
 - Spec layout protocol: [[spec-layout]]
+- Git workflow protocol: [[git-workflow]]
 - Auto-mode skill: [[../../capabilities/skills/auto]]
 - Confidence gate: [[confidence-gate]]
 - Architecture governance: [[architecture-governance]]

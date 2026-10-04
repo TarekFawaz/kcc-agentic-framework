@@ -81,6 +81,40 @@ permission-bypass mode. The watcher writes its log to
 `continuity.max_resumes` attempts (default 5). If the resumed session hits
 the limit again, the cycle repeats.
 
+### Supervised runs (`kcc run`)
+
+With the `kcc` CLI installed, `kcc run` is the supervisor for every harness
+and replaces the detached watcher: the process that started the run also
+waits and resumes it, so nothing depends on a background process surviving.
+
+| Mode | Command | What is supervised |
+|--|--|--|
+| Driver | `kcc run --input <...>` / `kcc run --resume` | The `kcc-run` state machine. It runs with `KCC_SUPERVISED=1`, so on a limit it writes the `limit-hard` restore point and `coordination/run/limit.json`, exits 5, and arms no watcher. The CLI waits and calls `kcc-run --resume` |
+| Wrap | `kcc run --wrap [--harness <name>] -- <command...>` | Any harness command line. The CLI reads its output, writes the restore point itself, waits, and resumes with the `continuity.resume` template (or `continuity.start` when no session id was seen) |
+
+Limit detection is the same for every harness, in this order:
+
+1. **Structured output.** A JSON line of a failing run that carries a
+   rate-limit key (`structured_keys` in the pattern table) or status 429.
+2. **Pattern table.** `.KCC/kernel/limit-patterns.json`:
+   `limit_regex.default` plus `limit_regex.<harness>`, matched against the
+   last lines of output. `kcc-run`, `kcc-limit-watch`, and the CLI all read
+   this one file; add a harness's wording there, not in the scripts. A bare
+   `429` counts only with a failing exit code.
+3. **Fallback wait.** When the output names no reset time,
+   `continuity.default_wait_minutes` is used.
+
+The reset time is read from the output: an epoch (`resets_at`, `|<epoch>`),
+`Retry-After`, a relative time (`try again in 2 hours 5 minutes`), an ISO
+timestamp, or a clock time (`resets at 3pm`, taken as the next occurrence).
+
+The supervisor resumes at the reset time plus `resume_grace_seconds`, at
+most `max_resumes` times, then exits 5. `--no-wait` exits 5 at the first
+limit instead (driver mode then arms `kcc-limit-watch` as before). A resume
+template that contains a permission-bypass flag is refused. `kcc limits`
+shows the usage windows, the last limit, and the next resume;
+`coordination/run/limit.json` holds the same record.
+
 ## Harness handover (`kcc-handover`)
 
 `kcc-handover -To <harness> [-Launch] [-Unattended]` does the following:

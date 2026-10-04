@@ -6,9 +6,13 @@
 # job on exit 1 (violations) AND exit 3 (deferred). Deferred is never a pass in CI.
 # Scanner installs below are pinned and declared in this reviewed pipeline file
 # (the human-approved toolchain for CI); bump versions deliberately.
+# Reusable: ci/github-actions/ci.yml.tmpl calls this file (workflow_call) as
+# .github/workflows/kcc-quality-gate.yml. When it is only called from there,
+# remove the pull_request / push triggers so the gate runs once per change.
 name: kcc-quality-gate
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]

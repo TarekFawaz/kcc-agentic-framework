@@ -422,10 +422,21 @@ run_check() { # $1 idx, $2 label, $3 = "then"
 }
 
 # ---- harness ------------------------------------------------------------------------------------------
-LIMIT_RE='usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+LIMIT_RE_BUILTIN='usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+# kernel/limit-patterns.json is the shared table (kcc-run, kcc-limit-watch, and the kcc CLI); the built-in is the fallback.
+limit_re() { # $1 harness
+  local f="$ROOT/.KCC/kernel/limit-patterns.json" d="" h=""
+  if [[ -f "$f" ]]; then
+    d="$(tr -d '\r' < "$f" | sed -n 's/^ *"limit_regex\.default": *"\(.*\)",\{0,1\} *$/\1/p' | head -n 1)"
+    h="$(tr -d '\r' < "$f" | sed -n 's/^ *"limit_regex\.'"$1"'": *"\(.*\)",\{0,1\} *$/\1/p' | head -n 1)"
+  fi
+  if [[ -n "$d" && -n "$h" ]]; then printf '%s|%s' "$d" "$h"
+  elif [[ -n "$d$h" ]]; then printf '%s' "$d$h"
+  else printf '%s' "$LIMIT_RE_BUILTIN"; fi
+}
 limit_hit() { # $1 log, $2 rc
   local t; t="$(tail -n 60 "$1" 2>/dev/null | tr 'A-Z' 'a-z' || true)"
-  if printf '%s' "$t" | grep -Eq "$LIMIT_RE"; then return 0; fi
+  if printf '%s' "$t" | grep -Eq "$(limit_re "$HARNESS")"; then return 0; fi
   if [[ "$2" != "0" ]] && printf '%s' "$t" | grep -Eq '(^|[^0-9])429([^0-9]|$)'; then return 0; fi
   return 1
 }
@@ -642,7 +653,10 @@ suspend_run() { # $1 idx, $2 log
   resume_cmd="bash $(squote "$SELF") --resume --repo-root $(squote "$ROOT")"
   a=(--arm --harness "$HARNESS" --repo-root "$ROOT" --command "$resume_cmd")
   if [[ -n "$reset" ]]; then a+=(--reset-at "$reset"); fi
-  armout="$( (cd "$ROOT" && bash "$TOOLS/kcc-limit-watch.sh" "${a[@]}") 2>/dev/null < /dev/null | tr '\n' ' ' || true)"
+  printf '{"harness":"%s","source":"kcc-run","at":%s,"resets_at":%s,"resume_at":null,"resumes":0,"status":"waiting"}\n' "$HARNESS" "$(date +%s)" "${reset:-null}" > "$RUN_DIR/limit.json"
+  # KCC_SUPERVISED=1: 'kcc run' owns the wait and the resume, so no detached watcher is armed.
+  if [[ "${KCC_SUPERVISED:-}" == "1" ]]; then armout="supervised by kcc run; watcher not armed"
+  else armout="$( (cd "$ROOT" && bash "$TOOLS/kcc-limit-watch.sh" "${a[@]}") 2>/dev/null < /dev/null | tr '\n' ' ' || true)"; fi
   printf '%s\n' "$armout" > "$LOG_DIR/limit-watch-arm.out"
   emit limit-reached "$C_SPEC" "{\"level\":\"hard\",\"harness\":\"$HARNESS\",\"source\":\"kcc-run\",\"state\":${S_ID[$i]},\"wave\":\"$C_WAVE\",\"resets_at\":${reset:-null},\"log\":\"$(jesc "$R_last_log")\"}"
   R_status=suspended; R_reason="usage limit reached during $label"

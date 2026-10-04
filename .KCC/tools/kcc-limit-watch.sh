@@ -192,11 +192,22 @@ parse_reset() { # file -> epoch or empty
   esac
 }
 
-LIMIT_RE='usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+LIMIT_RE_BUILTIN='usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+# kernel/limit-patterns.json is the shared table (kcc-run, kcc-limit-watch, and the kcc CLI); the built-in is the fallback.
+limit_re() { # $1 harness
+  local f="$REPO_ROOT/.KCC/kernel/limit-patterns.json" d="" h=""
+  if [[ -f "$f" ]]; then
+    d="$(tr -d '\r' < "$f" | sed -n 's/^ *"limit_regex\.default": *"\(.*\)",\{0,1\} *$/\1/p' | head -n 1)"
+    h="$(tr -d '\r' < "$f" | sed -n 's/^ *"limit_regex\.'"$1"'": *"\(.*\)",\{0,1\} *$/\1/p' | head -n 1)"
+  fi
+  if [[ -n "$d" && -n "$h" ]]; then printf '%s|%s' "$d" "$h"
+  elif [[ -n "$d$h" ]]; then printf '%s' "$d$h"
+  else printf '%s' "$LIMIT_RE_BUILTIN"; fi
+}
 is_limit_hit() { # file rc
   local t
   t="$(tail -n 60 "$1" 2>/dev/null | tr 'A-Z' 'a-z' || true)"
-  if printf '%s' "$t" | grep -Eq "$LIMIT_RE"; then return 0; fi
+  if printf '%s' "$t" | grep -Eq "$(limit_re "$HARNESS")"; then return 0; fi
   if [[ "$2" != "0" ]] && printf '%s' "$t" | grep -Eq '(^|[^0-9])429([^0-9]|$)'; then return 0; fi
   return 1
 }

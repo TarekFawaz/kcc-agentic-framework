@@ -17,10 +17,12 @@ tools-required:
 inputs: >
   A SPEC-ID or IDEA-ID, plus the existing InfrastructureDecisionBrief.md from
   /infrastructure-interrogator, plus the selected devops dialect (cloud /
-  k8s / on-prem) and CI provider (GitHub Actions / Azure DevOps / GitLab CI).
+  k8s / on-prem) and CI provider (GitHub Actions / Azure DevOps / GitLab CI /
+  Jenkins).
 outputs: >
-  Pipeline file(s) under .github/workflows/, azure-pipelines.yml, or
-  .gitlab-ci.yml depending on CI choice; IaC stubs under
+  Quality-gate, CI, and deploy pipeline files under .github/workflows/,
+  azure-pipelines/, .gitlab-ci.yml + .gitlab/ci/, or Jenkinsfile + jenkins/
+  depending on CI choice; IaC stubs under
   infrastructure/{terraform|bicep|cloudformation|ansible|helm}/; a deploy.md
   inside the SPEC folder summarizing what got created.
 maturity: L1
@@ -41,8 +43,8 @@ tags:
   - infrastructure
   - deployment
 created: 2026-05-29
-updated: 2026-09-21
-version: 1.1.0
+updated: 2026-10-04
+version: 1.2.0
 status: active
 ---
 
@@ -62,24 +64,35 @@ write *how*. You never execute deployments.
 2. **Dialect** (your review rubric): cloud ->
    `.KCC/kernel/protocols/dialects/devops-cloud.md`; on-prem / Kubernetes /
    agnostic -> `.KCC/kernel/protocols/dialects/devops-k8s-onprem-agnostic.md`.
-3. **CI provider**: flag `--ci=github-actions|azure-devops|gitlab-ci`, else
-   infer from the brief. Ambiguous -> stop and score confidence below
+3. **CI provider**: flag `--ci=github-actions|azure-devops|gitlab-ci|jenkins`,
+   else infer from the brief. Ambiguous -> stop and score confidence below
    threshold.
-4. **Templates**: `.KCC/kernel/templates/pipelines/{target}/{ci}/`, target
-   `aws | azure | gcp | onprem-k8s | onprem-bare-metal`, ci
-   `github-actions | azure-devops | gitlab-ci | jenkins`. Missing (v1.1 TBD
-   stubs) -> write a placeholder pipeline whose comments explain each step,
-   marked `# TBD v1.2 - see .KCC/kernel/templates/pipelines/README.md`;
-   never an empty file.
-5. **Instantiate** (See `.KCC/kernel/protocols/deployment.md` -> Where
-   artifacts land):
-   - GitHub Actions -> `.github/workflows/SPEC-{ID}-{slug}.yml`
-   - Azure DevOps -> `azure-pipelines/SPEC-{ID}-{slug}.yml` (top-level `azure-pipelines.yml` when the spec is the repo's sole deployable)
-   - GitLab CI -> `.gitlab-ci.yml` (extend or include per spec)
+4. **Templates** (`.KCC/kernel/templates/pipelines/`, see its `README.md` ->
+   *Provider templates*): for the chosen `{ci}` take `quality-gate/{ci}/`,
+   `ci/{ci}/`, and `deploy/{ci}/`. A target cell `{target}/{ci}/` (target
+   `aws | azure | gcp | onprem-k8s | onprem-bare-metal`), when present,
+   replaces `deploy/{ci}/`. Never hand-write a pipeline a template covers.
+5. **Instantiate** (paths: `.KCC/kernel/templates/pipelines/README.md` ->
+   *Where instantiated files go*):
+   - Substitute `{{spec_id}}`, `{{spec_slug}}`, `{{idea_id}}`,
+     `{{idea_slug}}`, `{{target}}`, `{{dialect}}`.
+   - Gate reuse: GitHub Actions and GitLab CI reference the instantiated gate
+     file; Azure DevOps and Jenkins replace the `{{quality_gate_variables}}`
+     and `{{quality_gate_stage}}` / `{{quality_gate_stages}}` marker lines
+     with the blocks copied unchanged from the gate template.
+   - Restore / build / test / package placeholders: replace with the selected
+     dialect's commands when the brief and the code make them unambiguous;
+     otherwise leave the failing placeholder and list it in `deploy.md`.
+   - Deploy / smoke placeholders: leave them failing. Put the proposed
+     commands in `deploy.md` for the human to review and insert.
+   - Keep the deploy template's manual-only trigger and its approval gates on
+     staging and production exactly as shipped.
    - IaC -> `infrastructure/{terraform|bicep|cloudformation|ansible|helm}/SPEC-{ID}-{slug}/`
 6. **Write `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/deploy.md`**: what
-   was created, where, and the exact commands a human runs to verify and
-   execute.
+   was created, where, the placeholders still open, the approval controls the
+   human must configure on the CI provider (environment reviewers / approvals
+   and checks / protected environments / Jenkins submitters), and the exact
+   commands a human runs to verify and execute.
 7. **Allowed `exec` only**: `git status`, `git diff`, `git add`,
    `git commit`, and read-only dry-runs (`gh workflow list`,
    `az pipelines validate`, `gitlab-ci-lint`, `terraform fmt`,
@@ -95,8 +108,11 @@ Template: read `.KCC/capabilities/agents/refs/infrastructure-implementer-deploy-
 ## Constraints
 
 - NEVER auto-execute a deployment; mutating commands are human-only.
+- Never add a push / pull-request / schedule trigger to a deploy pipeline,
+  and never remove or weaken an approval gate.
 - Write only: per-spec `deploy.md`, `.github/workflows/`, `azure-pipelines/`,
-  `.gitlab-ci.yml`, `infrastructure/{terraform|bicep|cloudformation|ansible|helm}/`.
+  `.gitlab-ci.yml`, `.gitlab/ci/`, `Jenkinsfile`, `jenkins/`,
+  `infrastructure/{terraform|bicep|cloudformation|ansible|helm}/`.
   Never `memory/`, `coordination/backchannel.jsonl`, `.KCC/kernel/`,
   `.KCC/capabilities/`, `architecture/adrs/`.
 - Existing target file -> diff against your version and ask the human to

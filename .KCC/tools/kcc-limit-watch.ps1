@@ -181,10 +181,22 @@ function Get-ResetEpoch([string[]]$lines) {
     return $null
 }
 
-$limitRe = 'usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+$limitReBuiltin = 'usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded'
+# kernel/limit-patterns.json is the shared table (kcc-run, kcc-limit-watch, and the kcc CLI); the built-in is the fallback.
+function Get-LimitRe([string]$harness) {
+    $f = Join-Path $RepoRoot '.KCC/kernel/limit-patterns.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $limitReBuiltin }
+    try {
+        $j = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+        $parts = @()
+        foreach ($k in @('limit_regex.default', ('limit_regex.' + $harness))) { $p = $j.PSObject.Properties[$k]; if ($p -and $p.Value) { $parts += [string]$p.Value } }
+        if ($parts.Count -gt 0) { return ($parts -join '|') }
+    } catch { }
+    return $limitReBuiltin
+}
 function Test-LimitHit([string[]]$lines, [int]$rc) {
     $t = (@($lines | Select-Object -Last 60) -join "`n").ToLowerInvariant()
-    if ($t -match $limitRe) { return $true }
+    if ($t -match (Get-LimitRe $Harness)) { return $true }
     if ($rc -ne 0 -and $t -match '(^|[^0-9])429([^0-9]|$)') { return $true }
     return $false
 }

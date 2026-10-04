@@ -1,0 +1,79 @@
+# KCC CI - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/ci/azure-devops/azure-pipelines.ci.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as azure-pipelines/SPEC-{ID}-{slug}-ci.yml (or azure-pipelines.yml).
+# Flow: quality gate -> restore -> build -> test -> package -> publish artifact.
+# The gate is NOT written out here. A pipeline file with trigger / variables
+# cannot be referenced as a stage template, so at instantiation:
+#   - replace the line "# {{quality_gate_variables}}" with the scanner version
+#     variables, and
+#   - replace the line "# {{quality_gate_stage}}" with the whole "quality_gate"
+#     stage,
+# both copied unchanged from
+# quality-gate/azure-devops/azure-pipelines.quality-gate.yml.tmpl.
+# Until both lines are replaced the "build" stage has no stage to depend on and
+# the pipeline does not validate.
+
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: ['*']
+
+variables:
+  KCC_SPEC: '{{spec_id}}'          # empty = gate the whole repo root
+  KCC_SRC: 'src/{{idea_id}}-{{idea_slug}}'
+  # {{quality_gate_variables}}
+
+stages:
+  # {{quality_gate_stage}}
+
+  - stage: build
+    displayName: Build, test, package
+    dependsOn: quality_gate
+    jobs:
+      - job: build_test_package
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+
+          # Toolchain for {{dialect}} (keep only what applies, pin versions), e.g.
+          #   - task: NodeTool@0         inputs: { versionSpec: '20.x' }
+          #   - task: UsePythonVersion@0 inputs: { versionSpec: '3.12' }
+          #   - task: UseDotNet@2        inputs: { version: '8.0.x' }
+          #   - task: GoTool@0           inputs: { version: '1.22' }
+
+          - bash: |
+              # PLACEHOLDER - e.g. npm ci | pip install -r requirements.txt | dotnet restore | go mod download
+              echo "##vso[task.logissue type=error]restore command not configured (replace this placeholder)"; exit 1
+            displayName: Restore dependencies
+            workingDirectory: $(KCC_SRC)
+
+          - bash: |
+              # PLACEHOLDER - e.g. npm run build | python -m build | dotnet build -c Release --no-restore | go build ./...
+              echo "##vso[task.logissue type=error]build command not configured (replace this placeholder)"; exit 1
+            displayName: Build
+            workingDirectory: $(KCC_SRC)
+
+          - bash: |
+              # PLACEHOLDER - e.g. npm test | pytest | dotnet test --no-build -c Release | go test ./...
+              echo "##vso[task.logissue type=error]test command not configured (replace this placeholder)"; exit 1
+            displayName: Test
+            workingDirectory: $(KCC_SRC)
+
+          - bash: |
+              # PLACEHOLDER - write the deployable artifact into dist/
+              echo "##vso[task.logissue type=error]package command not configured (replace this placeholder)"; exit 1
+            displayName: Package
+            workingDirectory: $(KCC_SRC)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish artifact
+            inputs:
+              targetPath: $(KCC_SRC)/dist
+              artifact: kcc-package
+              publishLocation: pipeline

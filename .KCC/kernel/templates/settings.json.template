@@ -30,6 +30,18 @@
     "decision": null,
     "remote": null
   },
+  "git": {
+    "model": "trunk",
+    "protected_branches": ["main"],
+    "branch_patterns": {
+      "spec": "spec/SPEC-{ID}",
+      "lane": "lane/SPEC-{ID}-w{N}",
+      "bug": "bug/SPEC-{ID}-Bug-{NNN}",
+      "chore": "chore/{slug}"
+    },
+    "commit_pattern": null,
+    "pre_push_gate": "fast"
+  },
   "spec_sizing": {
     "max_items": 6,
     "max_files_per_item": 5,
