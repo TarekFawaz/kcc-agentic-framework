@@ -29,7 +29,7 @@ jobs:
           fi
 
       - name: Validate the framework
-        run: bash .KCC/tools/validate-kcc.sh --mode repo
+        run: bash .KCC/tools/validate-kcc.sh --mode cell
 
       - name: Install, typecheck, test
         working-directory: cli
