@@ -1,0 +1,86 @@
+#!/bin/sh
+# KCC-COMMIT-MSG v1.0.0
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Installed by .KCC/tools/repo-bootstrap (--install-hook / -InstallHook).
+# Runs check-commit-msg on the message file git passes as $1
+# (convention: .KCC/kernel/protocols/git-workflow.md -> Commit messages).
+# Exit handling: 0 ok | 1 violations -> commit BLOCKED |
+# 3 deferred -> allowed with a warning, NOT a pass |
+# 2 / other -> tool could not evaluate -> allowed with a loud warning.
+# A pre-existing hook preserved as commit-msg.local runs first.
+# Bypass is an explicit human action only: git commit --no-verify.
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+tools="$top/.KCC/tools"
+hookdir=$(dirname "$0")
+msgfile=$1
+
+if [ -x "$hookdir/commit-msg.local" ]; then
+  "$hookdir/commit-msg.local" "$@" || exit $?
+fi
+
+if [ ! -d "$tools" ]; then
+  echo "kcc commit-msg: warning: $tools not found; KCC checks skipped" >&2
+  exit 0
+fi
+if [ -z "$msgfile" ]; then
+  echo "kcc commit-msg: warning: no message file argument; KCC checks skipped" >&2
+  exit 0
+fi
+
+# run_tool NAME "bash args" "powershell args" [FILE] -> tool exit code, 127 if unavailable
+# FILE (may contain spaces) is passed as --file / -File.
+run_tool() {
+  name=$1
+  sh_args=$2
+  ps_args=$3
+  file=${4:-}
+  if [ -f "$tools/$name.sh" ] && command -v bash >/dev/null 2>&1; then
+    if [ -n "$file" ]; then
+      # shellcheck disable=SC2086
+      bash "$tools/$name.sh" --repo-root "$top" $sh_args --file "$file"
+    else
+      # shellcheck disable=SC2086
+      bash "$tools/$name.sh" --repo-root "$top" $sh_args
+    fi
+    return $?
+  fi
+  if [ -f "$tools/$name.ps1" ]; then
+    for ps in pwsh powershell powershell.exe; do
+      if command -v "$ps" >/dev/null 2>&1; then
+        if [ -n "$file" ]; then
+          # shellcheck disable=SC2086
+          "$ps" -NoProfile -ExecutionPolicy Bypass -File "$tools/$name.ps1" -RepoRoot "$top" $ps_args -File "$file"
+        else
+          # shellcheck disable=SC2086
+          "$ps" -NoProfile -ExecutionPolicy Bypass -File "$tools/$name.ps1" -RepoRoot "$top" $ps_args
+        fi
+        return $?
+      fi
+    done
+  fi
+  return 127
+}
+
+blocked=0
+judge() {
+  label=$1
+  rc=$2
+  case "$rc" in
+    0) ;;
+    1) echo "kcc commit-msg: $label found violations - commit BLOCKED" >&2; blocked=1 ;;
+    3) echo "kcc commit-msg: warning: $label deferred (required tool missing) - commit allowed, this is NOT a pass" >&2 ;;
+    127) echo "kcc commit-msg: warning: $label not available - skipped" >&2 ;;
+    *) echo "kcc commit-msg: WARNING: $label could not evaluate (exit $rc) - commit allowed; fix the tool/environment" >&2 ;;
+  esac
+}
+
+run_tool check-commit-msg "" "" "$msgfile" >&2
+judge "check-commit-msg" $?
+
+if [ "$blocked" -ne 0 ]; then
+  echo "kcc commit-msg: reword the message (or, as an explicit human decision, git commit --no-verify)" >&2
+  exit 1
+fi
+exit 0

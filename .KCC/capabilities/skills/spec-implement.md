@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-implement
 description: >
- Implement an epic spec, wave, story, or enabler from its approved plan, following the story/enabler backlog under `Backlog/`, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001]
+ Implement a spec, wave (`plan.md -> ## Waves`), or backlog item (Story/Enabler/Bug) from its approved plan, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001|Bug-001]
 argument-placeholder: <ARGS>
 delegates-to:
   - implementer
@@ -18,8 +18,8 @@ tags:
   - framework/skill
   - lifecycle/implement
 created: 2026-05-24
-updated: 2026-06-07
-version: 3.8.0
+updated: 2026-09-21
+version: 4.0.0
 status: active
 ---
 
@@ -30,7 +30,7 @@ Implement spec <ARGS>.
 ## Steps
 
 1. Parse the SPEC-ID and optional scope from arguments. Scope may be the
-   whole spec, `--wave N`, `Story-NNN`, or `Enabler-NNN` (matching the
+   whole spec, `--wave N`, `Story-NNN`, `Enabler-NNN`, or `Bug-NNN` (matching the
    filename case). Locate
    `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` by scanning the per-idea
    spec groups under `specs/`.
@@ -38,12 +38,11 @@ Implement spec <ARGS>.
    contains a populated `## Atomic test cases` table that covers every AC on
    every story/enabler. If not, tell the user to run
    `/spec-plan SPEC-{ID}` first.
-3. Verify the same-name folder note, `backlog.md`, `Backlog/Story-*.md`,
-   `Backlog/Enabler-*.md`, `parallelization.md`, and the per-idea index
-   `../IDEA-{ID}-{slug}-Specs.md` exist, and that the plan maps changes to
-   its stories and enablers using `Story-NNN` / `Enabler-NNN` keys.
+3. Verify `SPEC-{ID}-{slug}.md`, `Backlog/*.md`, and `plan.md -> ## Waves`
+   exist (legacy v5: `backlog.md` / `parallelization.md` fallback) and the
+   plan maps changes to item keys.
 4. Verify a post-plan `/token-estimate SPEC-{ID}` approval is recorded in
-   the current session trace or `budget.md` for the implement stage. Valid
+   the session trace or `ROADMAP.md` Token Plan for the implement stage. Valid
    approvals are explicit human approval or AutoPolicy `auto-approved` with
    cumulative hosted-model spend still inside the approved budget cap. If
    missing, stop and ask the human to run `/token-estimate SPEC-{ID}`.
@@ -67,8 +66,12 @@ Implement spec <ARGS>.
    `Traces/.../Actions.md` - through Butler's trace custody + the
    backchannel-append helper.
 6. Delegate to the **implementer** agent with the spec ID, scope, selected
-   backlog item files (under `Backlog/`), `parallelization.md`, and the
-   relevant dialect files. The implementer must:
+   backlog item files (under `Backlog/`), `plan.md`, and the relevant
+   dialect files. The implementer must:
+   - run `check-impl-lock -Path` before the first write (locked -> stop) and
+     `check-wave-scope -Spec SPEC-{ID} -Wave N` after each wave unit;
+   - for Bug items: regression test red, fix, green; Bug status
+     `fixing -> fixed`;
    - put all generated source under `src/IDEA-{ID}-{slug}/...` (workspace
      isolation per the spec-layout protocol);
    - create/maintain the per-idea `src/IDEA-{ID}-{slug}/README.md`;
@@ -81,7 +84,7 @@ Implement spec <ARGS>.
    - encode the Test ID in each test's name/annotation so the verifier can
      trace it back to the plan;
    - commit per backlog item with messages including `SPEC-{ID}` and the
-     matching `Story-NNN` / `Enabler-NNN` key.
+     matching item key.
 7. When complete, display backlog items completed, Test IDs implemented,
    dialects used (including which `testing-*`), commits made, files
    changed (relative to `src/IDEA-{ID}-{slug}/`), and suggest running

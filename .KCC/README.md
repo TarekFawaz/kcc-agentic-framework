@@ -34,9 +34,21 @@ Runtime output also stays outside `.KCC`: `ideation/`, `specs/`,
 `solution/`, application `src/`, application `docs/`, and generated harness
 folders such as `.codex/`, `.claude/`, `.opencode/`, `.agents/`, and `ollama/`.
 
+Files the `kcc` command line adds here in a project:
+
+| Path | Purpose |
+|--|--|
+| `.KCC/kcc.lock` | Installed version and a checksum of every framework file, so `kcc upgrade` can tell local edits apart. |
+| `.KCC/settings.json` | Workspace settings. Created once, never overwritten. |
+| `.KCC/tailoring.exclude`, `.KCC/.tailored-out/` | Written by `kcc tailor`: the framework files set aside for this solution. |
+| `.KCC/context.md` | Optional free-form solution brief used by `/tailor-workflow`. |
+
 ## First Run
 
-Use the framework initializer from the repo root:
+With the `kcc` command line: `kcc init <harness>`, then `kcc tailor` and
+`kcc doctor`.
+
+Or use the framework initializer from the repo root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .KCC\tools\framework-init.ps1 codex

@@ -1,5 +1,29 @@
 {
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-statusline.sh\""
+  },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-limit-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/check-impl-lock.sh\" --hook"
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "matcher": "implementer",

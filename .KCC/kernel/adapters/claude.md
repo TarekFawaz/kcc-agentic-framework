@@ -43,26 +43,30 @@ missing, then preserved for local edits.
 
 ## Frontmatter mapping (agents)
 
-Neutral -> Claude:
+Neutral -> Claude (`.claude/agents/{name}.md`):
 
 | Neutral field        | Claude field      | Notes                                    |
 |--|--|--|
-| `name`               | (filename)        | Filename is the canonical name           |
-| `role`               | (omitted)         | Folded into the body / description       |
-| `model-class`        | `model:`          | Resolved via the table below             |
-| `description`        | `description:`    | Copied verbatim                          |
-| `tools-required`     | `allowed-tools:`  | Mapped via the tool table below          |
-| `inputs` / `outputs` | (omitted)         | Documented in the body sections          |
+| `name`               | `name:`           | Required by Claude Code; unregistered without it |
+| `description`        | `description: >`  | Folded scalar (safe with `: ` inside)    |
+| `model-class`        | `model:`          | Alias resolved via the table below       |
+| `effort`             | `effort:`         | `low`..`max`; defaults per model-class   |
+| `tools-required`     | `tools:`          | Comma-separated bare tool names only     |
+| `role`               | (omitted)         | Published in `coordination/orchestrator.md` |
+| `inputs` / `outputs` | (omitted)         | Published in `coordination/orchestrator.md` |
 
 ### Model class mapping
 
-| Neutral class         | Claude model        |
-|--|--|
-| `strong-reasoning`    | `claude-opus-4-8`   |
-| `balanced`            | `claude-sonnet-4-6` |
-| `fast-implementation` | `claude-haiku-4-5`  |
-| `local-strong`        | n/a - use Ollama adapter |
-| `local-fast`          | n/a - use Ollama adapter |
+Aliases float to the newest model in each tier. The resolved IDs are
+recorded in `coordination/orchestrator.json` -> `model_classes`.
+
+| Neutral class         | Claude `model:` | Resolves to (2026-09) | Default `effort:` |
+|--|--|--|--|
+| `strong-reasoning`    | `opus`          | `claude-opus-5`       | `high`   |
+| `balanced`            | `sonnet`        | `claude-sonnet-5`     | `medium` |
+| `fast-implementation` | `haiku`         | `claude-haiku-4-5`    | `low`    |
+| `local-strong`        | n/a - use Ollama adapter | | |
+| `local-fast`          | n/a - use Ollama adapter | | |
 
 ### Tool name mapping
 
@@ -71,10 +75,14 @@ Neutral -> Claude:
 | `read`       | `Read`                                    |
 | `search`     | `Glob`, `Grep`                            |
 | `edit`       | `Write`, `Edit`                           |
-| `exec`       | `Bash` (narrow as `Bash(git log*)` etc.)  |
+| `exec`       | `Bash`                                    |
 | `web`        | `WebSearch`, `WebFetch`                   |
 
-The sync script preserves narrow exec scopes (`Bash(git log*)`, `Bash(git diff*)`) using a small per-agent overrides table inside the script - the neutral file just lists `exec` semantically.
+Subagent `tools:` accepts bare tool names only, so a permission specifier
+like `Bash(git log*)` there would not restrict anything. The sync script's
+per-agent exec overrides are published as `exec_scope` in
+`coordination/orchestrator.json` and in the Agent profiles table. To enforce
+them, use `permissions` rules in `.claude/settings.json`.
 
 ## Frontmatter mapping (skills)
 
@@ -82,10 +90,18 @@ Neutral -> Claude:
 
 | Neutral field           | Claude field      | Notes                                        |
 |--|--|--|
-| `name`                  | (folder name)     | Becomes `.claude/skills/{name}/SKILL.md`     |
-| `description`           | `description:`    | Copied verbatim                              |
+| `name`                  | `name:`           | Also the folder: `.claude/skills/{name}/SKILL.md` |
+| `description`           | `description: >`  | Folded scalar; include `Usage:` for routing   |
 | `argument-placeholder`  | (substitution)    | `<ARGS>` is rewritten to `$ARGUMENTS`        |
-| `delegates-to`          | (informational)   | Claude resolves delegation by agent name     |
+| `delegates-to`          | `## Spawning` footer | One line pointing at the orchestrator spawn protocol |
+
+## Spawning
+
+Skills and agents spawn delegates by name, e.g.
+`Agent(subagent_type: "planner", prompt: <handover packet>)`. Model, effort,
+and tools come from the generated frontmatter, so callers never restate them.
+Handover, return, parallelism, and escalation rules:
+`coordination/orchestrator.md` -> *Spawn protocol*.
 
 ## Parallel execution realization
 

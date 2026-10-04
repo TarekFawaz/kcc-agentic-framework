@@ -1,0 +1,97 @@
+# KCC deploy - {{spec_id}} ({{idea_id}}-{{idea_slug}}), target {{target}}, dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/deploy/azure-devops/azure-pipelines.deploy.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as azure-pipelines/SPEC-{ID}-{slug}-deploy.yml.
+# Stages: dev -> staging -> production. It starts only by hand (trigger: none,
+# pr: none); no KCC agent queues it.
+# It deploys the "kcc-package" artifact of the CI pipeline named under
+# resources.pipelines (pick the run when queueing), so the quality gate has
+# already passed for what is deployed.
+# Approval: create the environments below under Pipelines > Environments and
+# add "Approvals and checks" to staging and production. Without those checks
+# the staging and production stages are NOT gated - do not use this pipeline.
+# Every deploy / smoke command below is a PLACEHOLDER that fails until replaced.
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: ci
+      source: '{{spec_id}}-{{spec_slug}}-ci'   # name of the CI pipeline in Azure DevOps
+
+stages:
+  - stage: deploy_dev
+    displayName: Deploy dev
+    jobs:
+      - deployment: deploy_dev
+        environment: '{{spec_slug}}-dev'
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: ci
+                  artifact: kcc-package
+                # Credentials: a service connection scoped to this environment
+                # (workload identity federation). No secrets in the repo.
+                - bash: |
+                    # PLACEHOLDER - deploy command for {{target}} / dev (see the spec's deploy.md)
+                    echo "##vso[task.logissue type=error]dev deploy command not configured (replace this placeholder)"; exit 1
+                  displayName: Deploy to dev
+                - bash: |
+                    # PLACEHOLDER - post-deploy check for dev
+                    echo "##vso[task.logissue type=error]dev smoke test not configured (replace this placeholder)"; exit 1
+                  displayName: Smoke test dev
+
+  - stage: deploy_staging
+    displayName: Deploy staging
+    dependsOn: deploy_dev
+    jobs:
+      - deployment: deploy_staging
+        environment: '{{spec_slug}}-staging'      # approvals and checks gate this stage
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: ci
+                  artifact: kcc-package
+                - bash: |
+                    # PLACEHOLDER - deploy command for {{target}} / staging
+                    echo "##vso[task.logissue type=error]staging deploy command not configured (replace this placeholder)"; exit 1
+                  displayName: Deploy to staging
+                - bash: |
+                    # PLACEHOLDER - post-deploy check for staging
+                    echo "##vso[task.logissue type=error]staging smoke test not configured (replace this placeholder)"; exit 1
+                  displayName: Smoke test staging
+
+  - stage: deploy_production
+    displayName: Deploy production
+    dependsOn: deploy_staging
+    jobs:
+      - deployment: deploy_production
+        environment: '{{spec_slug}}-production'   # approvals and checks gate this stage
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: ci
+                  artifact: kcc-package
+                - bash: |
+                    # PLACEHOLDER - deploy command for {{target}} / production
+                    echo "##vso[task.logissue type=error]production deploy command not configured (replace this placeholder)"; exit 1
+                  displayName: Deploy to production
+                - bash: |
+                    # PLACEHOLDER - post-deploy check for production
+                    echo "##vso[task.logissue type=error]production smoke test not configured (replace this placeholder)"; exit 1
+                  displayName: Smoke test production
+                # Rollback: document the manual procedure in the spec's deploy.md.

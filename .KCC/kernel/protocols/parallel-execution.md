@@ -1,7 +1,7 @@
 ---
 # Functional fields
 description: Defines the parallel-execution intent and an abstract spawner contract that turns planned dependency waves into actually-concurrent agent flows, at two fan-out levels (across independent specs, and within a spec across independent stories/enablers), with wave/barrier semantics, a file-disjoint merge-safety rule, per-spawned-unit governance, and per-harness realizations.
-inputs: A `parallelization.md` with dependency waves and proposed sessions, and/or a set of independent specs ready for the same lifecycle step.
+inputs: A spec's `plan.md -> ## Waves` (legacy v5: `parallelization.md`), and/or a set of independent specs ready for the same lifecycle step.
 outputs: Concurrent agent flows executed wave by wave with a barrier between waves, each flow's outputs collected (files under `src/IDEA-{ID}-{slug}/...`, tests, trace appends) and merged.
 
 # Obsidian metadata
@@ -17,8 +17,8 @@ tags:
   - orchestration
   - kcc/v04
 created: 2026-06-05
-updated: 2026-06-05
-version: 1.0.0
+updated: 2026-09-21
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -27,12 +27,11 @@ license: "Licensed under the terms in LICENSE"
 
 # Parallel Execution
 
-The planner produces `parallelization.md` with dependency waves and proposed
-sessions, but planning is not execution. Historically the orchestrator read the
-plan and then **self-overrode to sequential** ("to avoid merge churn"), so the
-concurrency that was designed never happened. This protocol fixes that: it
-defines the parallel **intent** plus an **abstract spawner contract** that the
-orchestrator actually invokes, so planned waves become concurrent agent flows.
+The planner writes file-disjoint waves into `plan.md -> ## Waves` (the spec
+file's `Wave` column is only a first cut; legacy v5 specs fall back to
+`parallelization.md`). This protocol defines the parallel **intent** plus an
+**abstract spawner contract** the orchestrator invokes, so planned waves run as
+concurrent agent flows instead of self-overriding to sequential.
 
 > **Parallel means concurrent agent flows that finish the work faster.** It is
 > true sub-agent fan-out (concurrent execution), **not** opening terminal
@@ -65,12 +64,12 @@ When multiple specs share no cross-spec dependency, spawn one **spec flow** per
 spec concurrently. Example: a fleet system with `SPEC-1` user-management,
 `SPEC-2` live-tracking, and `SPEC-3` playback (no cross-spec dependency) -> run
 all three spec flows at once. This is the level `auto all` and multi-spec ideas
-exercise. The dependency graph across specs comes from each spec folder note's
-`## Dependencies` and the cross-idea dependency table in `specs/specs.md`.
+exercise. The graph comes from `ROADMAP.md -> ## Execution Plan` (same Order =
+parallel lanes), each spec's `Depends on` header, and `specs/specs.md`.
 
 ### L2 - within a spec
 
-Inside one spec flow, read `parallelization.md` and, for each **wave**, spawn
+Inside one spec flow, read `plan.md -> ## Waves` and, for each **wave**, spawn
 one agent per **independent story/enabler** in that wave. A barrier between
 waves means wave N+1 starts only after wave N fully completes. This is the level
 `/spec-implement SPEC-{ID}` (whole-spec scope) drives.
@@ -157,10 +156,12 @@ The rule that lets the orchestrator stop self-overriding to sequential:
 
 > **Items in the same wave MUST be file-disjoint to be parallel-eligible.**
 
-- The **planner enforces this** when building `parallelization.md`: if two items
+- The **planner enforces this** when writing `plan.md -> ## Waves`: if two items
   would touch the same file (per their `## Impacted Files`), they cannot share a
   wave - the later-ordered one is pushed to a subsequent wave. So
-  `parallel-eligible == file-disjoint` by construction.
+  `parallel-eligible == file-disjoint` by construction. The implementer runs
+  `check-impl-lock -Path` before its first write and `check-wave-scope -Spec
+  -Wave` after each unit to prove it.
 - Because items in a wave write to disjoint file sets under
   `src/IDEA-{ID}-{slug}/...`, concurrent execution produces **no merge conflict
   in the common case** - there is nothing to merge-resolve.
@@ -214,7 +215,7 @@ granularity of each spawned unit:
 How the fan-out interacts with auto mode (see [[auto-mode]]):
 
 - **Default `auto` (Scenario 1):** before spawning a fan-out, the orchestrator
-  **shows the `parallelization.md` session plan** (waves, items per wave,
+  **shows the `plan.md -> ## Waves` session plan** (waves, items per wave,
   agent/dialect per item, working directories, expected outputs) and **asks the
   human** to approve the fan-out, run sequentially, or abort.
 - **`--silent --assume` (Scenarios 2/3):** spawning is **pre-authorized** by the
@@ -264,7 +265,7 @@ visible windows in default `auto` still requires the human permission step in
 ## Related
 
 - Auto mode (HOTL gating, session permission): [[auto-mode]]
-- Spec layout (`parallelization.md` shape, file-disjoint note): [[spec-layout]]
+- Spec layout (`plan.md` waves, file-disjoint note): [[spec-layout]]
 - Token budget (one upfront gate per wave set): [[token-budget]]
 - Confidence gate (per spawned unit): [[confidence-gate]]
 - Trace layout (shared session, agent-named appends): [[trace-layout]]

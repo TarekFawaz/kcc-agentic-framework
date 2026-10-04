@@ -313,6 +313,16 @@ function Format-SimpleYamlString {
     return '"' + $safe + '"'
 }
 
+function New-SkillSpawnFooter {
+    # One reference line instead of per-skill spawn prose: model, effort,
+    # handover, and return rules live in coordination/orchestrator.md.
+    param([Parameter(Mandatory)]$Meta)
+    $delegates = @(Get-DelegateList -Meta $Meta)
+    if (-not $delegates.Count) { return "`n" }
+    $names = ($delegates | ForEach-Object { ('`{0}`' -f $_) }) -join ', '
+    return "`n`n## Spawning`n`nDelegate to $names per ``coordination/orchestrator.md`` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (``orchestrator.json`` -> ``agents[].spawn``), handover packet in, lean return out.`n"
+}
+
 function New-SkillPackageContent {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -327,6 +337,7 @@ function New-SkillPackageContent {
     $obsidianBlock = if ($obsidian) { "`n$obsidian" } else { '' }
     $placeholder = if ($Meta['argument-placeholder']) { $Meta['argument-placeholder'] } else { '<ARGS>' }
     $rewrittenBody = ($Body -replace [regex]::Escape($placeholder), $ArgumentToken)
+    $rewrittenBody = $rewrittenBody.TrimEnd() + (New-SkillSpawnFooter -Meta $Meta)
 
     $fm = @"
 ---
@@ -362,13 +373,49 @@ interface:
 # Mapping tables
 # ============================================================
 
-# model-class -> harness-specific model id
+# model-class -> harness-specific model id.
+# Claude agents use aliases (they float to the latest model of each tier);
+# $ModelClassToClaudeId records what each alias resolves to today, for the
+# orchestrator map and token-guard pricing.
 $ModelClassToClaude = @{
-    'strong-reasoning'    = 'claude-opus-4-6'
-    'balanced'            = 'claude-sonnet-4-6'
+    'strong-reasoning'    = 'opus'
+    'balanced'            = 'sonnet'
+    'fast-implementation' = 'haiku'
+    'local-strong'        = 'opus'
+    'local-fast'          = 'haiku'
+}
+
+$ModelClassToClaudeId = @{
+    'strong-reasoning'    = 'claude-opus-5'
+    'balanced'            = 'claude-sonnet-5'
     'fast-implementation' = 'claude-haiku-4-5'
-    'local-strong'        = 'claude-opus-4-6'
+    'local-strong'        = 'claude-opus-5'
     'local-fast'          = 'claude-haiku-4-5'
+}
+
+# model-class -> default reasoning effort (low | medium | high | xhigh | max).
+# An agent's own `effort:` frontmatter overrides this.
+$ModelClassDefaultEffort = [ordered]@{
+    'strong-reasoning'    = 'high'
+    'balanced'            = 'medium'
+    'fast-implementation' = 'low'
+    'local-strong'        = 'high'
+    'local-fast'          = 'low'
+}
+
+$ModelClassUse = [ordered]@{
+    'strong-reasoning'    = 'Interrogation, architecture, spec writing, planning, implementation'
+    'balanced'            = 'Verification, critique, migration, IaC generation'
+    'fast-implementation' = 'Meta-agents: butler memory, token-guard budgets'
+    'local-strong'        = 'Local strong reasoning via an Ollama-compatible harness'
+    'local-fast'          = 'Local low-cost support via an Ollama-compatible harness'
+}
+
+$ValidEfforts = @('low', 'medium', 'high', 'xhigh', 'max')
+
+# Codex reasoning effort tops out at `high`.
+$EffortToCodex = @{
+    'low' = 'low'; 'medium' = 'medium'; 'high' = 'high'; 'xhigh' = 'high'; 'max' = 'high'
 }
 
 $ModelClassToCodex = @{
@@ -380,8 +427,8 @@ $ModelClassToCodex = @{
 }
 
 $ModelClassToOpenCode = @{
-    'strong-reasoning'    = 'anthropic/claude-opus-4-6'
-    'balanced'            = 'anthropic/claude-sonnet-4-6'
+    'strong-reasoning'    = 'anthropic/claude-opus-5'
+    'balanced'            = 'anthropic/claude-sonnet-5'
     'fast-implementation' = 'anthropic/claude-haiku-4-5'
     'local-strong'        = 'ollama/qwen2.5:72b'
     'local-fast'          = 'ollama/qwen2.5:7b'
@@ -511,10 +558,12 @@ function Read-NeutralAgents {
         $parts = Split-Frontmatter -Text $raw
         $meta  = ConvertFrom-MiniYaml -Yaml $parts.Yaml
         $name  = if ($meta['name']) { $meta['name'] } else { [IO.Path]::GetFileNameWithoutExtension($file.Name) }
+        # Shared runtime rules live in one contract; every agent gets a pointer.
+        $body  = $parts.Body.TrimEnd() + "`n`n## Runtime`n`nFollow ``.KCC/kernel/contracts/agent-runtime.md``: handover in, lazy reads, ``Confidence: NN%`` + ``ActualTokenUsage``, lean return.`n"
         [void]$out.Add([pscustomobject]@{
             Name = $name
             Meta = $meta
-            Body = $parts.Body
+            Body = $body
         })
     }
     return @($out)
@@ -552,7 +601,7 @@ function Get-SkillUsage {
     )
     $line = Normalize-OneLine -Text $Description
     $m = [regex]::Match($line, 'Usage:\s*(.+)$')
-    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    if ($m.Success) { return (($m.Groups[1].Value -replace '`', '') -replace '\s*\|\s*', ' ; ').Trim() }
     return "/$Name"
 }
 
@@ -569,16 +618,95 @@ function Get-DelegateList {
     return @($text)
 }
 
+function Get-AgentEffort {
+    param([Parameter(Mandatory)]$Meta, [string]$AgentName = '')
+    $cls = Normalize-OneLine -Text $Meta['model-class']
+    $eff = Normalize-OneLine -Text $Meta['effort']
+    if ($eff) {
+        $eff = $eff.ToLowerInvariant()
+        if ($ValidEfforts -contains $eff) { return $eff }
+        Write-Warning "agent '$AgentName' has invalid effort '$eff' - using the model-class default"
+    }
+    if ($ModelClassDefaultEffort.Contains($cls)) { return $ModelClassDefaultEffort[$cls] }
+    return 'medium'
+}
+
+function Get-AgentSpawnProfile {
+    # Resolved per-harness spawn profile for one agent. Single source used by
+    # every harness writer and by orchestrator.md / orchestrator.json.
+    param([Parameter(Mandatory)]$Agent)
+    $meta = $Agent.Meta
+    $cls = Normalize-OneLine -Text $meta['model-class']
+    $effort = Get-AgentEffort -Meta $meta -AgentName $Agent.Name
+    $tools = if ($meta.Contains('tools-required')) { $meta['tools-required'] } else { @() }
+    $claudeModel = if ($ModelClassToClaude.ContainsKey($cls)) { $ModelClassToClaude[$cls] } else { 'sonnet' }
+    $claudeId = if ($ModelClassToClaudeId.ContainsKey($cls)) { $ModelClassToClaudeId[$cls] } else { 'claude-sonnet-5' }
+    # Claude subagent `tools` takes bare names only. Narrow Bash scopes are
+    # published as exec_scope (intent for the caller and for reviewers).
+    $resolved = @(Resolve-ClaudeTools -AgentName $Agent.Name -NeutralTools $tools)
+    $bare = @($resolved | ForEach-Object { $_ -replace '\(.*\)$', '' } | Select-Object -Unique)
+    if (-not $bare.Count) { $bare = @('Read') }
+    $scopes = @($resolved | Where-Object { $_ -match '^Bash\(' })
+    return [ordered]@{
+        model_class = $cls
+        effort      = $effort
+        claude      = [ordered]@{
+            model    = $claudeModel
+            model_id = $claudeId
+            effort   = $effort
+            tools    = $bare
+            exec_scope = $scopes
+        }
+        codex       = [ordered]@{
+            model  = if ($ModelClassToCodex.ContainsKey($cls)) { $ModelClassToCodex[$cls] } else { 'gpt-5-mini' }
+            effort = $EffortToCodex[$effort]
+        }
+        opencode    = [ordered]@{
+            model = if ($ModelClassToOpenCode.ContainsKey($cls)) { $ModelClassToOpenCode[$cls] } else { 'anthropic/claude-sonnet-5' }
+        }
+        ollama      = [ordered]@{
+            model = if ($ModelClassToOllama.ContainsKey($cls)) { $ModelClassToOllama[$cls] } else { 'qwen2.5:32b' }
+        }
+    }
+}
+
+function Get-FirstSentence {
+    param([string]$Text, [int]$Max = 160)
+    $line = Normalize-OneLine -Text $Text
+    $line = ($line -replace '\s+Usage:\s*/.*$', '').Trim()
+    $m = [regex]::Match($line, '^(.+?(?<!\be\.g)(?<!\bi\.e)(?<!\betc)[.!?])(\s+(?=[A-Z`\[(])|$)')
+    if ($m.Success) { $line = $m.Groups[1].Value }
+    if ($line.Length -gt $Max) { $line = $line.Substring(0, $Max - 3).TrimEnd() + '...' }
+    return $line
+}
+
 function New-AgentTable {
     param([Parameter(Mandatory)]$Agents)
     $lines = New-Object System.Collections.ArrayList
-    [void]$lines.Add('| Agent | Role | Model class | Description |')
-    [void]$lines.Add('|-------|------|-------------|-------------|')
+    [void]$lines.Add('| Agent | Role | Model class | Effort | Purpose |')
+    [void]$lines.Add('|-------|------|-------------|--------|---------|')
     foreach ($a in $Agents) {
         $role = Normalize-OneLine -Text $a.Meta['role']
         $modelClass = Normalize-OneLine -Text $a.Meta['model-class']
-        $desc = Normalize-OneLine -Text $a.Meta['description']
-        [void]$lines.Add(('| `{0}` | {1} | `{2}` | {3} |' -f $a.Name, $role, $modelClass, $desc))
+        $effort = Get-AgentEffort -Meta $a.Meta -AgentName $a.Name
+        $desc = Get-FirstSentence -Text $a.Meta['description']
+        [void]$lines.Add(('| `{0}` | {1} | `{2}` | `{3}` | {4} |' -f $a.Name, $role, $modelClass, $effort, $desc))
+    }
+    return ($lines -join "`n")
+}
+
+function New-SpawnTable {
+    param([Parameter(Mandatory)]$Agents)
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add('| Agent | Class | Claude model | Effort | Codex model/effort | Tools (Claude) | Inputs -> Outputs |')
+    [void]$lines.Add('|-------|-------|--------------|--------|--------------------|----------------|-------------------|')
+    foreach ($a in $Agents) {
+        $p = Get-AgentSpawnProfile -Agent $a
+        $tools = ($p.claude.tools -join ', ')
+        if ($p.claude.exec_scope.Count) { $tools += ' (Bash limited to: ' + (($p.claude.exec_scope | ForEach-Object { $_ -replace '^Bash\((.*)\)$', '$1' }) -join ', ') + ')' }
+        $io = (Get-FirstSentence -Text $a.Meta['inputs'] -Max 90) + ' -> ' + (Get-FirstSentence -Text $a.Meta['outputs'] -Max 90)
+        $io = $io -replace '\|', '/'
+        [void]$lines.Add(('| `{0}` | `{1}` | `{2}` ({3}) | `{4}` | `{5}` / `{6}` | {7} | {8} |' -f $a.Name, $p.model_class, $p.claude.model, $p.claude.model_id, $p.effort, $p.codex.model, $p.codex.effort, $tools, $io))
     }
     return ($lines -join "`n")
 }
@@ -625,15 +753,13 @@ function New-HarnessOutputTable {
 }
 
 function New-ModelClassTable {
-    return @'
-| Class | Intended use |
-|-------|--------------|
-| `strong-reasoning` | Deep analysis, interrogation, architecture, planning, implementation |
-| `balanced` | Verification, migration, moderate-complexity analysis |
-| `fast-implementation` | Butler and token-budget meta-agent work |
-| `local-strong` | Local-model strong reasoning through an Ollama-compatible harness |
-| `local-fast` | Local-model low-cost support work through an Ollama-compatible harness |
-'@
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add('| Class | Claude | Default effort | Codex | OpenCode | Ollama | Intended use |')
+    [void]$lines.Add('|-------|--------|----------------|-------|----------|--------|--------------|')
+    foreach ($cls in $ModelClassDefaultEffort.Keys) {
+        [void]$lines.Add(('| `{0}` | `{1}` ({2}) | `{3}` | `{4}` | `{5}` | `{6}` | {7} |' -f $cls, $ModelClassToClaude[$cls], $ModelClassToClaudeId[$cls], $ModelClassDefaultEffort[$cls], $ModelClassToCodex[$cls], $ModelClassToOpenCode[$cls], $ModelClassToOllama[$cls], $ModelClassUse[$cls]))
+    }
+    return ($lines -join "`n")
 }
 
 function Expand-OrchestratorTemplate {
@@ -648,6 +774,7 @@ function Expand-OrchestratorTemplate {
     $text = [System.IO.File]::ReadAllText($TemplatePath, [System.Text.Encoding]::UTF8)
     $text = $text.Replace('{{DATE}}', (Get-Date).ToString('yyyy-MM-dd'))
     $text = $text.Replace('{{AGENT_TABLE}}', (New-AgentTable -Agents $Agents))
+    $text = $text.Replace('{{SPAWN_TABLE}}', (New-SpawnTable -Agents $Agents))
     $text = $text.Replace('{{SKILL_TABLE}}', (New-SkillTable -Skills $Skills))
     $text = $text.Replace('{{ROUTE_TABLE}}', (New-RouteTable -Skills $Skills))
     $text = $text.Replace('{{HARNESS_OUTPUT_TABLE}}', (New-HarnessOutputTable))
@@ -658,33 +785,114 @@ function Expand-OrchestratorTemplate {
 function New-OrchestratorJson {
     param(
         [Parameter(Mandatory)]$Agents,
-        [Parameter(Mandatory)]$Skills
+        [Parameter(Mandatory)]$Skills,
+        [string]$ExistingPath
     )
+    $classes = [ordered]@{}
+    foreach ($cls in $ModelClassDefaultEffort.Keys) {
+        $classes[$cls] = [ordered]@{
+            default_effort  = $ModelClassDefaultEffort[$cls]
+            claude          = $ModelClassToClaude[$cls]
+            claude_model_id = $ModelClassToClaudeId[$cls]
+            codex           = $ModelClassToCodex[$cls]
+            opencode        = $ModelClassToOpenCode[$cls]
+            ollama          = $ModelClassToOllama[$cls]
+            use             = $ModelClassUse[$cls]
+        }
+    }
     $agentItems = New-Object System.Collections.ArrayList
     foreach ($a in $Agents) {
         [void]$agentItems.Add([ordered]@{
-            name = $a.Name
-            role = Normalize-OneLine -Text $a.Meta['role']
-            model_class = Normalize-OneLine -Text $a.Meta['model-class']
-            description = Normalize-OneLine -Text $a.Meta['description']
+            name       = $a.Name
+            role       = Normalize-OneLine -Text $a.Meta['role']
+            summary    = Get-FirstSentence -Text $a.Meta['description'] -Max 200
+            inputs     = Get-FirstSentence -Text $a.Meta['inputs'] -Max 200
+            outputs    = Get-FirstSentence -Text $a.Meta['outputs'] -Max 200
+            spawn      = Get-AgentSpawnProfile -Agent $a
+            definition = ('.KCC/capabilities/agents/{0}.md' -f $a.Name)
         })
     }
     $skillItems = New-Object System.Collections.ArrayList
     foreach ($s in $Skills) {
         [void]$skillItems.Add([ordered]@{
-            name = $s.Name
-            usage = Get-SkillUsage -Name $s.Name -Description $s.Meta['description']
+            name         = $s.Name
+            usage        = Get-SkillUsage -Name $s.Name -Description $s.Meta['description']
             delegates_to = @(Get-DelegateList -Meta $s.Meta)
-            description = Normalize-OneLine -Text $s.Meta['description']
+            summary      = Get-FirstSentence -Text $s.Meta['description'] -Max 200
         })
     }
     $payload = [ordered]@{
-        schema_version = '1.0'
-        generated = (Get-Date).ToUniversalTime().ToString('o')
-        agents = $agentItems
-        skills = $skillItems
+        schema_version = '2.0'
+        generated      = (Get-Date).ToUniversalTime().ToString('o')
+        spawn_protocol = [ordered]@{
+            doc           = 'coordination/orchestrator.md#spawn-protocol'
+            rules         = @(
+                'resolve model+effort from agents[].spawn; never inherit the caller model',
+                'fresh subagent per unit; never fork or resume the caller transcript',
+                'handover packet <= 300 words: goal, ids, read (paths only), write, constraints, confidence_threshold, budget',
+                'lazy reads: grep the heading, then read that section; never load .KCC/ wholesale',
+                'return <= 150-word summary + artifact paths + Confidence + ActualTokenUsage; no file echoes',
+                'fan out independent wave units in one message; barrier before the next wave',
+                'retry escalation: effort +1 step; a model-class change needs critical-human-gate or a token-guard re-estimate',
+                'gates are scripts: done only when the state exit-check tool passes; exit 3 (deferred) is never a pass',
+                'continuity: at the soft usage threshold spawn nothing new; the hard threshold writes a restore point and suspends',
+                'meta-agents (butler, token-guard) stay on their fast/low profile'
+            )
+            effort_levels = $ValidEfforts
+        }
+        model_classes  = $classes
+        agents         = $agentItems
+        skills         = $skillItems
     }
-    return ($payload | ConvertTo-Json -Depth 8)
+    # Preserve runtime keys owned by butler (active-session pointer etc.).
+    if ($ExistingPath -and (Test-Path -LiteralPath $ExistingPath)) {
+        try {
+            $old = Get-Content -LiteralPath $ExistingPath -Raw | ConvertFrom-Json
+            foreach ($prop in $old.PSObject.Properties) {
+                if ($prop.Name -like 'active_session*' -or $prop.Name -eq 'runtime') {
+                    $payload[$prop.Name] = $prop.Value
+                }
+            }
+        } catch {
+            Write-Warning "could not read existing orchestrator.json runtime keys: $_"
+        }
+    }
+    return (ConvertTo-CompactJson -Payload $payload)
+}
+
+function ConvertTo-CompactJson {
+    # Token-lean JSON: top-level keys on their own lines, each array item or
+    # map entry compressed onto one line. PowerShell 5.1's pretty printer
+    # pads deeply and roughly triples the file size.
+    param([Parameter(Mandatory)]$Payload)
+    $out = New-Object System.Collections.ArrayList
+    [void]$out.Add('{')
+    $keys = @($Payload.Keys)
+    for ($i = 0; $i -lt $keys.Count; $i++) {
+        $k = $keys[$i]
+        $v = $Payload[$k]
+        $comma = if ($i -lt $keys.Count - 1) { ',' } else { '' }
+        if ($v -is [System.Collections.IList]) {
+            [void]$out.Add(('  "{0}": [' -f $k))
+            for ($j = 0; $j -lt $v.Count; $j++) {
+                $c = if ($j -lt $v.Count - 1) { ',' } else { '' }
+                [void]$out.Add('    ' + (ConvertTo-Json -InputObject $v[$j] -Depth 10 -Compress) + $c)
+            }
+            [void]$out.Add('  ]' + $comma)
+        } elseif ($v -is [System.Collections.IDictionary] -and $k -eq 'model_classes') {
+            [void]$out.Add(('  "{0}": {{' -f $k))
+            $sub = @($v.Keys)
+            for ($j = 0; $j -lt $sub.Count; $j++) {
+                $c = if ($j -lt $sub.Count - 1) { ',' } else { '' }
+                [void]$out.Add(('    "{0}": ' -f $sub[$j]) + (ConvertTo-Json -InputObject $v[$sub[$j]] -Depth 10 -Compress) + $c)
+            }
+            [void]$out.Add('  }' + $comma)
+        } else {
+            [void]$out.Add(('  "{0}": ' -f $k) + (ConvertTo-Json -InputObject $v -Depth 10 -Compress) + $comma)
+        }
+    }
+    [void]$out.Add('}')
+    return ($out -join "`n")
 }
 
 function Ensure-FileIfMissing {
@@ -880,38 +1088,16 @@ status: active
     $coordinationMoc = $coordinationMoc.Replace('{{DATE}}', (Get-Date).ToString('yyyy-MM-dd'))
     Ensure-FileIfMissing -Path (Join-Path $Root 'coordination/coordination.md') -Content $coordinationMoc -Report $report
 
-    $today = (Get-Date).ToString('yyyy-MM-dd')
-    $orchestratorMd = @(
-        '---',
-        'title: Orchestrator Map',
-        'tags:',
-        '  - coordination',
-        '  - generated',
-        ("created: {0}" -f $today),
-        ("updated: {0}" -f $today),
-        'version: 1.0.0',
-        'status: active',
-        '---',
-        '',
-        '# Orchestrator Map',
-        '',
-        'Generated from `.KCC/capabilities/agents/` and `.KCC/capabilities/skills/`. Edit `.KCC/kernel/` or `.KCC/capabilities/`, then rerun `.KCC/tools/sync-adapters.ps1` or `.KCC/tools/framework-init.ps1`.',
-        '',
-        '## Skill Routes',
-        '',
-        (New-RouteTable -Skills $Skills),
-        '',
-        '## Agents',
-        '',
-        (New-AgentTable -Agents $Agents),
-        ''
-    ) -join "`n"
+    # orchestrator.md is expanded from the kernel template so the spawn
+    # protocol, model classes, agent profiles, and routes live in one place.
+    $orchestratorTemplate = Join-Path (Get-KernelRoot -Root $Root) 'templates/orchestrator.md'
+    $orchestratorMd = Expand-OrchestratorTemplate -TemplatePath $orchestratorTemplate -Agents $Agents -Skills $Skills
     $orchestratorMdPath = Join-Path $Root 'coordination/orchestrator.md'
     Write-Utf8File -Path $orchestratorMdPath -Content $orchestratorMd
     [void]$report.Updated.Add($orchestratorMdPath)
 
     $orchestratorJsonPath = Join-Path $Root 'coordination/orchestrator.json'
-    Write-Utf8File -Path $orchestratorJsonPath -Content (New-OrchestratorJson -Agents $Agents -Skills $Skills)
+    Write-Utf8File -Path $orchestratorJsonPath -Content (New-OrchestratorJson -Agents $Agents -Skills $Skills -ExistingPath $orchestratorJsonPath)
     [void]$report.Updated.Add($orchestratorJsonPath)
 
     $tracesMoc = @"
@@ -1033,30 +1219,30 @@ function Invoke-ClaudeSync {
     foreach ($a in $Agents) {
         $name     = $a.Name
         $meta     = $a.Meta
-        $modelCls = $meta['model-class']
         $desc     = $meta['description']
-        $tools    = if ($meta.Contains('tools-required')) { $meta['tools-required'] } else { @() }
-
-        if (-not $ModelClassToClaude.ContainsKey($modelCls)) {
-            Write-Warning "[claude] agent '$name' has unknown model-class '$modelCls' - defaulting to claude-sonnet-4-6"
-            $model = 'claude-sonnet-4-6'
-        } else {
-            $model = $ModelClassToClaude[$modelCls]
+        $profile  = Get-AgentSpawnProfile -Agent $a
+        $model    = $profile.claude.model
+        $effort   = $profile.claude.effort
+        if (-not $ModelClassToClaude.ContainsKey($profile.model_class)) {
+            Write-Warning "[claude] agent '$name' has unknown model-class '$($profile.model_class)' - defaulting to sonnet"
         }
-        $claudeTools = Resolve-ClaudeTools -AgentName $name -NeutralTools $tools
+        $claudeTools = @($profile.claude.tools)
 
-        $descLine   = '  ' + ($desc -replace "`r?`n", ' ')
-        $toolsBlock = ($claudeTools | ForEach-Object { "  - $_" }) -join "`n"
+        # Session-wide agent listing: keep it to the first sentence; the
+        # full description stays in .KCC/capabilities and orchestrator.md.
+        $descLine   = Format-FoldedYamlValue -Text (Get-FirstSentence -Text $desc -Max 300)
+        $toolsLine  = ($claudeTools -join ', ')
         $obsidian   = Format-ObsidianBlock -Meta $meta
         $obsidianBlock = if ($obsidian) { "`n$obsidian" } else { '' }
 
         $fm = @"
 ---
-model: $model
+name: $name
 description: >
 $descLine
-allowed-tools:
-$toolsBlock
+model: $model
+effort: $effort
+tools: $toolsLine
 $obsidianBlock
 ---
 "@
@@ -1079,9 +1265,14 @@ $obsidianBlock
         $obsidian    = Format-ObsidianBlock -Meta $meta
         $obsidianBlock = if ($obsidian) { "`n$obsidian" } else { '' }
 
+        $descLine    = Format-FoldedYamlValue -Text $desc
+        $body        = $body.TrimEnd() + (New-SkillSpawnFooter -Meta $meta)
+
         $fm = @"
 ---
-description: $desc
+name: $name
+description: >
+$descLine
 $obsidianBlock
 ---
 "@
@@ -1151,7 +1342,9 @@ function Invoke-CodexSync {
 name: $name
 role: $role
 model: $model
+model_reasoning_effort: $($EffortToCodex[(Get-AgentEffort -Meta $meta -AgentName $name)])
 model-class: $modelCls
+effort: $(Get-AgentEffort -Meta $meta -AgentName $name)
 description: >
 $descLine
 tools:
@@ -1264,7 +1457,7 @@ function Invoke-OpenCodeSync {
         $isMeta   = ($meta['meta-agent'] -eq 'true')
         $mode     = if ($isMeta) { 'subagent' } else { 'subagent' }   # all are subagents under our orchestrator
 
-        $model = if ($ModelClassToOpenCode.ContainsKey($modelCls)) { $ModelClassToOpenCode[$modelCls] } else { 'anthropic/claude-sonnet-4-6' }
+        $model = if ($ModelClassToOpenCode.ContainsKey($modelCls)) { $ModelClassToOpenCode[$modelCls] } else { 'anthropic/claude-sonnet-5' }
         $permissionMap = Resolve-OpenCodePermissions -NeutralTools $tools
 
         $permissionBlock = ''
@@ -1341,7 +1534,7 @@ $obsidianBlock
 {
   "`$schema": "https://opencode.ai/config.json",
   "theme": "system",
-  "model": "anthropic/claude-sonnet-4-6",
+  "model": "anthropic/claude-sonnet-5",
   "autoshare": false,
   "autoupdate": false,
   "permission": {
@@ -1397,6 +1590,7 @@ function Invoke-GenericSync {
 name: $name
 role: $role
 model-class: $modelCls
+effort: $(Get-AgentEffort -Meta $meta -AgentName $name)
 description: >
 $descLine
 tools-required:
@@ -1416,6 +1610,7 @@ $obsidianBlock
             name = $name
             role = $role
             model_class = $modelCls
+            effort = Get-AgentEffort -Meta $meta -AgentName $name
             description = Normalize-OneLine -Text $desc
             tools_required = @($tools | ForEach-Object { (($_ -replace '\s+#.*$', '').Trim()) })
             path = "agents/$name.md"

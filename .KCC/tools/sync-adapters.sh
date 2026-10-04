@@ -156,26 +156,82 @@ model_for() {
   local surface="$1"
   local class="$2"
   case "$surface:$class" in
-    claude:strong-reasoning) echo "claude-opus-4-6" ;;
-    claude:balanced) echo "claude-sonnet-4-6" ;;
-    claude:fast-implementation) echo "claude-haiku-4-5" ;;
+    claude:strong-reasoning|claude:local-strong) echo "opus" ;;
+    claude:balanced) echo "sonnet" ;;
+    claude:fast-implementation|claude:local-fast) echo "haiku" ;;
+    claude-id:strong-reasoning|claude-id:local-strong) echo "claude-opus-5" ;;
+    claude-id:balanced) echo "claude-sonnet-5" ;;
+    claude-id:fast-implementation|claude-id:local-fast) echo "claude-haiku-4-5" ;;
     codex:strong-reasoning) echo "gpt-5" ;;
     codex:balanced) echo "gpt-5-mini" ;;
     codex:fast-implementation) echo "gpt-5-nano" ;;
-    opencode:strong-reasoning) echo "anthropic/claude-opus-4-6" ;;
-    opencode:balanced) echo "anthropic/claude-sonnet-4-6" ;;
+    opencode:strong-reasoning) echo "anthropic/claude-opus-5" ;;
+    opencode:balanced) echo "anthropic/claude-sonnet-5" ;;
     opencode:fast-implementation) echo "anthropic/claude-haiku-4-5" ;;
     ollama:strong-reasoning) echo "qwen2.5:72b" ;;
     ollama:balanced) echo "qwen2.5:32b" ;;
     ollama:fast-implementation) echo "qwen2.5:14b" ;;
     *:local-strong) echo "qwen2.5:72b" ;;
     *:local-fast) echo "qwen2.5:7b" ;;
-    claude:*) echo "claude-sonnet-4-6" ;;
+    claude:*) echo "sonnet" ;;
+    claude-id:*) echo "claude-sonnet-5" ;;
     codex:*) echo "gpt-5-mini" ;;
-    opencode:*) echo "anthropic/claude-sonnet-4-6" ;;
+    opencode:*) echo "anthropic/claude-sonnet-5" ;;
     ollama:*) echo "qwen2.5:32b" ;;
     *) echo "balanced" ;;
   esac
+}
+
+# model-class -> default reasoning effort; an agent's `effort:` overrides it.
+class_default_effort() {
+  case "$1" in
+    strong-reasoning|local-strong) echo "high" ;;
+    balanced) echo "medium" ;;
+    fast-implementation|local-fast) echo "low" ;;
+    *) echo "medium" ;;
+  esac
+}
+
+effort_for() {
+  local file="$1" effort
+  effort="$(yaml_scalar "$file" effort)"
+  case "$effort" in
+    low|medium|high|xhigh|max) echo "$effort" ;;
+    *) class_default_effort "$(yaml_scalar "$file" model-class)" ;;
+  esac
+}
+
+codex_effort() {
+  case "$1" in
+    xhigh|max) echo "high" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Claude subagent `tools` takes bare names only (comma-separated).
+claude_tools_line() {
+  claude_tools "$1" | sed 's/^  - //' | awk '!seen[$0]++' | paste -sd ',' - | sed 's/,/, /g'
+}
+
+first_sentence() {
+  printf "%s" "$1" | normalize_one_line | sed -E 's/[[:space:]]+Usage:[[:space:]]*\/.*$//' \
+    | sed -E 's/^(([^.!?]|e\.g\.|i\.e\.)*[.!?])[[:space:]]+[A-Z`(\[].*$/\1/' | cut -c1-300
+}
+
+# Shared runtime rules live in one contract; every agent gets a pointer.
+agent_runtime_footer() {
+  printf '
+## Runtime
+
+Follow `.KCC/kernel/contracts/agent-runtime.md`: handover in, lazy reads, `Confidence: NN%%` + `ActualTokenUsage`, lean return.
+'
+}
+
+skill_spawn_footer() {
+  local file="$1" names
+  names="$(yaml_list "$file" delegates-to | sed 's/^/`/; s/$/`/' | paste -sd ',' - | sed 's/,/, /g')"
+  [[ -n "$names" ]] || return 0
+  printf '\n## Spawning\n\nDelegate to %s per `coordination/orchestrator.md` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (`orchestrator.json` -> `agents[].spawn`), handover packet in, lean return out.\n' "$names"
 }
 
 claude_tools() {
@@ -257,20 +313,21 @@ skill_package() {
     echo "---"
     echo
     body_after_frontmatter "$skill_file" | replace_args "$token"
+    skill_spawn_footer "$skill_file"
   }
 }
 
 agent_table() {
-  echo "| Agent | Role | Model class | Description |"
-  echo "|-------|------|-------------|-------------|"
+  echo "| Agent | Role | Model class | Effort | Purpose |"
+  echo "|-------|------|-------------|--------|---------|"
   while IFS= read -r file; do
     local name role model desc
     name="$(yaml_scalar "$file" name)"
     [[ -n "$name" ]] || name="$(basename "$file" .md)"
     role="$(yaml_scalar "$file" role)"
     model="$(yaml_scalar "$file" model-class)"
-    desc="$(yaml_scalar "$file" description)"
-    printf '| `%s` | %s | `%s` | %s |\n' "$name" "$role" "$model" "$desc"
+    desc="$(first_sentence "$(yaml_scalar "$file" description)")"
+    printf '| `%s` | %s | `%s` | `%s` | %s |\n' "$name" "$role" "$model" "$(effort_for "$file")" "$desc"
   done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
 }
 
@@ -319,15 +376,28 @@ TABLE
 }
 
 model_class_table() {
-  cat <<'TABLE'
-| Class | Intended use |
-|-------|--------------|
-| `strong-reasoning` | Deep analysis, interrogation, architecture, planning, implementation |
-| `balanced` | Verification, migration, moderate-complexity analysis |
-| `fast-implementation` | Butler and token-budget meta-agent work |
-| `local-strong` | Local-model strong reasoning through an Ollama-compatible harness |
-| `local-fast` | Local-model low-cost support work through an Ollama-compatible harness |
-TABLE
+  echo "| Class | Claude | Default effort | Codex | OpenCode | Ollama |"
+  echo "|-------|--------|----------------|-------|----------|--------|"
+  local cls
+  for cls in strong-reasoning balanced fast-implementation local-strong local-fast; do
+    printf '| `%s` | `%s` (%s) | `%s` | `%s` | `%s` | `%s` |\n' "$cls" "$(model_for claude "$cls")" "$(model_for claude-id "$cls")" \
+      "$(class_default_effort "$cls")" "$(model_for codex "$cls")" "$(model_for opencode "$cls")" "$(model_for ollama "$cls")"
+  done
+}
+
+spawn_table() {
+  echo "| Agent | Class | Claude model | Effort | Codex model/effort | Tools (Claude) | Inputs -> Outputs |"
+  echo "|-------|-------|--------------|--------|--------------------|----------------|-------------------|"
+  while IFS= read -r file; do
+    local name cls eff io
+    name="$(yaml_scalar "$file" name)"; [[ -n "$name" ]] || name="$(basename "$file" .md)"
+    cls="$(yaml_scalar "$file" model-class)"
+    eff="$(effort_for "$file")"
+    io="$(first_sentence "$(yaml_scalar "$file" inputs)" | cut -c1-90) -> $(first_sentence "$(yaml_scalar "$file" outputs)" | cut -c1-90)"
+    io="${io//|//}"
+    printf '| `%s` | `%s` | `%s` (%s) | `%s` | `%s` / `%s` | %s | %s |\n' "$name" "$cls" "$(model_for claude "$cls")" "$(model_for claude-id "$cls")" \
+      "$eff" "$(model_for codex "$cls")" "$(codex_effort "$eff")" "$(claude_tools_line "$file")" "$io"
+  done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
 }
 
 expand_template() {
@@ -353,6 +423,7 @@ write_template() {
   text="${text//\{\{AGENT_TABLE\}\}/$(agent_table)}"
   text="${text//\{\{SKILL_TABLE\}\}/$(skill_table)}"
   text="${text//\{\{ROUTE_TABLE\}\}/$(route_table)}"
+  text="${text//\{\{SPAWN_TABLE\}\}/$(spawn_table)}"
   printf '%s\n' "$text" > "$out"
 }
 
@@ -479,57 +550,63 @@ status: active
 - .KCC/tools/backchannel-append.sh - deterministic event append helper that refreshes dashboard/index.html.
 - .KCC/tools/show-backchannel.sh - read-only human-readable backchannel viewer."
 
-  {
-    echo "---"
-    echo "title: Orchestrator Map"
-    echo "tags: [coordination, generated]"
-    echo "created: $today"
-    echo "updated: $today"
-    echo "version: 1.0.0"
-    echo "status: active"
-    echo "---"
-    echo
-    echo "# Orchestrator Map"
-    echo
-    echo "## Skill Routes"
-    route_table
-    echo
-    echo "## Agents"
-    agent_table
-  } > "$REPO_ROOT/coordination/orchestrator.md"
+  write_template "$KERNEL_ROOT/templates/orchestrator.md" "$REPO_ROOT/coordination/orchestrator.md"
 
+  local json="$REPO_ROOT/coordination/orchestrator.json" runtime=""
+  # Preserve butler-owned runtime keys (active-session pointer).
+  [[ -f "$json" ]] && runtime="$(grep -oE '"active_session[a-z_]*": *("[^"]*"|null)' "$json" | paste -sd ',' -)"
   {
     echo '{'
-    echo '  "schema_version": "1.0",'
+    echo '  "schema_version": "2.0",'
     printf '  "generated": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo '  "spawn_protocol": {"doc":"coordination/orchestrator.md#spawn-protocol","effort_levels":["low","medium","high","xhigh","max"]},'
+    echo '  "model_classes": {'
+    local cls sep=""
+    for cls in strong-reasoning balanced fast-implementation local-strong local-fast; do
+      printf '%s    "%s": {"default_effort":"%s","claude":"%s","claude_model_id":"%s","codex":"%s","opencode":"%s","ollama":"%s"}' "$sep" "$cls" \
+        "$(class_default_effort "$cls")" "$(model_for claude "$cls")" "$(model_for claude-id "$cls")" "$(model_for codex "$cls")" "$(model_for opencode "$cls")" "$(model_for ollama "$cls")"
+      sep=$',\n'
+    done
+    echo
+    echo '  },'
     echo '  "agents": ['
     local first=1
     while IFS= read -r file; do
-      local name role model desc
+      local name role cls eff desc tools
       name="$(yaml_scalar "$file" name)"; [[ -n "$name" ]] || name="$(basename "$file" .md)"
       role="$(yaml_scalar "$file" role | json_escape)"
-      model="$(yaml_scalar "$file" model-class | json_escape)"
-      desc="$(yaml_scalar "$file" description | json_escape)"
+      cls="$(yaml_scalar "$file" model-class)"
+      eff="$(effort_for "$file")"
+      desc="$(first_sentence "$(yaml_scalar "$file" description)" | json_escape)"
+      tools="$(claude_tools_line "$file" | sed 's/, /","/g')"
       (( first == 0 )) && echo ','
       first=0
-      printf '    {"name":"%s","role":"%s","model_class":"%s","description":"%s"}' "$name" "$role" "$model" "$desc"
+      printf '    {"name":"%s","role":"%s","summary":"%s","spawn":{"model_class":"%s","effort":"%s","claude":{"model":"%s","model_id":"%s","effort":"%s","tools":["%s"]},"codex":{"model":"%s","effort":"%s"},"opencode":{"model":"%s"},"ollama":{"model":"%s"}},"definition":".KCC/capabilities/agents/%s.md"}' \
+        "$name" "$role" "$desc" "$cls" "$eff" "$(model_for claude "$cls")" "$(model_for claude-id "$cls")" "$eff" "$tools" \
+        "$(model_for codex "$cls")" "$(codex_effort "$eff")" "$(model_for opencode "$cls")" "$(model_for ollama "$cls")" "$name"
     done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
     echo
     echo '  ],'
     echo '  "skills": ['
     first=1
     while IFS= read -r file; do
-      local name desc
+      local name desc delegates
       name="$(yaml_scalar "$file" name)"; [[ -n "$name" ]] || name="$(basename "$file" .md)"
-      desc="$(yaml_scalar "$file" description | json_escape)"
+      desc="$(first_sentence "$(yaml_scalar "$file" description)" | json_escape)"
+      delegates="$(yaml_list "$file" delegates-to | sed 's/.*/"&"/' | paste -sd ',' -)"
       (( first == 0 )) && echo ','
       first=0
-      printf '    {"name":"%s","description":"%s"}' "$name" "$desc"
+      printf '    {"name":"%s","delegates_to":[%s],"summary":"%s"}' "$name" "$delegates" "$desc"
     done < <(find "$SKILLS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
     echo
-    echo '  ]'
+    if [[ -n "$runtime" ]]; then
+      echo '  ],'
+      printf '  %s\n' "$runtime"
+    else
+      echo '  ]'
+    fi
     echo '}'
-  } > "$REPO_ROOT/coordination/orchestrator.json"
+  } > "$json"
 }
 
 sync_claude() {
@@ -544,15 +621,17 @@ sync_claude() {
     desc="$(yaml_scalar "$file" description)"
     {
       echo "---"
-      echo "model: $model"
+      echo "name: $name"
       echo "description: >"
-      echo "  $desc"
-      echo "allowed-tools:"
-      claude_tools "$file"
+      echo "  $(first_sentence "$desc" | cut -c1-300)"
+      echo "model: $model"
+      echo "effort: $(effort_for "$file")"
+      echo "tools: $(claude_tools_line "$file")"
       metadata_block "$file"
       echo "---"
       echo
       body_after_frontmatter "$file"
+      agent_runtime_footer
     } > "$agents_out/$name.md"
     echo "[claude   ] [agent ] $agents_out/$name.md"
   done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
@@ -563,11 +642,14 @@ sync_claude() {
     mkdir -p "$skills_out/$name"
     {
       echo "---"
-      echo "description: $desc"
+      echo "name: $name"
+      echo "description: >"
+      echo "  $desc"
       metadata_block "$file"
       echo "---"
       echo
       body_after_frontmatter "$file" | replace_args '$ARGUMENTS'
+      skill_spawn_footer "$file"
     } > "$skills_out/$name/SKILL.md"
     echo "[claude   ] [skill ] $skills_out/$name/SKILL.md"
   done < <(find "$SKILLS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
@@ -613,6 +695,7 @@ sync_codex() {
       echo "---"
       echo
       body_after_frontmatter "$file"
+      agent_runtime_footer
     } > "$agents_out/$name.md"
     echo "[codex    ] [agent ] $agents_out/$name.md"
   done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
@@ -674,6 +757,7 @@ sync_opencode() {
       echo "---"
       echo
       body_after_frontmatter "$file"
+      agent_runtime_footer
     } > "$agents_out/$name.md"
     echo "[opencode ] [agent ] $agents_out/$name.md"
   done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
@@ -699,7 +783,7 @@ sync_opencode() {
 {
   "$schema": "https://opencode.ai/config.json",
   "theme": "system",
-  "model": "anthropic/claude-sonnet-4-6",
+  "model": "anthropic/claude-sonnet-5",
   "autoshare": false,
   "autoupdate": false
 }
@@ -732,6 +816,7 @@ sync_generic() {
       echo "---"
       echo
       body_after_frontmatter "$file"
+      agent_runtime_footer
     } > "$agents_out/$name.md"
     echo "[generic  ] [agent ] $agents_out/$name.md"
   done < <(find "$AGENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)

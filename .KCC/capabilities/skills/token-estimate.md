@@ -18,8 +18,8 @@ tags:
   - framework/skill
   - lifecycle/meta
 created: 2026-05-24
-updated: 2026-06-06
-version: 1.7.0
+updated: 2026-09-21
+version: 1.8.0
 status: active
 ---
 
@@ -42,14 +42,12 @@ unless an approved AutoPolicy budget cap covers the current estimate.
      AutoPolicy context from the `auto` skill.
    - Otherwise, reject with usage hint.
 2. Verify the required files exist before delegating:
-   - estimate-spec: `specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md`,
-     `backlog.md`, `backlog/STORY-*.md`, `backlog/ENABLER-*.md`, and
-     `parallelization.md` must exist. `plan.md` is optional before planning
-     and required before implementation.
+   - estimate-spec: `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md`
+     and `Backlog/*.md` must exist (legacy v5: `backlog.md`). `plan.md` is
+     optional before planning and required before implementation.
    - estimate-auto-upfront: `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md`
      must exist. Prefer `QuickRoadmap.md`, `SpecWriterStarter.md`, and
-     `TechnicalDecisionBrief.md` when present. Existing spec stubs may be read
-     if already created.
+     `TechnicalDecisionBrief.md` when present, and `ROADMAP.md` if created.
    - estimate-prompt: no file check.
 3. Confirm `.KCC/kernel/protocols/token-budget.md`,
    `.KCC/kernel/templates/ROI.md`, and
@@ -68,7 +66,7 @@ unless an approved AutoPolicy budget cap covers the current estimate.
    gate.
 6. If AutoPolicy context is present and already approved, inspect the
    token-guard outcome:
-   - `auto-approved`: record the non-interrupting approval in `budget.md`,
+   - `auto-approved`: record the non-interrupting approval in trace `TokenUsage.md`,
      `Traces/Session-*/HumanDecisions.md` when available, and the backchannel
      as `estimate-auto-approved` (emitted via
      `.KCC/tools/backchannel-append.ps1 -Kind estimate-auto-approved
@@ -80,18 +78,18 @@ unless an approved AutoPolicy budget cap covers the current estimate.
    - **approve** - record approval in the session trace (`Traces/Session-*/HumanDecisions.md`) and return control so the next lifecycle skill (e.g. `/spec-plan`, `/spec-implement`) can run.
    - **revise** - invite the human to override inputs (criteria count, risk level, target model-class) and re-delegate to token-guard with the overrides.
    - **abort** - stop the lifecycle. Record the abort and reason in `Traces/Session-*/HumanDecisions.md`.
-8. If estimate-spec or estimate-auto-upfront mode and an idea is traceable,
-   confirm the upsert into `ideation/IDEA-{ID}-{slug}/ROI.md` succeeded and
-   print the path.
+8. estimate-spec / estimate-auto-upfront: confirm the upserts into
+   `specs/IDEA-{ID}-{slug}-Specs/ROADMAP.md` (`Est. tokens`, `## Token Plan`)
+   and `ideation/IDEA-{ID}-{slug}/ROI.md` succeeded; print the paths.
 
 ## Output
 
 A Markdown budget table (per `.KCC/capabilities/agents/token-guard.md` Output
 Format). If no approved AutoPolicy covers the estimate, follow it with an
 explicit `approve / revise / abort` prompt. No code is written, no specs are
-mutated. The only file write side-effects are the `ROI.md` upsert (Mode A
-only), budget decision appends, trace decision appends, and append-only
-backchannel events.
+mutated. The only file write side-effects are the `ROADMAP.md` Token Plan and
+`ROI.md` upserts, trace appends (`TokenUsage.md`, `HumanDecisions.md`), and
+append-only backchannel events.
 
 ## Gating
 
@@ -99,7 +97,7 @@ backchannel events.
 `/token-estimate SPEC-{ID}` with either:
 
 - an explicit `approve` outcome recorded in the current session's
-  `HumanDecisions.md` or the spec `budget.md`; or
+  `HumanDecisions.md` or `ROADMAP.md` Token Plan; or
 - an `auto-approved` outcome recorded under an approved AutoPolicy whose
   cumulative hosted-model spend remains within the budget cap.
 

@@ -1,0 +1,83 @@
+// KCC deploy - {{spec_id}} ({{idea_id}}-{{idea_slug}}), target {{target}}, dialect {{dialect}}
+// Template: .KCC/kernel/templates/pipelines/deploy/jenkins/Jenkinsfile.deploy.tmpl
+// KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+//
+// Instantiate as jenkins/SPEC-{ID}-{slug}-deploy.Jenkinsfile in a separate job.
+// Stages: dev -> staging -> production. The job has no triggers: a person
+// starts it with "Build with Parameters". No KCC agent starts it.
+// It deploys the dist/ artifact archived by a successful run of the CI job
+// (Copy Artifact plugin), so the quality gate has passed for what is deployed.
+// Approval: staging and production wait on an input step. Replace the
+// submitter values with the Jenkins users / groups allowed to approve; an
+// empty or wrong submitter list lets anyone with Build permission approve.
+// Every deploy / smoke command below is a PLACEHOLDER that fails until replaced.
+
+pipeline {
+  agent { label 'linux' }
+  options {
+    timeout(time: 120, unit: 'MINUTES')
+    disableConcurrentBuilds()
+  }
+  parameters {
+    string(name: 'CI_JOB', defaultValue: '{{spec_id}}-{{spec_slug}}-ci', description: 'Name of the CI job that archived the artifact')
+    string(name: 'CI_BUILD', defaultValue: '', description: 'Build number of the successful CI run to deploy')
+  }
+  stages {
+    stage('Fetch artifact') {
+      steps {
+        script {
+          if (!params.CI_BUILD?.trim()) { error('CI_BUILD is required: the number of a successful CI build') }
+        }
+        copyArtifacts(projectName: params.CI_JOB, selector: specific(params.CI_BUILD), filter: '**/dist/**', target: 'package')
+      }
+    }
+    stage('Deploy dev') {
+      steps {
+        // Credentials: withCredentials { } bound to a dev-scoped identity for {{target}}.
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - deploy command for {{target}} / dev (see the spec's deploy.md)
+          echo "ERROR: dev deploy command not configured (replace this placeholder)"; exit 1
+        '''
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - post-deploy check for dev
+          echo "ERROR: dev smoke test not configured (replace this placeholder)"; exit 1
+        '''
+      }
+    }
+    stage('Deploy staging') {
+      input {
+        message 'Deploy to staging?'
+        ok 'Deploy'
+        submitter 'REPLACE-staging-approvers'
+      }
+      steps {
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - deploy command for {{target}} / staging
+          echo "ERROR: staging deploy command not configured (replace this placeholder)"; exit 1
+        '''
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - post-deploy check for staging
+          echo "ERROR: staging smoke test not configured (replace this placeholder)"; exit 1
+        '''
+      }
+    }
+    stage('Deploy production') {
+      input {
+        message 'Deploy to production?'
+        ok 'Deploy'
+        submitter 'REPLACE-production-approvers'
+      }
+      steps {
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - deploy command for {{target}} / production
+          echo "ERROR: production deploy command not configured (replace this placeholder)"; exit 1
+        '''
+        sh '''#!/usr/bin/env bash
+          # PLACEHOLDER - post-deploy check for production
+          echo "ERROR: production smoke test not configured (replace this placeholder)"; exit 1
+        '''
+        // Rollback: document the manual procedure in the spec's deploy.md.
+      }
+    }
+  }
+}

@@ -1,0 +1,153 @@
+# Builds the self-contained kcc binaries and attaches them to a GitHub release.
+# Runs when a version tag (v0.5.0) is pushed. The tag must match cli/package.json.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Tag matches the CLI version
+        working-directory: cli
+        run: |
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match cli/package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Validate the framework
+        run: bash .KCC/tools/validate-kcc.sh --mode cell
+
+      - name: Install, typecheck, test
+        working-directory: cli
+        run: |
+          bun install --frozen-lockfile
+          bun run pack
+          bun x tsc --noEmit
+          bun test
+
+      - name: Build every target
+        working-directory: cli
+        run: bun run build:all
+
+      - name: Checksums
+        working-directory: cli/dist
+        run: sha256sum kcc-* > checksums.txt
+
+      - name: Package-manager files (winget manifest, Homebrew formula)
+        working-directory: cli
+        run: bun run scripts/packaging.ts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            cli/dist/kcc-*
+            cli/dist/checksums.txt
+            cli/dist/packaging/winget/*.yaml
+            cli/dist/packaging/homebrew/kcc.rb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging
+          path: cli/dist/packaging
+
+  # Pushes the formula to the tap repository (TarekFawaz/homebrew-kcc).
+  # Runs only when the HOMEBREW_TAP_TOKEN secret exists (a token with write access to the tap).
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: env.TAP_TOKEN != ''
+        with:
+          name: packaging
+          path: packaging
+
+      - uses: actions/checkout@v4
+        if: env.TAP_TOKEN != ''
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-kcc
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update the formula
+        if: env.TAP_TOKEN != ''
+        run: |
+          mkdir -p tap/Formula
+          cp packaging/homebrew/kcc.rb tap/Formula/kcc.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/kcc.rb
+          git diff --cached --quiet || git commit -m "kcc ${GITHUB_REF_NAME#v}"
+          git push
+
+  # Opens the pull request against microsoft/winget-pkgs for this version.
+  # Runs only when the WINGET_TOKEN secret exists (a classic token with public_repo scope).
+  # Microsoft reviews the pull request before the version becomes installable.
+  winget:
+    needs: build
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: env.WINGET_TOKEN != ''
+        with:
+          name: packaging
+          path: packaging
+
+      - name: Submit the manifest
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN packaging/winget
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.ps1" -OutFile install.ps1
+          ./install.ps1 -Version "${{ github.ref_name }}"
+          echo "$env:LOCALAPPDATA\kcc\bin" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+
+      - name: Install on macOS and Linux
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh -s -- --version "${{ github.ref_name }}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Init, tailor, and check a fresh workspace
+        shell: bash
+        run: |
+          mkdir work && cd work
+          kcc init claude
+          kcc tailor --yes
+          kcc doctor
+          kcc validate

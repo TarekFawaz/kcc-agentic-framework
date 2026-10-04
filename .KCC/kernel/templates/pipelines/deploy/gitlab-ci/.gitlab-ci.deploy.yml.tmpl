@@ -1,0 +1,77 @@
+# KCC deploy - {{spec_id}} ({{idea_id}}-{{idea_slug}}), target {{target}}, dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/deploy/gitlab-ci/.gitlab-ci.deploy.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as .gitlab/ci/SPEC-{ID}-{slug}-deploy.yml and include it from the
+# pipeline instantiated from ci/gitlab-ci/.gitlab-ci.ci.yml.tmpl (which declares
+# the deploy-dev / deploy-staging / deploy-production stages and the "package"
+# job these jobs need).
+# Stages: dev -> staging -> production. Deploy jobs exist only on the default
+# branch and every one is "when: manual": a person starts each stage in the
+# GitLab UI. No KCC agent starts them.
+# The jobs deploy the "package" artifact of the same pipeline, so the quality
+# gate, build, and tests have passed for what is deployed.
+# Approval: protect "staging" and "production" under Settings > CI/CD >
+# Protected environments (allowed deployers / required approvals). Without
+# that, the manual button is the only gate - do not use this file for
+# production as is.
+# Every deploy / smoke command below is a PLACEHOLDER that fails until replaced.
+
+.kcc-deploy:
+  image: ubuntu:24.04
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+  # Credentials: CI/CD variables scoped to the environment, or OIDC id_tokens
+  # for {{target}}. No secrets in the repo.
+
+deploy-dev:
+  extends: .kcc-deploy
+  stage: deploy-dev
+  environment:
+    name: dev
+  needs:
+    - job: package
+      artifacts: true
+  script:
+    - |
+      # PLACEHOLDER - deploy command for {{target}} / dev (see the spec's deploy.md)
+      echo "ERROR: dev deploy command not configured (replace this placeholder)"; exit 1
+    - |
+      # PLACEHOLDER - post-deploy check for dev
+      echo "ERROR: dev smoke test not configured (replace this placeholder)"; exit 1
+
+deploy-staging:
+  extends: .kcc-deploy
+  stage: deploy-staging
+  environment:
+    name: staging               # protected environment gates this job
+  needs:
+    - job: package
+      artifacts: true
+    - job: deploy-dev
+  script:
+    - |
+      # PLACEHOLDER - deploy command for {{target}} / staging
+      echo "ERROR: staging deploy command not configured (replace this placeholder)"; exit 1
+    - |
+      # PLACEHOLDER - post-deploy check for staging
+      echo "ERROR: staging smoke test not configured (replace this placeholder)"; exit 1
+
+deploy-production:
+  extends: .kcc-deploy
+  stage: deploy-production
+  environment:
+    name: production            # protected environment gates this job
+  needs:
+    - job: package
+      artifacts: true
+    - job: deploy-staging
+  script:
+    - |
+      # PLACEHOLDER - deploy command for {{target}} / production
+      echo "ERROR: production deploy command not configured (replace this placeholder)"; exit 1
+    - |
+      # PLACEHOLDER - post-deploy check for production
+      echo "ERROR: production smoke test not configured (replace this placeholder)"; exit 1
+  # Rollback: document the manual procedure in the spec's deploy.md.

@@ -1,0 +1,74 @@
+# KCC CI - {{spec_id}} ({{idea_id}}-{{idea_slug}}), dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/ci/github-actions/ci.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as .github/workflows/SPEC-{ID}-{slug}-ci.yml.
+# Flow: quality gate -> restore -> build -> test -> package -> publish artifact.
+# The gate is NOT duplicated here: this workflow calls the reusable workflow
+# instantiated from quality-gate/github-actions/quality-gate.yml.tmpl as
+# .github/workflows/kcc-quality-gate.yml. When this workflow is the gate's only
+# caller, remove the pull_request / push triggers from that file so the gate
+# runs once per change.
+# KCC placeholders are {{name}}. "${{ ... }}" is GitHub expression syntax and
+# is left as is.
+name: kcc-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    uses: ./.github/workflows/kcc-quality-gate.yml
+
+  build-test-package:
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: "src/{{idea_id}}-{{idea_slug}}"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain for {{dialect}} (keep only what applies, pin versions), e.g.:
+      #   - uses: actions/setup-node@v4      with: { node-version: 20 }
+      #   - uses: actions/setup-python@v5    with: { python-version: "3.12" }
+      #   - uses: actions/setup-dotnet@v4    with: { dotnet-version: "8.0.x" }
+      #   - uses: actions/setup-go@v5        with: { go-version: stable }
+      #   - uses: actions/setup-java@v4      with: { distribution: temurin, java-version: "21" }
+
+      - name: Restore dependencies
+        run: |
+          # PLACEHOLDER - replace with the stack's restore command, e.g.
+          #   npm ci | pip install -r requirements.txt | dotnet restore | go mod download
+          echo "::error::restore command not configured (replace this placeholder)"; exit 1
+
+      - name: Build
+        run: |
+          # PLACEHOLDER - e.g. npm run build | python -m build | dotnet build -c Release --no-restore | go build ./...
+          echo "::error::build command not configured (replace this placeholder)"; exit 1
+
+      - name: Test
+        run: |
+          # PLACEHOLDER - e.g. npm test | pytest | dotnet test --no-build -c Release | go test ./...
+          echo "::error::test command not configured (replace this placeholder)"; exit 1
+
+      - name: Package
+        run: |
+          # PLACEHOLDER - write the deployable artifact into dist/ , e.g.
+          #   npm pack --pack-destination dist | dotnet publish -c Release -o dist | docker build + docker save
+          echo "::error::package command not configured (replace this placeholder)"; exit 1
+
+      - name: Publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcc-package
+          path: "src/{{idea_id}}-{{idea_slug}}/dist/"
+          if-no-files-found: error
+          retention-days: 30

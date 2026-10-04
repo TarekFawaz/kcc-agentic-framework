@@ -1,0 +1,108 @@
+# KCC deploy - {{spec_id}} ({{idea_id}}-{{idea_slug}}), target {{target}}, dialect {{dialect}}
+# Template: .KCC/kernel/templates/pipelines/deploy/github-actions/deploy.yml.tmpl
+# KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
+#
+# Instantiate as .github/workflows/SPEC-{ID}-{slug}-deploy.yml.
+# Stages: dev -> staging -> production. It starts only by hand
+# (workflow_dispatch); nothing here runs on push or pull_request, and no KCC
+# agent triggers it.
+# It deploys the "kcc-package" artifact of a finished kcc-ci run, so the
+# quality gate has already passed for what is deployed.
+# Approval: create the environments "staging" and "production" under
+# Settings > Environments and add required reviewers. Without that protection
+# rule the staging and production jobs are NOT gated - do not use this workflow.
+# Every deploy / smoke command below is a PLACEHOLDER that fails until replaced.
+# KCC placeholders are {{name}}. "${{ ... }}" is GitHub expression syntax and
+# is left as is.
+name: kcc-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Run id of the kcc-ci run whose artifact is deployed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: "kcc-deploy-{{spec_id}}"
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kcc-package
+          path: dist/
+          run-id: ${{ inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      # Credentials: use the provider's OIDC login action for {{target}} with an
+      # identity scoped to this environment. No long-lived secrets in the repo.
+      - name: Deploy to dev
+        shell: bash
+        run: |
+          # PLACEHOLDER - deploy command for {{target}} / dev (see the spec's deploy.md)
+          echo "::error::dev deploy command not configured (replace this placeholder)"; exit 1
+      - name: Smoke test dev
+        shell: bash
+        run: |
+          # PLACEHOLDER - post-deploy check for dev
+          echo "::error::dev smoke test not configured (replace this placeholder)"; exit 1
+
+  deploy-staging:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging          # required reviewers approve here
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kcc-package
+          path: dist/
+          run-id: ${{ inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Deploy to staging
+        shell: bash
+        run: |
+          # PLACEHOLDER - deploy command for {{target}} / staging
+          echo "::error::staging deploy command not configured (replace this placeholder)"; exit 1
+      - name: Smoke test staging
+        shell: bash
+        run: |
+          # PLACEHOLDER - post-deploy check for staging
+          echo "::error::staging smoke test not configured (replace this placeholder)"; exit 1
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production       # required reviewers approve here
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kcc-package
+          path: dist/
+          run-id: ${{ inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Deploy to production
+        shell: bash
+        run: |
+          # PLACEHOLDER - deploy command for {{target}} / production
+          echo "::error::production deploy command not configured (replace this placeholder)"; exit 1
+      - name: Smoke test production
+        shell: bash
+        run: |
+          # PLACEHOLDER - post-deploy check for production
+          echo "::error::production smoke test not configured (replace this placeholder)"; exit 1
+      # Rollback: document the manual procedure in the spec's deploy.md.

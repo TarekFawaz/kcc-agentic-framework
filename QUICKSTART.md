@@ -15,8 +15,14 @@ A **spec-driven workflow framework** and a working implementation of the
 raw idea; the framework walks you through:
 
 ```text
-interrogate -> create -> token-budget -> plan -> token-budget -> implement -> test -> review -> (deploy)
+interrogate -> create -> token-budget -> plan -> token-budget -> implement -> test -> review -> (merge) -> (deploy)
 ```
+
+Framework release 0.5.0 adds the `kcc` command line, context tailoring,
+scripted quality gates, automatic resume after a usage limit, a git
+workflow with hooks, pipeline templates, and a local MCP server. Coming from
+an earlier copy? Read [docs/upgrade-v0.5.md](./docs/upgrade-v0.5.md). The
+full change list is in [releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md).
 
 Each stage has a dedicated agent role. Meta-agents (Butler + Token Guard)
 wrap every turn at minimum token burn. Multi-harness - Claude Code, Codex
@@ -30,10 +36,13 @@ rest.
 
 ## Prerequisites
 
-- **Windows PowerShell or native bash**
-  - Windows: use the `.ps1` tools.
-  - macOS/Linux: use the `.sh` tools.
-- **Git** - every spec gets its own branch
+- **The `kcc` command line** (recommended) - one self-contained program;
+  see step 1. It needs nothing else installed.
+- **Windows PowerShell or native bash** - already on your system. `kcc`
+  uses them to run the framework tools; you can also call the tools
+  directly (`.ps1` on Windows, `.sh` on macOS/Linux).
+- **Git** - every spec gets its own branch. On Windows, Git for Windows also
+  provides the `bash` that the Claude Code hooks and git hooks use.
 - **One agent harness** of your choice:
   - **[Claude Code](https://docs.claude.com/claude-code)** - reads `CLAUDE.md` + `.claude/`
   - **[Codex CLI](https://github.com/openai/codex)** - reads `AGENTS.md`
@@ -46,6 +55,10 @@ rest.
 
 ## What you get after clone
 
+With `kcc init` you do not clone anything: the command writes `.KCC/` into
+your project and generates the adapters. The layout below is the framework
+repository itself, which is also what a clone gives you.
+
 A clean framework seed is intentionally small:
 
 ```text
@@ -54,14 +67,17 @@ my-project/
 |-- QUICKSTART.md              <- this file
 |-- PLAN.md                    <- future activities and roadmap
 |-- progress.md                <- single status landing page
-|-- CLI-PLAN.md                <- future native CLI roadmap
+|-- CLI-Guide.md               <- installing and using the kcc command line
+|-- releasenotes-2026-10-04.md <- what changed in release 0.5.0
+|-- install.ps1  install.sh    <- script installers for kcc
+|-- cli/                       <- source of the kcc command line
 |-- LICENSE  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md  MAINTAINERS.md
 |-- .gitignore  .markdownlint.json
 |-- .KCC/
 |   |-- README.md
 |   |-- kernel/                <- contracts, protocols, dialects, adapters, templates
-|   |-- capabilities/          <- agents + skills (17 + 22)
-|   |-- tools/                 <- PowerShell + native bash tools + bootstrap
+|   |-- capabilities/          <- agents + skills (18 + 25)
+|   |-- tools/                 <- PowerShell + native bash tools + git hooks + bootstrap
 |   |-- sandbox/               <- Dockerfiles per harness + sandbox-runtime protocol
 |   `-- settings.json          <- workspace + tracker + AutoPolicy defaults
 |-- docs/
@@ -83,7 +99,46 @@ After first run, the framework adds:
 
 ## Recommended 5-minute setup
 
-### 1. Get the repo on disk
+### 1. Install `kcc` and initialize (recommended path)
+
+| System | Package manager | Script installer |
+|---|---|---|
+| Windows | `winget install Tikasway.KCC` | `irm https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.ps1 \| iex` |
+| macOS / Linux | `brew install tarekfawaz/kcc/kcc` | `curl -fsSL https://raw.githubusercontent.com/TarekFawaz/kcc-agentic-framework/main/install.sh \| sh` |
+
+All four need a published release; winget also needs the package to be
+accepted in Microsoft's repository. Before that, or offline, build the
+program from `cli/` and install it with `install.ps1 -From` or
+`install.sh --from`. The step-by-step guide, including troubleshooting, is
+[CLI-Guide.md](./CLI-Guide.md).
+
+Check the install with `kcc version`.
+
+Then, in your project folder:
+
+```text
+kcc init claude      # or codex | opencode | generic | ollama | all
+kcc tailor           # describe the solution; unneeded agents, skills, and dialects are set aside
+kcc doctor           # checks the installation and names the fix for each problem
+```
+
+| Later you will use | For |
+|---|---|
+| `kcc upgrade` | A new framework version. Files you edited are kept and listed. |
+| `kcc sync` | After editing `.KCC/kernel/` or `.KCC/capabilities/`. |
+| `kcc run --input "<idea>"` | Driving the lifecycle from a terminal; it waits and resumes when the harness hits a usage limit. |
+| `kcc limits` | Seeing usage, the last limit hit, and when the run resumes. |
+| `kcc tool repo-bootstrap --apply init-local` | `git init` on `main` plus the KCC git hooks (secret scan, commit-message check, protected-branch guard). |
+| `kcc mcp --register` | Giving your harness the local MCP server. |
+| `kcc tool <name> ...` | Running any `.KCC/tools` script with the right shell. |
+
+Guide: [CLI-Guide.md](./CLI-Guide.md). Reference: [docs/cli.md](./docs/cli.md),
+[docs/tailoring.md](./docs/tailoring.md), [docs/mcp.md](./docs/mcp.md),
+[docs/git-workflow.md](./docs/git-workflow.md). If you used `kcc init`, skip to step 5 or
+straight to *First Idea*. Steps 1b-4 are the script path, for offline use
+or when working from a clone.
+
+### 1b. Script path: get the repo on disk
 
 ```powershell
 git clone https://github.com/TarekFawaz/kcc-agentic-framework.git my-project
@@ -234,14 +289,16 @@ OpenCode also reads `AGENTS.md`. Same prompt as Path B.
          |                 Phases + Epics -> upfront budget + effort estimate (man-days, +/-20%)
          v
   /spec-create             writes IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs.md (index)
-         |                 + SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md (epic)
-         |                 + backlog.md + Backlog/Story-* + Backlog/Enabler-*
+         |                 + ROADMAP.md (execution plan + token plan across specs)
+         |                 + SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md (one lean spec: delivery,
+         |                   acceptance criteria, backlog table)
+         |                 + Backlog/Story-* + Backlog/Enabler-*
          v
   [token-budget gate]      /token-estimate forecast -> human approve / revise / abort
          |                 (or AutoPolicy auto-approve within cap)
          v
-  /spec-plan               planner refines parallelization.md, writes plan.md
-         |                 including ## Atomic test cases mapped to AC IDs
+  /spec-plan               planner writes plan.md: ordered changes, file-disjoint
+         |                 ## Waves, and ## Atomic test cases mapped to AC IDs
          v
   [token-budget gate]      refined estimate -> approve / revise / abort
          v
@@ -249,15 +306,26 @@ OpenCode also reads `AGENTS.md`. Same prompt as Path B.
          |                 turns atomic test cases into real tests via
          |                 testing-unit / testing-integration dialects
          v
-  /spec-test               verifier runs tests, fills review.md (PASS/FAIL per AC + per test)
+  /spec-test               verifier runs tests, check-traceability, and quality-gate;
+         |                 fills review.md (PASS/FAIL per AC + per test, ## Evidence)
          |
          v
   /spec-review             quick diff review against epic + story/enabler criteria
          |
          v
+  (optional) /spec-merge   repo-steward checks branch + commits, merges wave lanes,
+         |                 writes the pull-request draft (pr.md); NEVER pushes
+         v
   (optional) /spec-deploy  infrastructure-implementer writes pipeline + IaC stubs;
                            NEVER auto-executes; human runs the actual deploy
+
+  any time: /bug-report    a human-found bug becomes a Bug backlog item ->
+                           regression test -> fix -> test -> review
 ```
+
+Each step's exit check is a script (`check-run-conformance`,
+`check-traceability`, `check-wave-scope`, `check-impl-lock`, `quality-gate`),
+so a step is done when its tool says so, not when an agent says so.
 
 ---
 
@@ -298,7 +366,13 @@ always begin with interrogation.
 | `auto IDEA-{ID}` | Resume an existing idea from the first missing artifact. |
 | `auto SPEC-{ID}` | Continue an existing spec from its current lifecycle step. |
 | `auto all` | Take every spec whose status is not Done through `plan -> review`. |
+| `auto resume` | Continue from the latest restore point (after a usage limit, a crash, or a harness switch). |
 | `auto` (no args) | Print usage and exit - no agent dispatch, no file writes. |
+
+The same inputs work from a terminal: `kcc run --input "<idea | path | IDEA-ID | SPEC-ID | all>"`
+runs the lifecycle state by state through your harness's command line, and
+`kcc run --resume` is the terminal form of `auto resume`. When the harness
+hits a usage limit, `kcc run` waits for the reset and resumes on its own.
 
 ### Parameters and their impact
 
@@ -316,8 +390,9 @@ Parallelism is driven by the operating scenario, the planner's wave plan, **and*
 the `--parallel` flag:
 
 - **Scenario 1 without `--parallel`:** spec creation is sequential (one
-  `/spec-create` per epic); at step 13 the run shows the proposed sessions from
-  `parallelization.md` and asks `approve windows / sequential / abort`.
+  `/spec-create` per epic); before implementation the run shows the proposed
+  sessions from `plan.md -> ## Waves` and the idea's `ROADMAP.md` and asks
+  `approve windows / sequential / abort`.
 - **Scenarios 2 & 3 (`--silent --assume`):** maximum parallel sessions allowed by
   default; the pre-flight warning covers your consent. In Scenario 3 the
   `--budget` cap still bounds the whole wave set. (Spec creation is still
@@ -329,7 +404,7 @@ the `--parallel` flag:
 - The fan-out mechanics (L1 across specs, L2 across independent stories/enablers,
   wave/barrier semantics, file-disjoint merge safety) are defined in
   [[.KCC/kernel/protocols/parallel-execution]] and the per-spec
-  `parallelization.md`.
+  `plan.md -> ## Waves`.
 
 ### Gates that never go silent
 
@@ -469,12 +544,19 @@ lives in [example-solutions.md](./example-solutions.md).
 | Raw ideas | `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md` |
 | Idea index (status board) | `ideation/ideas.md` |
 | Specs grouped per idea | `specs/IDEA-{ID}-{slug}-Specs/IDEA-{ID}-{slug}-Specs.md` |
-| Epic spec | `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md` |
-| Story / enabler backlog | `specs/.../SPEC-{ID}-{slug}/Backlog/Story-*.md` + `Enabler-*.md` |
-| Plan (with atomic test cases) | `specs/.../SPEC-{ID}-{slug}/plan.md` |
-| Verification report | `specs/.../SPEC-{ID}-{slug}/review.md` |
-| Token budget log | `specs/.../SPEC-{ID}-{slug}/budget.md` |
-| Handover envelope log | `specs/.../SPEC-{ID}-{slug}/handovers.md` |
+| Execution plan + token plan per idea | `specs/IDEA-{ID}-{slug}-Specs/ROADMAP.md` |
+| Spec (delivery, acceptance criteria, backlog table) | `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/SPEC-{ID}-{slug}.md` |
+| Story / enabler / bug backlog | `specs/.../SPEC-{ID}-{slug}/Backlog/Story-*.md`, `Enabler-*.md`, `Bug-*.md` |
+| Plan (waves + atomic test cases) | `specs/.../SPEC-{ID}-{slug}/plan.md` |
+| Verification report (with Evidence) | `specs/.../SPEC-{ID}-{slug}/review.md` |
+| Pull-request draft (optional) | `specs/.../SPEC-{ID}-{slug}/pr.md` |
+| Token estimates and approvals | `ROADMAP.md` token plan, the trace session, and the backchannel |
+| Handover envelopes | `coordination/handover/` |
+| Restore points | `coordination/checkpoints/CP-{NNN}.md` |
+| Run state, gates, last usage limit | `coordination/run/`, `coordination/gates/` |
+| Orchestrator map (agents, spawn profiles, routes) | `coordination/orchestrator.md` + `orchestrator.json` |
+| Tailoring record | `.KCC/settings.json -> tailoring`, `.KCC/.tailored-out/` |
+| Installed framework version + checksums | `.KCC/kcc.lock` |
 | Deploy summary (optional) | `specs/.../SPEC-{ID}-{slug}/deploy.md` |
 | Source code (per idea) | `src/IDEA-{ID}-{slug}/...` |
 | Agent traces | `Traces/Session-{slug}-{datetime}/` (7 artifact files) |
@@ -518,6 +600,26 @@ after clone so the `.sh` tools are executable.
 | `adapt-workflow` | Scaffolds a `migrations/IMPORT-{NNN}/` folder for importing an external agentic workflow. Semantic translation is the migrator agent's job. | `-SourcePath` (req); `-Format` (auto) `-DryRun` | `.KCC\tools\adapt-workflow.ps1 -SourcePath ../Other -Format cursor` |
 | `bootstrap-mac-linux` | One-time macOS/Linux helper: sets `+x` on all `.sh` tools and smoke-tests the validator. (bash only.) | none | `bash .KCC/tools/bootstrap-mac-linux.sh` |
 
+Gate, continuity, and git tools added in release 0.5.0 (all follow
+`.KCC/kernel/contracts/tool-contract.md`: `-Json`, exit 0 pass / 1 violations
+/ 2 usage / 3 deferred):
+
+| Tool | What it does | Example |
+|---|---|---|
+| `check-run-conformance` | Checks idea, spec, plan, review, and bug artifacts against the layout. | `kcc tool check-run-conformance --scope specs` |
+| `check-traceability` | Acceptance criterion -> Test ID -> real test -> PASS. | `kcc tool check-traceability --spec SPEC-003` |
+| `check-wave-scope` | A wave's changes stay inside the files its items declared. | `kcc tool check-wave-scope --spec SPEC-003 --wave 2` |
+| `check-impl-lock` | Source may change only with an approved plan and budget. | `kcc tool check-impl-lock --staged` |
+| `quality-gate` | Build, lint, tests, coverage floor, secrets, dependency audit, SAST. | `kcc tool quality-gate --spec SPEC-003` |
+| `repo-bootstrap` | Git init / remote gate; installs the KCC git hooks. Never pushes. | `kcc tool repo-bootstrap --install-hook` |
+| `check-commit-msg` | Commit message convention (used by the `commit-msg` hook). | `kcc tool check-commit-msg --message "SPEC-003 Story-001: add parser"` |
+| `check-branch` | Branch naming and protected-branch push guard (used by `pre-push`). | `kcc tool check-branch` |
+| `kcc-checkpoint` | Writes a restore point. | `kcc tool kcc-checkpoint --reason manual` |
+| `kcc-run` | Deterministic lifecycle driver. Prefer `kcc run`, which adds wait-and-resume. | `kcc run --input "<idea>" --dry-run` |
+| `kcc-limit-watch` | Detached resume after a usage limit, for use without the `kcc` binary. | see `session-continuity` protocol |
+| `kcc-handover` | Moves a run to another harness. | `kcc tool kcc-handover --to codex --dry-run` |
+| `kcc-statusline`, `kcc-limit-guard` | Claude Code status line and usage-limit hook. | configured in `.claude/settings.json` |
+
 Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 `.KCC/tools/` paths in new work.
 
@@ -527,6 +629,11 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 
 - [README](./README.md) - KCC operating-model background + local-cell orientation
 - [How to use KCC](./docs/how-to-use-kcc.md) - scenarios for fresh ideas, existing solutions, and adapting workflows
+- [The kcc command line](./docs/cli.md) - install, init, tailor, upgrade, doctor, run, limits, mcp
+- [Tailoring](./docs/tailoring.md) - fitting agents, skills, and dialects to a solution
+- [Local MCP server](./docs/mcp.md) - section-level reads, gate tools, and skills over MCP
+- [Git workflow](./docs/git-workflow.md) - branches, commit messages, hooks, and pipeline templates
+- [Upgrading to 0.5.0](./docs/upgrade-v0.5.md) - what changed and how to move an existing cell
 - [KCC tools reference](./docs/kcc-tools-reference.md) - `.ps1` and `.sh` tools with arguments and examples
 - [Agentic AI operating model](./docs/agentic-ai-operating-model.md) - short public explanation of the KCC model
 - [Spec-driven AI development](./docs/spec-driven-ai-development.md) - lifecycle and artifact overview
@@ -553,7 +660,11 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 - [[.KCC/kernel/protocols/handover]] - cross-harness handover envelope
 - [[.KCC/kernel/phase-model]] - KCC Phase 1/2/3 + this framework's current phase (1.8)
 - [[.KCC/kernel/inspector/README]] - Inspector Pipeline scaffold
-- [[CLI-PLAN]] - native CLI roadmap (v1.1+)
+- [[.KCC/kernel/protocols/session-continuity]] - restore points, usage limits, supervised runs
+- [[.KCC/kernel/protocols/tailoring]] - tailoring rules and file effects
+- [[.KCC/kernel/protocols/mcp]] - the local MCP server contract
+- [[.KCC/kernel/protocols/git-workflow]] - branching, commits, hooks
+- [[.KCC/kernel/protocols/kcc-run]] - the deterministic lifecycle driver
 
 ---
 
@@ -561,6 +672,11 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 
 | Symptom | Probable cause | Fix |
 |---|---|---|
+| Not sure what is wrong with the setup | - | `kcc doctor` lists each problem with its fix |
+| `kcc upgrade` reports "Kept N locally edited file(s)" | You changed framework files; they were not overwritten | Keep them, or `kcc upgrade --force` to take the shipped versions |
+| An agent or skill you expected is missing | The workspace was tailored | `kcc tailor --show`; re-run `kcc tailor` or `kcc tailor --reset` |
+| A run stopped with exit code 5 | Usage limit and `max_resumes` used up, or `--no-wait` | `kcc limits`, then `kcc run --resume` |
+| A commit is blocked by "kcc commit-msg" | Message does not follow the convention | Use `SPEC-003 Story-001: subject` or `chore: subject`; see `docs/git-workflow.md` |
 | Claude Code says "skill not found" | `.KCC/capabilities/skills/*.md` edited but sync not run | `powershell -ExecutionPolicy Bypass -File .KCC\tools\sync-adapters.ps1` |
 | Claude Code says "agent not found" | Same - sync not run, or malformed frontmatter | Rerun sync; if it errors, the error names the file. Fix and rerun. |
 | Codex / OpenCode ignores agents | Init wasn't run for that harness, or `AGENTS.md` is missing | `.KCC\tools\framework-init.ps1 codex` (or `opencode`) creates root docs + native outputs |

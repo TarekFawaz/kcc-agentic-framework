@@ -37,6 +37,55 @@ bash .KCC/tools/bootstrap-mac-linux.sh
 | bootstrap-mac-linux | no | yes | Prepare bash tools on macOS/Linux. |
 | memory-append | yes | no | Butler-owned deterministic memory writer. |
 | kcc-inspect | yes | no | Basic Inspector detect/propose pipeline over real signals. |
+| check-run-conformance | yes | yes | Check idea, spec, plan, review, and bug artifacts against the layout. |
+| check-traceability | yes | yes | Acceptance criterion -> Test ID -> test -> PASS. |
+| check-wave-scope | yes | yes | A wave's changes stay inside its declared files. |
+| check-impl-lock | yes | yes | Source changes only with an approved plan and budget. |
+| quality-gate | yes | yes | Build, lint, tests, coverage, secrets, dependencies, SAST. |
+| repo-bootstrap | yes | yes | Git init/remote gate; installs the KCC git hooks. |
+| check-commit-msg | yes | yes | Commit message convention. |
+| check-branch | yes | yes | Branch naming and protected-branch push guard. |
+| kcc-checkpoint | yes | yes | Write a restore point. |
+| kcc-run | yes | yes | Deterministic lifecycle driver. |
+| kcc-limit-watch | yes | yes | Detached resume after a usage limit. |
+| kcc-limit-guard, kcc-statusline | yes | yes | Claude Code usage-limit hook and status line. |
+| kcc-handover | yes | yes | Move a run to another harness. |
+| record-token-actuals | yes | yes | Record actual token use at session end. |
+
+The `kcc` command line ([cli.md](./cli.md)) runs any of these with the right
+shell for the system: `kcc tool <name> [--flag value ...]`. Flags are written
+the bash way (`--repo-root`, `--dry-run`) and translated for PowerShell on
+Windows. `kcc init`, `kcc sync`, `kcc validate`, and `kcc run` are shortcuts
+for `framework-init`, `sync-adapters`, `validate-kcc`, and `kcc-run`.
+
+## Gate, continuity, and git tools
+
+These tools were added in release 0.5.0 and share one contract
+(`.KCC/kernel/contracts/tool-contract.md`).
+
+| | |
+|---|---|
+| Common arguments | `-RepoRoot` / `--repo-root`, `-Json` / `--json`, `-Spec` / `--spec`, `-Scope` / `--scope`, `-DryRun` / `--dry-run` (mutating tools) |
+| Exit codes | 0 pass, 1 violations, 2 usage or environment error, 3 deferred (a required external tool is missing; never a pass) |
+| JSON | `{ tool, version, scope, errors, warnings, status, violations: [{ id, severity, fix_owner, file, message }] }` |
+
+| Tool | Tool-specific arguments | Notes |
+|---|---|---|
+| `check-run-conformance` | `-Scope all\|idea\|specs\|plan\|review\|bugs` | Exit check of the `auto` states. Legacy v5 specs produce `SPEC-LEGACY` warnings. |
+| `check-traceability` | `-Spec` | Run by the verifier before a review verdict. |
+| `check-wave-scope` | `-Spec`, `-Wave N`, `-Base <ref or manifest>`, `-TestCommand` | Compares against the newest restore point by default. Extra paths can be allowed in `plan.md -> ## Wave file allowances`. |
+| `check-impl-lock` | `-Path <file>`, `-Staged`, `-Hook` | `-Hook` is the Claude Code `PreToolUse` mode (exit 2 blocks the edit). |
+| `quality-gate` | `-Spec`, `-Path`, `-Fast`, `-Require`, `-Emit` | Commands are detected per stack; override them in `settings.json -> quality.commands`. `-Fast` scans staged files for secrets. `-Require` turns a deferred scanner into a failure (CI). A repo `.gitleaks.toml` is honoured. Set `quality.scanners.sast_runner` to `docker` where semgrep has no native build. |
+| `repo-bootstrap` | `-Apply init-local\|connect-remote\|skip`, `-RemoteUrl`, `-InstallHook` | Never stores credentials and never pushes. Installs `pre-commit`, `commit-msg`, and `pre-push`. |
+| `check-commit-msg` | `-File <path>` or `-Message <text>` | See [git-workflow.md](./git-workflow.md). |
+| `check-branch` | `-Branch <name>`, `-Push` | `-Push` is the `pre-push` mode. |
+| `kcc-checkpoint` | `-Reason`, `-NextAction`, `-Harness`, `-SessionId`, `-NoGit` | Writes `coordination/checkpoints/CP-NNN.md` and, in a git repo, a `kcc/cp-NNN` tag. |
+| `kcc-run` | `-Input`, `-Silent`, `-Assume`, `-Accuracy`, `-Budget`, `-Currency`, `-Parallel`, `-Harness`, `-Resume`, `-Answer`, `-From`, `-Only`, `-DryRun` | Exit 4 paused at a gate, 5 suspended on a usage limit, 6 stopped. Protocol: `.KCC/kernel/protocols/kcc-run.md`. |
+| `kcc-limit-watch` | `-Arm`, `-Run`, `-Wrap`, `-ResetAt`, `-Command` | Use when the `kcc` binary is not installed; `kcc run` replaces it. |
+| `kcc-handover` | `-To claude\|codex\|opencode\|generic`, `-From`, `-Launch`, `-Unattended` | Writes the envelope and prints the start command. |
+
+Usage-limit wording per harness lives in `.KCC/kernel/limit-patterns.json`
+and is read by `kcc-run`, `kcc-limit-watch`, and the `kcc` binary.
 
 ## framework-init
 
@@ -378,6 +427,14 @@ It writes proposal stubs under `.KCC/kernel/inspector/proposals/` and does not
 fabricate patterns when signals are insufficient.
 
 ## Recommended Tool Flows
+
+### First run with the command line (any system)
+
+```text
+kcc init codex
+kcc tailor
+kcc doctor
+```
 
 ### First run on Windows
 
