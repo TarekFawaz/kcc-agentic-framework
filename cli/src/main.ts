@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { HARNESSES, parse, target, UsageError, workspace } from "./args";
 import { doctor } from "./commands/doctor";
+import { hint } from "./commands/hint";
 import { init } from "./commands/init";
 import { runTailor } from "./commands/tailor";
 import { upgrade } from "./commands/upgrade";
@@ -27,10 +28,19 @@ Set up
   mcp [--register]    Serve KCC over MCP (stdio), or register the server with the harnesses.
 
 Check
-  doctor [--json]     Check the installation; exit 1 when something must be fixed.
+  doctor [--json] [--fix-hooks]
+                      Check the installation; exit 1 when something must be fixed.
+                      --fix-hooks adds missing KCC hooks to .claude/settings.json.
   validate [--mode cell|repo]
                       Run the framework validator.
   limits [--json]     Show usage, the last limit hit, and the next resume.
+
+Steer
+  hint "<text>" [--to all|main|subagents|<agent>] [--expires <minutes>]
+                      Give the running session (and its subagents) a hint about behaviour or
+                      expectations. Also: kcc --hint "<text>". Works while the session is busy.
+  hint --list | --clear <H-NNN|all> | --pending [--for <agent>]
+                      Show, withdraw, or read (hook-less harnesses) the active hints.
 
 Run
   run --input <idea|path|IDEA-ID|SPEC-ID|all> [kcc-run options]
@@ -78,6 +88,9 @@ async function main(argv: string[]): Promise<number> {
       return doctor(rest);
     case "limits":
       return limits(rest);
+    case "hint":
+    case "--hint":
+      return hint(rest);
     case "run":
       return run(rest);
     case "sync": {

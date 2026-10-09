@@ -48,7 +48,9 @@ bash .KCC/tools/bootstrap-mac-linux.sh
 | kcc-checkpoint | yes | yes | Write a restore point. |
 | kcc-run | yes | yes | Deterministic lifecycle driver. |
 | kcc-limit-watch | yes | yes | Detached resume after a usage limit. |
-| kcc-limit-guard, kcc-statusline | yes | yes | Claude Code usage-limit hook and status line. |
+| kcc-limit-guard, kcc-statusline | yes | yes | Claude Code usage-limit hook and status line. The status line does not run in the VS Code extension. |
+| kcc-limit-hook | yes | no | Claude Code `StopFailure` hook: records a usage limit, writes a restore point, arms the watcher. Runs under bash (Git Bash on Windows). |
+| kcc-hint | yes | yes | Human hints for a running session: `add`, `list`, `clear`, `pending`; `inject` (bash) is the Claude Code hook. |
 | kcc-handover | yes | yes | Move a run to another harness. |
 | record-token-actuals | yes | yes | Record actual token use at session end. |
 

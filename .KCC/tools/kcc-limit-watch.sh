@@ -32,7 +32,7 @@
 #   kcc-limit-watch.sh --arm|--run [--harness claude|codex|opencode|generic]
 #       [--session-id ID] [--reset-at EPOCH|ISO8601] [--wait-minutes N]
 #       [--grace-seconds N] [--max-resumes N] [--command TEMPLATE]
-#       [--dry-run] [--repo-root PATH]
+#       [--skip-if-active TRANSCRIPT] [--dry-run] [--repo-root PATH]
 #   kcc-limit-watch.sh --wrap --harness codex [--session-id ID] -- codex exec "..."
 # PowerShell-style flags (-Arm, -Run, -Wrap, -Harness, -SessionId, -ResetAt,
 # -WaitMinutes, -GraceSeconds, -MaxResumes, -Command, -DryRun, -RepoRoot) work too.
@@ -52,6 +52,7 @@ WAIT_MIN=""
 GRACE=""
 MAX_RESUMES=""
 CMD_OVERRIDE=""
+SKIP_PATH=""
 DRY=0
 WRAP_CMD=()
 PASS_ARGS=()
@@ -72,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --grace-seconds|-GraceSeconds) GRACE="${2:-}"; PASS_ARGS+=(--grace-seconds "$GRACE"); shift 2 ;;
     --max-resumes|-MaxResumes) MAX_RESUMES="${2:-}"; PASS_ARGS+=(--max-resumes "$MAX_RESUMES"); shift 2 ;;
     --command|-Command) CMD_OVERRIDE="${2:-}"; PASS_ARGS+=(--command "$CMD_OVERRIDE"); shift 2 ;;
+    --skip-if-active|-SkipIfActive) SKIP_PATH="${2:-}"; PASS_ARGS+=(--skip-if-active "$SKIP_PATH"); shift 2 ;;
     --repo-root|-RepoRoot) REPO_ROOT="$(cd "$2" && pwd)"; shift 2 ;;
     --dry-run|-DryRun) DRY=1; PASS_ARGS+=(--dry-run); shift ;;
     --) shift; WRAP_CMD=("$@"); break ;;
@@ -131,6 +133,8 @@ PERM_MODE="${PERM_MODE//[^A-Za-z]/}"
 case "$PERM_MODE" in bypassPermissions|"") PERM_MODE="acceptEdits" ;; esac
 
 # ---- helpers -------------------------------------------------------------------
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }
+ARM_EPOCH="$(now)"
 to_epoch() { # EPOCH | ISO-8601 -> epoch (empty if unparseable)
   local v="$1"
   if [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return; fi
@@ -288,7 +292,7 @@ OUT_FILE=""
 cleanup_out() { [[ -n "$OUT_FILE" ]] && rm -f "$OUT_FILE" 2>/dev/null || true; }
 
 wait_and_resume() { # $1 = reset epoch (may be empty)
-  local reset="$1" attempts target n cmd rc before after
+  local reset="$1" attempts target n cmd rc before after mt
   while :; do
     attempts=$(( $(read_attempts) + 1 ))
     if (( attempts > MAX_RESUMES )); then
@@ -319,6 +323,15 @@ wait_and_resume() { # $1 = reset epoch (may be empty)
       sleep "$left"
     done
     heartbeat
+    if [[ "$attempts" -eq 1 && -n "$SKIP_PATH" ]]; then
+      mt="$(file_mtime "$SKIP_PATH")"
+      if [[ "$mt" =~ ^[0-9]+$ ]] && (( mt > ARM_EPOCH + 120 )); then
+        log "session transcript changed after the limit hit ($SKIP_PATH); the human continued it, so no unattended resume"
+        emit resume-skipped "{\"harness\":\"$HARNESS\",\"reason\":\"session-active\"}"
+        write_attempts 0
+        return 0
+      fi
+    fi
     before="$(latest_cp)"
     log "resume started: $cmd"
     emit resume-started "{\"harness\":\"$HARNESS\",\"attempt\":$attempts,\"command\":\"$(json_escape "$cmd")\"}"
