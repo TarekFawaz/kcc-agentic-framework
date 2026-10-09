@@ -65,6 +65,8 @@ terminal (`kcc run --input "<idea>"`).
 | `kcc doctor [--json]` | Checks the installation and names the fix for each problem |
 | `kcc run ...` | Drives the lifecycle and survives usage limits. See below |
 | `kcc limits [--json]` | Shows usage, the last limit hit, and the next resume |
+| `kcc hint "text" [--to all\|main\|subagents\|<agent>] [--expires <min>]` | Gives the running session and its subagents a hint, delivered by hook on the next tool call. Also `kcc --hint "text"`. `--list`, `--clear <id\|all>`, `--pending [--for <agent>]` manage and read hints. See `.KCC/kernel/protocols/hints.md` |
+| `kcc doctor --fix-hooks` | Adds the missing KCC hooks (hint delivery, StopFailure limit resume, limit guard) to `.claude/settings.json` without touching your own entries |
 | `kcc mcp` | Serves KCC over MCP. See [MCP](./mcp.md) |
 | `kcc tool <name> [args]` | Runs any script from `.KCC/tools/` with the right shell for this system |
 | `kcc version`, `kcc help` | Version and usage |

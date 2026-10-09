@@ -183,6 +183,12 @@ required `payload` keys:
 | 22 | `remember-stored` | butler | broadcast | `entry_ids`, `summary` | [[butler]] (every remember) |
 | 23 | `session-closed` | butler | broadcast | `session_id`, `summary` | [[butler]] (run close) |
 
+Human hints (see [[hints]]) add `hint-issued` (`hint`, `to`, `by`, `expires_at`),
+`hint-delivered` (`hints`, `reader`, `agent_type`, `event`) and `hint-cleared`
+(`hint`). Usage-limit handling adds `limit-reached`, `resume-scheduled`,
+`resume-started` and `resume-skipped` (`harness`, `reason`; the human continued
+the session before the reset).
+
 Beyond the spine, token accounting adds `actual-recorded` (and
 `calibration-update`) once harness/API actuals exist (see those kinds below).
 

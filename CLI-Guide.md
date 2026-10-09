@@ -297,6 +297,42 @@ kcc run --wrap --harness codex -- codex exec "implement SPEC-003 wave 2"
 `--no-wait` exits at the first limit instead of waiting; continue later with
 `kcc run --resume`.
 
+### A limit in a session you started yourself (VS Code, plain `claude`)
+
+Nobody supervises that session, and Claude Code's status line (the only place it
+prints usage percentages) does not run in the VS Code extension. So `kcc
+limits` shows no percentages there. The limit is still caught: Claude Code
+runs the `StopFailure` hook when a turn ends on a limit, and `kcc-limit-hook`
+reads the reset time from the session transcript, writes a restore point, and
+arms the watcher. After the reset the same session is resumed in the
+background. If you carry on by hand first, the watcher notices and does nothing.
+
+```text
+kcc doctor --fix-hooks    # add the hook to an existing .claude/settings.json
+kcc limits                # last limit seen in your session transcripts, and the reset time
+```
+
+## Steer a running session: `kcc hint`
+
+A hint is a short note that changes how the agents behave or what they expect,
+without stopping the run:
+
+```text
+kcc hint "Prefer small PRs and do not add new dependencies"
+kcc hint "The verifier should treat the legacy API as out of scope" --to verifier
+kcc hint "Ask me before touching the database schema" --to all --expires 120
+kcc --hint "Keep answers short"        # same as kcc hint
+kcc hint --list
+kcc hint --clear H-002
+```
+
+Run it from any terminal while the session is busy; inside Claude Code you can
+type `/hint <text>`. The main agent and every running subagent get the hint on
+their next tool call, and any subagent started later gets it at start. A hint is
+guidance: it never waives a gate, a safety rule, or an earlier instruction. On
+Codex or OpenCode the agent reads hints itself (`kcc hint --pending`). Details:
+`.KCC/kernel/protocols/hints.md`.
+
 ## 7. Give your harness the MCP server (optional)
 
 ```text
@@ -313,6 +349,8 @@ tools directly. The server runs on your machine only. More:
 | I want to | Command |
 |--|--|
 | Check the installation | `kcc doctor` |
+| Tell the running agents something | `kcc hint "text"` |
+| Add missing KCC hooks to `.claude/settings.json` | `kcc doctor --fix-hooks` |
 | Regenerate adapters after editing `.KCC/kernel/` or `.KCC/capabilities/` | `kcc sync` |
 | Validate the framework files | `kcc validate` |
 | Run the quality gate for a spec | `kcc tool quality-gate --spec SPEC-003` |

@@ -31,8 +31,12 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
 3. **Handover packet, not file dumps.** Pass ≤ 300 words:
    `goal`, `ids` (IDEA/SPEC/STORY), `read` (paths + headings, never
    contents), `write` (expected artifact paths), `constraints`,
-   `confidence_threshold`, `budget` (token-guard estimate id, if one exists).
-   Shape: `.KCC/kernel/protocols/handover.md`.
+   `confidence_threshold`, `budget` (token-guard estimate id, if one exists),
+   `hints` (the active human hints for this agent: `kcc hint --pending --for
+   <agent> --all`; omit when none).
+   Shape: `.KCC/kernel/protocols/handover.md`. Hints given while a subagent runs
+   reach it by hook, and you relay them with `SendMessage`
+   (`.KCC/kernel/protocols/hints.md`).
 4. **Lazy reads.** The agent reads only its packet's `read` list and its
    own profile inputs. For files over ~400 lines or any
    `.KCC/kernel/protocols/*`, Grep for the heading first and read that

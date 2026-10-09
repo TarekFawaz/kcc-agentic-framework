@@ -59,7 +59,23 @@ Thresholds live in `.KCC/settings.json` -> `continuity`.
 | Harness | Source | Detection |
 |--|--|--|
 | Claude Code | status-line JSON `rate_limits.five_hour` / `seven_day` (`used_percentage`, `resets_at`) and `context_window.used_percentage`, written to `coordination/usage.json` by `.KCC/tools/kcc-statusline` | A `PreToolUse` hook (`kcc-limit-guard`) reads `usage.json` and blocks at the hard threshold |
+| Claude Code in the **VS Code extension** or `claude -p` | the status line does not run there, so `usage.json` is never written and the guard sees nothing | The `StopFailure` hook (`kcc-limit-hook`, matcher `rate_limit`) fires when a turn ends on a usage limit; see below |
 | Codex, OpenCode, generic | not exposed | The watcher detects rate-limit errors in the harness output or exit code, or the human runs `kcc-checkpoint -Reason manual`. The reset time comes from the error text, or `continuity.default_wait_minutes` |
+
+**Limit hit in a session nobody supervises (`kcc-limit-hook`).** Claude Code
+reports a turn that ended on a rate limit through the `StopFailure` hook. The
+hook script reads the exact reset time from the session transcript
+(`apiErrorParams.rate_limit_info.resetsAt`; the transcript is
+`transcript_path` in the hook input), writes `coordination/run/limit.json`
+and a `limit-hard` restore point, emits `limit-reached`, and arms
+`kcc-limit-watch` with the session id and the reset time. If the transcript
+has no usable time it falls back to the clock text in the message
+(`resets 10:50pm (Europe/Stockholm)`, read in that zone where the shell has a
+zone database) and then to `continuity.default_wait_minutes`. Before the
+watcher resumes it checks the transcript (`--skip-if-active`): when the human
+continued the session by hand after the limit, it emits `resume-skipped` and
+starts nothing, so two writers never share one session. `kcc doctor
+--fix-hooks` adds the hook to an existing `.claude/settings.json`.
 
 **Watcher (`kcc-limit-watch`):** a detached background process. It sleeps
 until `resets_at` plus `continuity.resume_grace_seconds`, then resumes the run
@@ -92,7 +108,7 @@ waits and resumes it, so nothing depends on a background process surviving.
 | Driver | `kcc run --input <...>` / `kcc run --resume` | The `kcc-run` state machine. It runs with `KCC_SUPERVISED=1`, so on a limit it writes the `limit-hard` restore point and `coordination/run/limit.json`, exits 5, and arms no watcher. The CLI waits and calls `kcc-run --resume` |
 | Wrap | `kcc run --wrap [--harness <name>] -- <command...>` | Any harness command line. The CLI reads its output, writes the restore point itself, waits, and resumes with the `continuity.resume` template (or `continuity.start` when no session id was seen) |
 
-Limit detection is the same for every harness, in this order:
+Limit detection is the same for every harness, in this order. Claude Code's own wording is "You've hit your **session** limit · resets 10:50pm (Europe/Stockholm)" (also "weekly"); its transcript and `stream-json` records carry `apiError: usage_limit_reached` and `rate_limit_info.status: rejected` with `resetsAt` as an epoch.
 
 1. **Structured output.** A JSON line of a failing run that carries a
    rate-limit key (`structured_keys` in the pattern table) or status 429.
@@ -112,7 +128,8 @@ The supervisor resumes at the reset time plus `resume_grace_seconds`, at
 most `max_resumes` times, then exits 5. `--no-wait` exits 5 at the first
 limit instead (driver mode then arms `kcc-limit-watch` as before). A resume
 template that contains a permission-bypass flag is refused. `kcc limits`
-shows the usage windows, the last limit, and the next resume;
+shows the usage windows, the last limit, the next resume, and (for Claude Code)
+the last limit message found in this workspace's recent session transcripts;
 `coordination/run/limit.json` holds the same record.
 
 ## Harness handover (`kcc-handover`)

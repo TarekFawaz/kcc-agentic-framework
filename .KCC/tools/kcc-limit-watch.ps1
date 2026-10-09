@@ -35,7 +35,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 # No param() block on purpose: PowerShell parameter binding rejects the wrapped
 # command's own tokens ("--", "--flag") under -File, so arguments are parsed
 # by hand from the raw $args. Flags are case-insensitive; --kebab-case aliases
-# (--arm, --harness, --session-id, ...) are accepted like the bash tool.
+# (--arm, --harness, --session-id, --skip-if-active, ...) are accepted like the bash tool.
 
 $ErrorActionPreference = 'Stop'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -44,7 +44,7 @@ function Fail([string]$msg) { [Console]::Error.WriteLine('error: ' + $msg); exit
 
 $Arm = $false; $Run = $false; $Wrap = $false; $DryRun = $false
 $Harness = 'claude'; $SessionId = ''; $ResetAt = ''; $Command = ''; $RepoRoot = ''
-$WaitMinutes = -1; $GraceSeconds = -1; $MaxResumes = -1
+$WaitMinutes = -1; $GraceSeconds = -1; $MaxResumes = -1; $SkipIfActive = ''
 $rest = @()
 $raw = @($args | ForEach-Object { [string]$_ })
 $i = 0
@@ -63,6 +63,7 @@ while ($i -lt $raw.Count) {
         'sessionid' { $SessionId = [string]$val; $i += 2; continue }
         'resetat' { $ResetAt = [string]$val; $i += 2; continue }
         'command' { $Command = [string]$val; $i += 2; continue }
+        'skipifactive' { $SkipIfActive = [string]$val; $i += 2; continue }
         'reporoot' { $RepoRoot = [string]$val; $i += 2; continue }
         'waitminutes' { $WaitMinutes = [int]$val; $i += 2; continue }
         'graceseconds' { $GraceSeconds = [int]$val; $i += 2; continue }
@@ -96,6 +97,7 @@ if ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) { $o
 $psExe = (Get-Process -Id $PID).Path
 
 function NowEpoch { return [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+$ArmEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 function IsoNow { return [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') }
 function FmtEpoch([int64]$e) { return [DateTimeOffset]::FromUnixTimeSeconds($e).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss zzz') }
 function Write-Log([string]$msg) {
@@ -290,6 +292,7 @@ if ($mode -eq 'arm') {
     if ($GraceSeconds -ge 0) { $argList += @('-GraceSeconds', $GraceSeconds) }
     if ($MaxResumes -ge 0) { $argList += @('-MaxResumes', $MaxResumes) }
     if ($Command) { $argList += @('-Command', (Quote-Arg $Command)) }
+    if ($SkipIfActive) { $argList += @('-SkipIfActive', (Quote-Arg $SkipIfActive)) }
     if ($DryRun) { Write-Output ("[dry-run] would spawn: $psExe " + ($argList -join ' ')); exit 0 }
     $sp = @{ FilePath = $psExe; ArgumentList = ($argList -join ' '); PassThru = $true }
     if ($onWindows) { $sp['WindowStyle'] = 'Hidden' }
@@ -325,6 +328,15 @@ function Invoke-WaitAndResume($reset) {
             Start-Sleep -Seconds $left
         }
         Update-Heartbeat
+        if ($attempts -eq 1 -and $SkipIfActive -and (Test-Path -LiteralPath $SkipIfActive)) {
+            $mt = [DateTimeOffset](Get-Item -LiteralPath $SkipIfActive).LastWriteTimeUtc
+            if ($mt.ToUnixTimeSeconds() -gt $ArmEpoch + 120) {
+                Write-Log "session transcript changed after the limit hit ($SkipIfActive); the human continued it, so no unattended resume"
+                Invoke-Emit 'resume-skipped' ([ordered]@{ harness = $Harness; reason = 'session-active' })
+                Write-Attempts 0
+                return 0
+            }
+        }
         $before = Get-LatestCp
         Write-Log "resume started: $cmd"
         Invoke-Emit 'resume-started' ([ordered]@{ harness = $Harness; attempt = $attempts; command = $cmd })

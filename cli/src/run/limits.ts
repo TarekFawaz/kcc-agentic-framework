@@ -1,3 +1,5 @@
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { readJson } from "../fsutil";
 
@@ -22,7 +24,7 @@ export function loadPatterns(root: string, harness: string): LimitPatterns {
   const keys = file["structured_keys"];
   return {
     regex: new RegExp(source, "i"),
-    structuredKeys: Array.isArray(keys) ? keys.map(String) : ["rate_limit_error", "rate_limits", "rate_limit", "resets_at", "reset_at", "retry_after", "usage_limit"],
+    structuredKeys: Array.isArray(keys) ? keys.map(String) : ["usage_limit_reached", "rate_limit_error", "rate_limits", "rate_limit", "resets_at", "reset_at", "retry_after", "usage_limit"],
   };
 }
 
@@ -38,6 +40,24 @@ const UNIT_SECONDS: [RegExp, number][] = [
   [/^(m|min|mins|minute|minutes)$/, 60],
   [/^(s|sec|secs|second|seconds)$/, 1],
 ];
+
+/**
+ * Next occurrence of a wall-clock time in an IANA zone, as epoch seconds. Claude Code words its
+ * limit message "resets 10:50pm (Europe/Stockholm)", and that zone is not always this machine's.
+ */
+function zonedNext(hour: number, minute: number, zone: string, now: number): number | undefined {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    const o: Record<string, number> = {};
+    for (const p of fmt.formatToParts(new Date(now * 1000))) if (p.type !== "literal") o[p.type] = Number(p.value);
+    const offsetMs = Date.UTC(o.year!, o.month! - 1, o.day!, o.hour!, o.minute!, o.second!) - now * 1000;
+    let epoch = (Date.UTC(o.year!, o.month! - 1, o.day!, hour, minute, 0) - offsetMs) / 1000;
+    if (epoch <= now) epoch += 86400;
+    return Math.floor(epoch);
+  } catch {
+    return undefined; // unknown zone name
+  }
+}
 
 /** Reset time from one line of harness output. Same formats as kcc-run and kcc-limit-watch. */
 export function parseReset(line: string, now: number): number | undefined {
@@ -69,6 +89,9 @@ export function parseReset(line: string, now: number): number | undefined {
     if (m[4] === "pm" && hour < 12) hour += 12;
     if (m[4] === "am" && hour === 12) hour = 0;
     if (hour < 24) {
+      const zone = /\(([a-z_]+\/[a-z_+-]+(?:\/[a-z_+-]+)?)\)/i.exec(line)?.[1];
+      const zoned = zone ? zonedNext(hour, Number(m[3] ?? 0), zone, now) : undefined;
+      if (zoned !== undefined) return zoned;
       const d = new Date(now * 1000);
       d.setHours(hour, Number(m[3] ?? 0), 0, 0);
       if (d.getTime() / 1000 <= now) d.setDate(d.getDate() + 1);
@@ -76,6 +99,15 @@ export function parseReset(line: string, now: number): number | undefined {
     }
   }
   return undefined;
+}
+
+/** True when a Claude Code rate_limit_info object says the request was rejected. */
+function findRejected(value: unknown, depth = 0): boolean {
+  if (depth > 6 || value === null || typeof value !== "object") return false;
+  const o = value as Record<string, unknown>;
+  const info = o.rate_limit_info as { status?: unknown } | undefined;
+  if (info && typeof info === "object" && info.status === "rejected") return true;
+  return Object.values(o).some((v) => findRejected(v, depth + 1));
 }
 
 function findKey(value: unknown, keys: string[], depth = 0): boolean {
@@ -104,7 +136,8 @@ export function detectLimit(lines: string[], exitCode: number, patterns: LimitPa
       const obj = JSON.parse(s) as Record<string, unknown>;
       const failing = exitCode !== 0 || obj.is_error === true || obj.type === "error" || obj.error !== undefined;
       const status = obj.status === 429 || (obj.error as { status?: number } | undefined)?.status === 429;
-      if (failing && (status || findKey(obj, patterns.structuredKeys))) hit = { hit: true, source: "structured" };
+      // A rejected rate_limit_info is a limit even on a line that is not marked as an error.
+      if ((failing && (status || findKey(obj, patterns.structuredKeys))) || findRejected(obj)) hit = { hit: true, source: "structured" };
     } catch {
       // not JSON after all
     }
@@ -127,4 +160,87 @@ export function sessionId(lines: string[]): string | undefined {
     if (m) found = m[1];
   }
   return found;
+}
+
+export interface TranscriptLimit {
+  /** Unix seconds of the limit message. */
+  at: number;
+  resetsAt?: number;
+  /** five_hour, seven_day, ... as Claude Code names the window. */
+  window?: string;
+  session?: string;
+  file: string;
+}
+
+const TAIL_BYTES = 512 * 1024;
+
+function tailText(file: string): string {
+  const fd = openSync(file, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(len);
+    readSync(fd, buf, 0, len, size - len);
+    return buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The last usage-limit message Claude Code recorded in one session transcript (JSONL). */
+export function scanTranscript(file: string): TranscriptLimit | undefined {
+  let found: TranscriptLimit | undefined;
+  for (const line of tailText(file).split("\n")) {
+    if (!line.includes("usage_limit_reached") && !line.includes('"rejected"')) continue;
+    try {
+      const o = JSON.parse(line) as { apiError?: string; timestamp?: string; sessionId?: string; apiErrorParams?: { rate_limit_info?: { status?: string; resetsAt?: number; rateLimitType?: string } } };
+      const info = o.apiErrorParams?.rate_limit_info;
+      if (o.apiError !== "usage_limit_reached" && info?.status !== "rejected") continue;
+      const at = o.timestamp ? Math.floor(Date.parse(o.timestamp) / 1000) : 0;
+      found = { at, resetsAt: info?.resetsAt, window: info?.rateLimitType, session: o.sessionId, file };
+    } catch {
+      // a partial first line of the tail, or not JSON
+    }
+  }
+  return found;
+}
+
+/** Claude Code keeps transcripts under ~/.claude/projects/<path with every non-alphanumeric as ->. */
+export function transcriptDir(root: string, home = homedir()): string | undefined {
+  const base = join(home, ".claude", "projects");
+  if (!existsSync(base)) return undefined;
+  const slug = root.replace(/[^A-Za-z0-9]/g, "-").toLowerCase();
+  const name = readdirSync(base).find((n) => n.toLowerCase() === slug);
+  return name ? join(base, name) : undefined;
+}
+
+/** Newest usage-limit message in this workspace's recent Claude Code sessions. */
+export function latestTranscriptLimit(root: string, home = homedir()): TranscriptLimit | undefined {
+  const dir = transcriptDir(root, home);
+  if (!dir) return undefined;
+  const recent = readdirSync(dir)
+    .filter((n) => n.endsWith(".jsonl"))
+    .map((n) => ({ file: join(dir, n), mtime: statSync(join(dir, n)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, 5);
+  // A limit often lands in a subagent's transcript first: <session-id>/subagents/agent-*.jsonl.
+  const files = recent.map((r) => r.file);
+  for (const { file } of recent) {
+    const subDir = join(file.slice(0, -".jsonl".length), "subagents");
+    if (!existsSync(subDir)) continue;
+    files.push(
+      ...readdirSync(subDir)
+        .filter((n) => n.endsWith(".jsonl"))
+        .map((n) => ({ file: join(subDir, n), mtime: statSync(join(subDir, n)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, 10)
+        .map((r) => r.file),
+    );
+  }
+  let best: TranscriptLimit | undefined;
+  for (const file of files) {
+    const hit = scanTranscript(file);
+    if (hit && (!best || hit.at > best.at)) best = hit;
+  }
+  return best;
 }

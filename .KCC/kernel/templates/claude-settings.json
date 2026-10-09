@@ -11,6 +11,10 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-limit-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-hint.sh\" inject"
           }
         ]
       },
@@ -33,6 +37,15 @@
             "command": "bash -c 'echo \"[HOOK] Implementer starting. Branch: $(git branch --show-current). Uncommitted: $(git status --porcelain | wc -l) files\"'"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-hint.sh\" inject"
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -41,6 +54,38 @@
           {
             "type": "command",
             "command": "powershell -ExecutionPolicy Bypass -File \"%CLAUDE_PROJECT_DIR%\\.KCC\\tools\\record-token-actuals.ps1\" -FromHookStdin"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-hint.sh\" inject"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-hint.sh\" inject"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "rate_limit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-limit-hook.sh\""
           }
         ]
       }

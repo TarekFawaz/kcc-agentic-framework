@@ -4,7 +4,7 @@ import { UsageError, workspace } from "../args";
 import { readJson, writeJson } from "../fsutil";
 import { isWindows, runTool } from "../platform";
 import { readSettings } from "../settings";
-import { detectLimit, loadPatterns, sessionId } from "./limits";
+import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
 const RESUME_PROMPT = "Read coordination/checkpoints/latest.md and continue the KCC run from next_action.";
 const BYPASS = /dangerously|bypassPermissions|--yolo|skip-permissions/i;
@@ -196,7 +196,18 @@ export function limits(argv: string[]): number {
     return `${w.pct}%${w.resets_at ? `, resets ${clock(w.resets_at)}` : ""}`;
   };
   console.log("Usage (Claude Code status line; other harnesses do not report usage):");
-  console.log(usage ? `  5-hour window: ${win("five_hour")}\n  7-day window:  ${win("seven_day")}` : "  no data yet (coordination/usage.json is written by the Claude Code status line)");
+  if (usage) console.log(`  5-hour window: ${win("five_hour")}\n  7-day window:  ${win("seven_day")}`);
+  else {
+    console.log("  no percentages: coordination/usage.json is written only by the Claude Code status line,");
+    console.log("  which the VS Code extension and `claude -p` do not run. A limit that is hit is still caught");
+    console.log("  by the StopFailure hook (kcc-limit-hook), which reads the reset time from the session transcript.");
+  }
+  const seen = latestTranscriptLimit(root);
+  if (seen) {
+    const live = seen.resetsAt !== undefined && seen.resetsAt * 1000 > Date.now();
+    const reset = seen.resetsAt ? `reset ${clock(seen.resetsAt)}${live ? " (still blocked)" : " (already reset)"}` : "reset not stated";
+    console.log(`Claude session transcripts: last limit message ${seen.at ? clock(seen.at) : "(time unknown)"}${seen.window ? `, ${seen.window} window` : ""}, ${reset}`);
+  }
   console.log("Last limit:");
   if (!last) console.log("  none recorded");
   else {
