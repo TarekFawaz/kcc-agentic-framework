@@ -75,8 +75,8 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    Run `kcc route SPEC-ID` after each plan: it writes `## Routing` into `plan.md` (model
    and effort per backlog item, from its Complexity, files, domain and security words). Put each
    item's row in its handover packet; a wave runs on the strongest row of its items, and a retry
-   after a FAIL raises the effort one step. Security-sensitive items (auth, crypto, secrets, personal data,
-   untrusted input) never run below `high` effort. Any move to `strong-reasoning` still needs the gate.
+   after a FAIL raises the effort one step. A security-sensitive item (auth, crypto, secrets, personal data,
+   untrusted input) never runs below `high` effort. Any move to `strong-reasoning` still needs the gate.
 8. **Gates are scripts.** A delegate's work is done only when the state's
    exit-check tool passes (`.KCC/kernel/contracts/tool-contract.md`). Route
    violations to their `fix_owner`. Exit 3 (deferred) is never a pass.
