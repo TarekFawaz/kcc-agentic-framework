@@ -775,6 +775,14 @@ $outFile = Join-Path $outDir 'index.html'
 
 Write-Host "Dashboard written to $outFile"
 Write-Host ("  ideas={0} specs={1} events={2} checkpoints={3} sessions={4} decisions={5}" -f @($data.ideas).Count, @($data.specs).Count, @($data.events).Count, @($data.checkpoints).Count, @($data.sessions).Count, (@($data.decisions).Count + @($data.humanDecisions).Count))
+# A lane (<root>/.kcc-lanes/SPEC-x) builds its own page, but the page people look at is the workspace's. Rebuild that one
+# too, so lane activity reaches it even when the scheduler that normally refreshes it is not running.
+$parentRoot = $null
+if (($env:KCC_DASH_PARENT -ne '1') -and ($RepoRoot -match '[\\/]\.kcc-lanes[\\/][^\\/]+$')) { $parentRoot = Split-Path -Parent (Split-Path -Parent $RepoRoot) }
+if ($parentRoot -and (Test-Path -LiteralPath (Join-Path $parentRoot 'coordination/lanes.json')) -and (Test-Path -LiteralPath (Join-Path $parentRoot '.KCC/tools/build-dashboard.ps1'))) {
+    $env:KCC_DASH_PARENT = '1'
+    try { & (Join-Path $parentRoot '.KCC/tools/build-dashboard.ps1') -RepoRoot $parentRoot *> $null } catch { } finally { $env:KCC_DASH_PARENT = $null }
+}
 if ($Open) {
     # KCC_OPEN_LOG: automation hook. Record the path instead of launching a browser.
     if ($env:KCC_OPEN_LOG) { Add-Content -LiteralPath $env:KCC_OPEN_LOG -Value $outFile } else { Start-Process $outFile }

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
@@ -60,6 +60,24 @@ describe("dashboard during the lane phase", () => {
       const data = JSON.parse(/<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!);
       expect(data.lanes[0]).toMatchObject({ spec: "SPEC-001", runState: "15", runWave: "1", runStatus: "running" });
       expect(html).toContain("specs running in lanes: ");
+    } finally {
+      rmSync(r, { recursive: true, force: true });
+    }
+  });
+  test("building the page inside a lane also rebuilds the workspace's page, so lane work reaches it without the scheduler", () => {
+    const r = mkdtempSync(join(tmpdir(), "kcc-dash-parent-"));
+    try {
+      applyPayload(r);
+      mkdirSync(join(r, "coordination"), { recursive: true });
+      writeFileSync(join(r, "coordination", "lanes.json"), JSON.stringify({ "SPEC-001": { status: "running", dir: "x" } }));
+      const lane = join(r, ".kcc-lanes", "SPEC-001");
+      applyPayload(lane);
+      mkdirSync(join(lane, "coordination", "run"), { recursive: true });
+      writeFileSync(join(lane, "coordination", "run", "run.json"), JSON.stringify({ status: "running", state: "15", wave: "1" }));
+      expect(existsSync(join(r, "dashboard", "index.html"))).toBe(false);
+      expect(runTool(lane, "build-dashboard", ["--repo-root", lane], { capture: true }).status).toBe(0);
+      expect(existsSync(join(lane, "dashboard", "index.html"))).toBe(true);
+      expect(existsSync(join(r, "dashboard", "index.html"))).toBe(true);
     } finally {
       rmSync(r, { recursive: true, force: true });
     }

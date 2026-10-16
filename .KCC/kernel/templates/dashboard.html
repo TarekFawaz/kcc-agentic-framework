@@ -222,11 +222,16 @@ D.events.forEach(function(e){if(typeof e.payload==='string'&&/^[\[{]/.test(e.pay
 /* After the shared states the driver stops at --until 9 and the lane scheduler builds the specs, so run.json can say
    "stopped" for hours while lanes work. A lane whose own run is running and whose files changed in the last 30
    minutes means the run is running, at the earliest lane stage. */
-(function(){var L=(D.lanes||[]).filter(function(l){var u=Date.parse(l.updated||'');return l.runStatus==='running'&&!isNaN(u)&&(Date.parse(D.generatedAt||'')||Date.now())-u<30*60000;});
-  if(!L.length||!D.run||!/^(stopped|idle)$/.test(D.run.status||''))return;
-  var st=L.map(function(l){return Number(l.runState);}).filter(function(n){return isFinite(n)&&n>0;});
-  D.run.status='running';D.run.reason='specs running in lanes: '+L.map(function(l){return l.spec||l.name;}).join(', ');
-  if(st.length)D.run.state=Math.min.apply(null,st);})();
+(function(){var gen=Date.parse(D.generatedAt||'')||Date.now();
+  var recent=function(l){var u=Date.parse(l.updated||'');return !isNaN(u)&&gen-u<30*60000;};
+  var L=(D.lanes||[]).filter(function(l){return l.runStatus==='running'&&recent(l);});
+  var P=(D.lanes||[]).filter(function(l){return l.runStatus==='paused';});
+  if(!D.run||!/^(stopped|idle)$/.test(D.run.status||''))return;
+  if(L.length){var st=L.map(function(l){return Number(l.runState);}).filter(function(n){return isFinite(n)&&n>0;});
+    D.run.status='running';D.run.reason='specs running in lanes: '+L.map(function(l){return l.spec||l.name;}).join(', ');
+    if(st.length)D.run.state=Math.min.apply(null,st);}
+  else if(P.length){D.run.status='paused';D.run.reason='waiting on a gate in '+P.map(function(l){return l.spec||l.name;}).join(', ');
+    var ps=P.map(function(l){return Number(l.runState);}).filter(function(n){return isFinite(n)&&n>0;});if(ps.length)D.run.state=Math.min.apply(null,ps);}})();
 
 /* ---------- helpers ---------- */
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}

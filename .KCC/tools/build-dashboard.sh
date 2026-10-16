@@ -638,6 +638,18 @@ awk -v jf="$JSON_FILE" '{ i=index($0,"__KCC_DATA__"); if(i>0){ printf "%s", subs
 
 echo "Dashboard written to $OUT_FILE"
 echo "  specs/events/sessions collected; open it in a browser (works offline)"
+# A lane (<root>/.kcc-lanes/SPEC-x) builds its own page, but the page people look at is the workspace's. Rebuild that one
+# too, so lane activity reaches it even when the scheduler that normally refreshes it is not running.
+if [[ "${KCC_DASH_PARENT:-}" != "1" ]]; then
+  lane_norm="$(printf '%s' "$REPO_ROOT" | tr '\134' '/')"
+  lane_norm="${lane_norm%/}"
+  if [[ "$lane_norm" =~ /\.kcc-lanes/[^/]+$ ]]; then
+    parent_root="${REPO_ROOT%/*}"; parent_root="${parent_root%/*}"
+    if [[ -f "$parent_root/coordination/lanes.json" && -f "$parent_root/.KCC/tools/build-dashboard.sh" ]]; then
+      KCC_DASH_PARENT=1 bash "$parent_root/.KCC/tools/build-dashboard.sh" --repo-root "$parent_root" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
 if [[ "$OPEN" -eq 1 ]]; then
   if [[ -n "${KCC_OPEN_LOG:-}" ]]; then printf '%s\n' "$OUT_FILE" >> "$KCC_OPEN_LOG"   # automation hook: record instead of launching
   elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$OUT_FILE" >/dev/null 2>&1 &
