@@ -956,8 +956,12 @@ check_bugs() {
         fixing|fixed|verified)
           rt="$(table_field "$it_file" 'Regression test')"
           if [ "$rt" = "__NOCOL__" ]; then rt=""; fi
+          rt_raw="$rt"
           rt="$(printf '%s' "$rt" | grep -oE '[A-Za-z]+-[0-9]+' | head -n 1 || true)"
-          if [ -z "$rt" ]; then
+          # A bug no test can express (a missing document, a gate) may say so: `n/a (<reason>)`. It is a warning, not a pass.
+          if [ -z "$rt" ] && printf '%s' "$rt_raw" | grep -qE '^[[:space:]]*[Nn]/[Aa][[:space:]]*[(:-].{8,}'; then
+            violation "BUG-005" "warning" "human" "$br has no regression Test ID: $(printf '%s' "$rt_raw" | tr -s ' ')" "$br"
+          elif [ -z "$rt" ]; then
             violation "BUG-004" "error" "planner" "$br is $(lower "$st") but names no regression Test ID." "$br"
           elif ! printf '%s\n' "$test_ids" | grep -qxF "$rt"; then
             violation "BUG-004" "error" "planner" "$br regression test $rt is not in plan.md atomic test cases." "$br"

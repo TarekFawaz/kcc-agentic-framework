@@ -222,3 +222,27 @@ ${row}
   });
 });
 
+describe("a Bug no test can express", () => {
+  // Round 9: Bug-003 (the architecture documents were a stub) is verified, and no Test ID can cover a missing document.
+  const crc = (root: string, cell: string) => {
+    const dir = readdirSync(join(root, "specs")).find((d) => d.startsWith("IDEA-"))!;
+    const spec = readdirSync(join(root, "specs", dir)).find((d) => d.startsWith("SPEC-"))!;
+    mkdirSync(join(root, "specs", dir, spec, "Backlog"), { recursive: true });
+    writeFileSync(join(root, "specs", dir, spec, "Backlog", "Bug-009-docs.md"), `# Bug-009: docs
+
+| Type | Parent | Source | Severity | Status | Story / AC | Regression test | Evidence |
+|--|--|--|--|--|--|--|--|
+| Bug | [[../SPEC-001]] | verifier | major | verified | SPEC / QG-ARCH-DOCS | ${cell} | none |
+`);
+    const r = runTool(root, "check-run-conformance", ["--repo-root", root, "--scope", "bugs", "--spec", "SPEC-001", "--json"], { capture: true });
+    return { rc: r.status, ids: [...r.stdout.matchAll(/"id"\s*:\s*"(BUG-\d+)"/g)].map((m) => m[1]) };
+  };
+  test("n/a with a reason is a warning (BUG-005); a bare n/a or an empty cell is still BUG-004", () => {
+    const root = workspace("bug-na");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    expect(crc(root, "n/a (docs gate QG-ARCH-DOCS: no Test ID covers a missing document)")).toEqual({ rc: 0, ids: ["BUG-005"] });
+    expect(crc(root, "n/a").ids).toEqual(["BUG-004"]);
+    expect(crc(root, "").ids).toEqual(["BUG-004"]);
+  });
+});
+

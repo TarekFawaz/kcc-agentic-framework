@@ -32,7 +32,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
       specs        - SPEC-001..008, SPEC-LEGACY, SZ-2, SZ-3, SZ-5 (spec-layout v6).
       plan         - PLAN-001..005, SZ-4 (waves, atomic tests, AC coverage).
       review       - REV-001..005 (verdict, evidence, traceability, open bugs).
-      bugs         - BUG-001..004 (bug table fields, enums, regression tests).
+      bugs         - BUG-001..005 (bug table fields, enums, regression tests; n/a with a reason is a BUG-005 warning).
       deep         - DEEP-001..003 (every DeepThinking spawn was approved, within the cap and the task list).
 
     Read-only. PowerShell 5.1 compatible. No && operator. See
@@ -1058,7 +1058,11 @@ function Invoke-BugsChecks {
             }
             if (@('fixing', 'fixed', 'verified') -contains $st) {
                 $rt = [regex]::Match([string]$b['Regression test'], '[A-Za-z]+-\d+')
-                if (-not $rt.Success) {
+                # A bug no test can express (a missing document, a gate) may say so: `n/a (<reason>)`. It is a warning, not a pass.
+                if (-not $rt.Success -and ([string]$b['Regression test']) -match '^\s*(?i:n/a)\s*[(:-].{8,}') {
+                    Add-Violation 'BUG-005' 'warning' 'human' ("{0} has no regression Test ID: {1}" -f $brel, ([string]$b['Regression test']).Trim()) $brel
+                }
+                elseif (-not $rt.Success) {
                     Add-Violation 'BUG-004' 'error' 'planner' ("{0} is {1} but names no regression Test ID." -f $brel, $st) $brel
                 }
                 elseif ($testIds -notcontains $rt.Value) {
