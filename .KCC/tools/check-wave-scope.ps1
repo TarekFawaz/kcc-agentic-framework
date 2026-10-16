@@ -38,7 +38,7 @@ param(
     [string]$Spec,
     [string]$Wave,
     [string]$Base,
-    [string]$TestCommand,
+    [string]$TestCommand,   # a command, or 'auto' to run the tests the workspace already has
     [string]$Scope = 'all',
     [switch]$Json
 )
@@ -351,8 +351,65 @@ if ($waveItems.Count -gt 0 -and $declaresSrc -and $curHit -eq 0) {
 }
 
 # --- WAVE-002 ---
+# -TestCommand auto: run the tests the workspace already has, per project (npm test where a test script exists and
+# dependencies are installed, go test, dotnet test, pytest), so a later wave that breaks an earlier wave's test fails
+# at the wave that broke it, not three stages later. Nothing runnable yet (a scaffold wave) is a warning, not a failure.
+function Get-AutoTestCommands {
+    $found = @()
+    $srcRoot = Join-Path $RepoRoot 'src'
+    if (-not (Test-Path -LiteralPath $srcRoot)) { return $found }
+    $skip = @('node_modules', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'bin', 'obj', 'target')
+    $dirs = @()
+    foreach ($top in @(Get-ChildItem -LiteralPath $srcRoot -Directory -ErrorAction SilentlyContinue)) {
+        $dirs += $top.FullName
+        foreach ($sub in @(Get-ChildItem -LiteralPath $top.FullName -Directory -ErrorAction SilentlyContinue)) { if ($skip -notcontains $sub.Name) { $dirs += $sub.FullName } }
+    }
+    foreach ($d in $dirs) {
+        $pj = Join-Path $d 'package.json'
+        if ((Test-Path -LiteralPath $pj) -and (Test-Path -LiteralPath (Join-Path $d 'node_modules'))) {
+            $has = $false
+            try { $o = [System.IO.File]::ReadAllText($pj) | ConvertFrom-Json; if ($o.scripts -and ($o.scripts.PSObject.Properties.Name -contains 'test')) { $has = $true } } catch { $has = $false }
+            if ($has) { $found += , @($d, 'npm test --silent'); continue }
+        }
+        if (Test-Path -LiteralPath (Join-Path $d 'go.mod')) { $found += , @($d, 'go test ./...'); continue }
+        $dn = @(Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(sln|csproj)$' })
+        if ($dn.Count -gt 0) { $found += , @($d, 'dotnet test --nologo'); continue }
+        $py = @(Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'pytest.ini' -or $_.Name -eq 'pyproject.toml' -or $_.Name -match '^test_.*\.py$' })
+        if ($py.Count -gt 0) { $found += , @($d, 'python -m pytest -q') }
+    }
+    return $found
+}
 $testExit = $null
-if ($TestCommand) {
+if ($TestCommand -eq 'auto') {
+    $auto = @(Get-AutoTestCommands)
+    if ($auto.Count -eq 0) {
+        Add-Violation 'WAVE-005' 'warning' 'implementer' 'No runnable tests in the workspace yet (no test script with installed dependencies); nothing to run for this wave.' ''
+    }
+    $failedProjects = @()
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    foreach ($pair in $auto) {
+        Push-Location -LiteralPath $pair[0]
+        try {
+            if ($env:OS -eq 'Windows_NT') { $txt = (& $env:ComSpec /d /c ($pair[1] + ' 2>&1') | Out-String) } else { $txt = (& /bin/sh -c ($pair[1] + ' 2>&1') | Out-String) }
+            $rc = $LASTEXITCODE
+        }
+        catch { $txt = [string]$_; $rc = 1 }
+        finally { Pop-Location }
+        [Console]::Error.WriteLine($txt)
+        if ($rc -ne 0) {
+            $tail = @(($txt -split "[\r\n]+") | Where-Object { $_.Trim() } | Select-Object -Last 8) -join ' | '
+            if ($tail.Length -gt 500) { $tail = $tail.Substring($tail.Length - 500) }
+            $failedProjects += ((Get-RelPath $pair[0]) + ' (' + $pair[1] + ', exit ' + $rc + '): ' + $tail)
+        }
+    }
+    $ErrorActionPreference = $old
+    $testExit = 0; if ($failedProjects.Count -gt 0) { $testExit = 1 }
+    if ($failedProjects.Count -gt 0) {
+        Add-Violation 'WAVE-002' 'error' 'implementer' ('The workspace tests fail after this wave; fix the code or the stale test that now disagrees with it. ' + ($failedProjects -join ' ;; ')) ''
+    }
+}
+elseif ($TestCommand) {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     Push-Location -LiteralPath $RepoRoot

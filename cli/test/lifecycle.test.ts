@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
+import { payloadFiles } from "../src/payload";
 import { isWindows, runTool } from "../src/platform";
 
 /**
@@ -243,6 +244,40 @@ describe("a Bug no test can express", () => {
     expect(crc(root, "n/a (docs gate QG-ARCH-DOCS: no Test ID covers a missing document)")).toEqual({ rc: 0, ids: ["BUG-005"] });
     expect(crc(root, "n/a").ids).toEqual(["BUG-004"]);
     expect(crc(root, "").ids).toEqual(["BUG-004"]);
+  });
+});
+
+describe("a wave that breaks a test fails at that wave (check-wave-scope -TestCommand auto)", () => {
+  // Round 9: Bug-001, a stale assertion from wave 1 that wave 2 made false, was found by TEST three stages later.
+  const wave = (root: string) => {
+    const r = runTool(root, "check-wave-scope", ["--repo-root", root, "--spec", "SPEC-001", "--wave", "1", "--test-command", "auto", "--json"], { capture: true });
+    return { rc: r.status, ids: [...r.stdout.matchAll(/"id"\s*:\s*"(WAVE-\d+)"/g)].map((m) => m[1]), out: r.stdout };
+  };
+  const project = (root: string, script: string, installed: boolean) => {
+    const d = join(root, "src", "IDEA-001-demo", "api");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "api", scripts: { test: script } }));
+    if (installed) mkdirSync(join(d, "node_modules"), { recursive: true });
+  };
+  test("a failing test script of an installed project is WAVE-002 with the output tail; a passing one is not; nothing installed yet is a warning", () => {
+    const root = workspace("wave-tests");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    project(root, 'node -e "console.log(String.fromCharCode(66,79,79,77)); process.exit(1)"', true);
+    const bad = wave(root);
+    expect(bad.ids).toContain("WAVE-002");
+    expect(bad.out).toContain("BOOM");
+    project(root, 'node -e "process.exit(0)"', true);
+    expect(wave(root).ids).not.toContain("WAVE-002");
+    rmSync(join(root, "src", "IDEA-001-demo", "api", "node_modules"), { recursive: true, force: true });
+    const none = wave(root);
+    expect(none.ids).not.toContain("WAVE-002");
+    expect(none.ids).toContain("WAVE-005");
+  });
+  test("both state tables pass -TestCommand auto to the wave check", () => {
+    for (const f of ["auto-states.json", "auto-states-fasttrack.json"]) {
+      const text = payloadFiles().get(`kernel/${f}`)!.toString("utf8");
+      expect(text).toContain('"-TestCommand", "auto"');
+    }
   });
 });
 

@@ -37,7 +37,7 @@
       "gate": { "all": "toolchain" }, "event": "toolchain-preflight-result" },
     { "id": 15, "name": "IMPLEMENT", "scope": "wave", "agent_fasttrack": "implementer",
       "command": "/spec-implement {SPEC} --wave {WAVE} --fasttrack {depthlevel} (one implementer subagent per item of the wave, all in one message, then check-wave-scope)",
-      "check": { "tool": "check-wave-scope", "args": ["-Spec", "{SPEC}", "-Wave", "{WAVE}"] },
+      "check": { "tool": "check-wave-scope", "args": ["-Spec", "{SPEC}", "-Wave", "{WAVE}", "-TestCommand", "auto"] },
       "event": "implement-completed" },
     { "id": 19, "name": "FIX", "scope": "spec", "agent_fasttrack": "implementer",
       "command": "/spec-implement {SPEC} --bugs --fasttrack {depthlevel} (fix every open Bug item of this spec and every violation named below, test first, set each Bug to fixed; write only the files they name)",

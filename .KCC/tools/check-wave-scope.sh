@@ -376,7 +376,49 @@ fi
 
 # --- WAVE-002 ---
 TEST_EXIT="null"
-if [ -n "$TEST_COMMAND" ]; then
+# --test-command auto: run the tests the workspace already has, per project (npm test where a test script exists and
+# dependencies are installed, go test, dotnet test, pytest), so a later wave that breaks an earlier wave's test fails
+# at the wave that broke it. Nothing runnable yet (a scaffold wave) is a warning, not a failure.
+auto_test_commands() { # prints "dir<TAB>command" lines
+  local src="$REPO_ROOT/src" top d tab
+  tab="$(printf '\t')"
+  [ -d "$src" ] || return 0
+  for top in "$src"/*/; do
+    [ -d "$top" ] || continue
+    for d in "${top%/}" "${top%/}"/*/; do
+      d="${d%/}"; [ -d "$d" ] || continue
+      case "$(basename "$d")" in node_modules|dist|build|coverage|.venv|venv|__pycache__|bin|obj|target) continue ;; esac
+      if [ -f "$d/package.json" ] && [ -d "$d/node_modules" ] && grep -q '"test"[[:space:]]*:' "$d/package.json"; then printf '%s%s%s\n' "$d" "$tab" 'npm test --silent'; continue; fi
+      if [ -f "$d/go.mod" ]; then printf '%s%s%s\n' "$d" "$tab" 'go test ./...'; continue; fi
+      if ls "$d"/*.sln "$d"/*.csproj >/dev/null 2>&1; then printf '%s%s%s\n' "$d" "$tab" 'dotnet test --nologo'; continue; fi
+      if [ -f "$d/pytest.ini" ] || [ -f "$d/pyproject.toml" ] || ls "$d"/test_*.py >/dev/null 2>&1; then printf '%s%s%s\n' "$d" "$tab" 'python -m pytest -q'; fi
+    done
+  done
+}
+if [ "$TEST_COMMAND" = "auto" ]; then
+  AUTO_CMDS="$(auto_test_commands)"
+  if [ -z "$AUTO_CMDS" ]; then
+    violation "WAVE-005" "warning" "implementer" "No runnable tests in the workspace yet (no test script with installed dependencies); nothing to run for this wave." ""
+  fi
+  FAILED_PROJECTS=""
+  TAB_CH="$(printf '\t')"
+  while IFS="$TAB_CH" read -r acd acc; do
+    [ -n "$acd" ] || continue
+    aout="$(cd "$acd" && bash -c "$acc" 2>&1)"; arc=$?
+    printf '%s\n' "$aout" 1>&2
+    if [ "$arc" -ne 0 ]; then
+      atail="$(printf '%s' "$aout" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 8 | tr '\n' '|' | cut -c1-500)"
+      FAILED_PROJECTS="$FAILED_PROJECTS${FAILED_PROJECTS:+ ;; }${acd#"$REPO_ROOT"/} ($acc, exit $arc): $atail"
+    fi
+  done <<AUTO_EOF
+$AUTO_CMDS
+AUTO_EOF
+  TEST_EXIT=0
+  if [ -n "$FAILED_PROJECTS" ]; then
+    TEST_EXIT=1
+    violation "WAVE-002" "error" "implementer" "The workspace tests fail after this wave; fix the code or the stale test that now disagrees with it. $FAILED_PROJECTS" ""
+  fi
+elif [ -n "$TEST_COMMAND" ]; then
   rc=0
   (cd "$REPO_ROOT" && bash -c "$TEST_COMMAND") 1>&2 || rc=$?
   TEST_EXIT="$rc"

@@ -62,7 +62,7 @@
       "gate": { "all": "toolchain" }, "event": "toolchain-preflight-result" },
     { "id": 15, "name": "IMPLEMENT", "scope": "wave", "agent_fasttrack": "implementer",
       "command": "/spec-implement {SPEC} --wave {WAVE} {fasttrack} {depthlevel}",
-      "check": { "tool": "check-wave-scope", "args": ["-Spec", "{SPEC}", "-Wave", "{WAVE}"] },
+      "check": { "tool": "check-wave-scope", "args": ["-Spec", "{SPEC}", "-Wave", "{WAVE}", "-TestCommand", "auto"] },
       "event": "implement-completed" },
     { "id": 16, "name": "TEST", "scope": "spec", "agent_fasttrack": "verifier",
       "command": "/spec-test {SPEC} {fasttrack} {depthlevel}",
