@@ -109,4 +109,14 @@ describe("a silent run never prompts", () => {
     expect(text("kcc-run.ps1")).toMatch(/if \(\$R\.silent -eq '1'\) \{[\s\S]*?return 'paused'/);
     expect(text("kcc-run.sh")).toMatch(/if \[\[ "\$R_silent" == "1" \]\]; then[\s\S]*?return 0/);
   });
+  test("both drivers read a hyphenated lower-case review verdict (toolchain-deferred) as TOOLCHAIN_DEFERRED", () => {
+    // Round 9: the review template writes `verdict: toolchain-deferred`; the parser stopped at the hyphen, read TOOLCHAIN,
+    // called it not approved and sent the spec round the FIX loop for a verdict that means "a scanner is missing".
+    const text = (n: string): string => payloadFiles().get(`tools/${n}`)!.toString("utf8");
+    expect(text("kcc-run.ps1")).toContain("([A-Za-z_-]+)");
+    expect(text("kcc-run.ps1")).toContain("TOOLCHAIN[_-]DEFERRED");
+    expect(text("kcc-run.sh")).toContain("([A-Za-z_-]+)");
+    expect(text("kcc-run.sh")).toContain("TOOLCHAIN[_-]DEFERRED");
+    expect(text("kcc-run.sh")).toContain("tr '-' '_'");
+  });
 });

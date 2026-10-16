@@ -537,9 +537,10 @@ function Run-Check($chk, $ctx, [string]$label) {
         if (-not $rf -or -not (Test-Path -LiteralPath $rf)) { return @{ rc = 1; viol = ('REVIEW-001 (verifier): review.md not found for ' + $ctx.SPEC) } }
         $rtxt = [System.IO.File]::ReadAllText($rf)
         $v = ''
-        $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_]+)')
-        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED)\b') }
-        if ($vm.Success) { $v = $vm.Groups[1].Value.ToUpperInvariant() }
+        $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
+        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
+        # The review template writes the verdict lower-case with hyphens (status/toolchain-deferred); read it the same as TOOLCHAIN_DEFERRED.
+        if ($vm.Success) { $v = ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
         if ($v -eq 'APPROVED') { return @{ rc = 0; viol = '' } }
         if ($v -eq 'TOOLCHAIN_DEFERRED') { return @{ rc = 3; viol = 'REVIEW-003 (human): review verdict TOOLCHAIN_DEFERRED (a required scanner is missing); this is not a pass' } }
         if (-not $v) { $v = 'missing' }

@@ -434,8 +434,8 @@ run_check() { # $1 idx, $2 label, $3 = "then"
       local rf rv=""
       rf="$(spec_dir "$C_ENTRY")/review.md"
       if [[ -z "$C_ENTRY" || ! -f "$rf" ]]; then CHK_RC=1; CHK_VIOL="REVIEW-001 (verifier): review.md not found for $C_SPEC"; return 0; fi
-      rv="$(tr -d '\r' < "$rf" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z')"
-      if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED' "$rf" | head -n 1 | tr 'a-z' 'A-Z' || true)"; fi
+      rv="$(tr -d '\r' < "$rf" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_-]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_')"
+      if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED' "$rf" | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_' || true)"; fi
       if [[ "$rv" == "APPROVED" ]]; then CHK_RC=0
       elif [[ "$rv" == "TOOLCHAIN_DEFERRED" ]]; then CHK_RC=3; CHK_VIOL="REVIEW-003 (human): review verdict TOOLCHAIN_DEFERRED (a required scanner is missing); this is not a pass"
       else CHK_RC=1; CHK_VIOL="REVIEW-002 (implementer): $C_SPEC review verdict is ${rv:-missing}; fix the open bugs and failing acceptance criteria listed in review.md, then re-review"; fi
