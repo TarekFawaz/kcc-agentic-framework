@@ -211,5 +211,14 @@ ${row}
     expect(d.out).toMatch(/"errors"\s*:\s*0/);
     expect(d.out).toMatch(/"status"\s*:\s*"deferred"/);
   });
+  test("a DEFERRED row outranks a JUnit failure the runner wrote for the same environment cause; a plain FAIL row does not", () => {
+    const root = workspace("trace-junit");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    mkdirSync(join(root, "TestResults", "IDEA-001", "SPEC-001"), { recursive: true });
+    writeFileSync(join(root, "src", "IDEA-001-demo", "app.test.ts"), "// T-001 export {};");
+    writeFileSync(join(root, "TestResults", "IDEA-001", "SPEC-001", "junit.xml"), '<testsuite><testcase name="T-001 stack"><failure message="build failed"/></testcase></testsuite>');
+    expect(trace(root, "| T-001 | DEFERRED (env) | image build cannot trust the proxy certificate |").rc).toBe(3);
+    expect(trace(root, "| T-001 | something else |").rc).toBe(1);
+  });
 });
 

@@ -308,12 +308,14 @@ foreach ($sp in $specs) {
             }
         }
         if (-not $pass) {
-            if ($fail) {
-                Add-Violation 'TRC-004' 'error' 'implementer' ("{0} Test ID {1} has a FAIL result." -f $sp.Id, $id) $srel
-            }
-            elseif ($deferred) {
+            # A summary row the verifier marked DEFERRED outranks a JUnit failure: the verifier saw the cause (an image
+            # build that cannot trust the proxy certificate, a missing daemon) and a runner writes a failure for it.
+            if ($deferred) {
                 $script:DeferredIds++
-                Add-Violation 'TRC-006' 'warning' 'human' ("{0} Test ID {1} is DEFERRED (a tool or service it needs is missing on this machine); this is not a pass." -f $sp.Id, $id) $srel
+                Add-Violation 'TRC-006' 'warning' 'human' ("{0} Test ID {1} is DEFERRED (a tool or service it needs is missing or unusable on this machine); this is not a pass." -f $sp.Id, $id) $srel
+            }
+            elseif ($fail) {
+                Add-Violation 'TRC-004' 'error' 'implementer' ("{0} Test ID {1} has a FAIL result." -f $sp.Id, $id) $srel
             }
             else {
                 Add-Violation 'TRC-003' 'error' 'verifier' ("{0} Test ID {1} has no PASS result in test-run-summary.md or JUnit XML under TestResults/." -f $sp.Id, $id) $srel

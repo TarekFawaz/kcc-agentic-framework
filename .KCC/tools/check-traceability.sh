@@ -368,11 +368,12 @@ EOF
       case "$jr" in *fail*) fail=1 ;; esac
     fi
     if [ "$pass" -eq 0 ]; then
-      if [ "$fail" -eq 1 ]; then
-        violation "TRC-004" "error" "implementer" "$id Test ID $t has a FAIL result." "$srel"
-      elif [ "$deferred" -eq 1 ]; then
+      # A summary row the verifier marked DEFERRED outranks a JUnit failure (the runner writes a failure for an environment cause).
+      if [ "$deferred" -eq 1 ]; then
         DEFERRED_IDS=$((DEFERRED_IDS + 1))
-        violation "TRC-006" "warning" "human" "$id Test ID $t is DEFERRED (a tool or service it needs is missing on this machine); this is not a pass." "$srel"
+        violation "TRC-006" "warning" "human" "$id Test ID $t is DEFERRED (a tool or service it needs is missing or unusable on this machine); this is not a pass." "$srel"
+      elif [ "$fail" -eq 1 ]; then
+        violation "TRC-004" "error" "implementer" "$id Test ID $t has a FAIL result." "$srel"
       else
         violation "TRC-003" "error" "verifier" "$id Test ID $t has no PASS result in test-run-summary.md or JUnit XML under TestResults/." "$srel"
       fi
