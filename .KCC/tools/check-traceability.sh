@@ -11,6 +11,8 @@
 #   TRC-002 implementer  Test ID not referenced by any test file under src/IDEA-{ID}-*/
 #   TRC-003 verifier     Test ID has no PASS result (test-run-summary.md row or JUnit XML)
 #   TRC-004 implementer  Test ID has only FAIL results
+#   TRC-006 human        (warning) summary row says DEFERRED: a tool or service it needs is missing; not a pass.
+#                        With no errors left the exit code is 3 (deferred).
 #
 # Without --spec only specs at Review/Done status (or with a review.md) are traced.
 #
@@ -45,6 +47,7 @@ REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 SPECS_DIR="$REPO_ROOT/specs"
 
 ERRORS=0
+DEFERRED_IDS=0
 WARNINGS=0
 VJSON=""
 TAB="$(printf '\t')"
@@ -345,13 +348,14 @@ EOF
         violation "TRC-002" "error" "implementer" "$id Test ID $t is not referenced by any test file under src/$idea-*/." "src/$idea"
       fi
     fi
-    pass=0; fail=0
+    pass=0; fail=0; deferred=0
     if [ -f "$summary" ]; then
       lines="$(tr -d '\r' < "$summary" | grep -E -- "$pat" || true)"
       if [ -n "$lines" ]; then
         while IFS= read -r l; do
           ll="$(lower "$l")"
-          if printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])fail(ed|ure)?([^a-z0-9_]|$)'; then fail=1
+          if printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])deferred([^a-z0-9_]|$)'; then deferred=1
+          elif printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])fail(ed|ure)?([^a-z0-9_]|$)'; then fail=1
           elif printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])pass(ed)?([^a-z0-9_]|$)'; then pass=1; fi
         done <<EOF
 $lines
@@ -366,6 +370,9 @@ EOF
     if [ "$pass" -eq 0 ]; then
       if [ "$fail" -eq 1 ]; then
         violation "TRC-004" "error" "implementer" "$id Test ID $t has a FAIL result." "$srel"
+      elif [ "$deferred" -eq 1 ]; then
+        DEFERRED_IDS=$((DEFERRED_IDS + 1))
+        violation "TRC-006" "warning" "human" "$id Test ID $t is DEFERRED (a tool or service it needs is missing on this machine); this is not a pass." "$srel"
       else
         violation "TRC-003" "error" "verifier" "$id Test ID $t has no PASS result in test-run-summary.md or JUnit XML under TestResults/." "$srel"
       fi
@@ -378,7 +385,7 @@ $SPECS
 EOF
 
 STATUS="pass"
-if [ "$ERRORS" -gt 0 ]; then STATUS="fail"; fi
+if [ "$ERRORS" -gt 0 ]; then STATUS="fail"; elif [ "$DEFERRED_IDS" -gt 0 ]; then STATUS="deferred"; fi
 if [ "$JSON" -eq 1 ]; then
   SPEC_JSON="null"
   if [ -n "$SPEC" ]; then SPEC_JSON="\"$(je "$SPEC")\""; fi
@@ -388,4 +395,5 @@ else
   echo "Errors: $ERRORS  Warnings: $WARNINGS"
 fi
 if [ "$ERRORS" -gt 0 ]; then exit 1; fi
+if [ "$DEFERRED_IDS" -gt 0 ]; then exit 3; fi
 exit 0

@@ -184,3 +184,32 @@ describe("the FIX state (a failed TEST or REVIEW sends the spec back to the impl
     expect(t.map((s) => s.name).slice(7, 10)).toEqual(["IMPLEMENT", "FIX", "TEST"]);
   });
 });
+
+describe("check-traceability and a test that needs a tool this machine lacks", () => {
+  // Round 9: T-029..T-032 need a Docker daemon. The verifier wrote DEFERRED rows; the check called them errors (exit 1),
+  // so the spec looped through FIX although no code change could help. A DEFERRED row is not a pass and not a failure.
+  const trace = (root: string, row: string) => {
+    mkdirSync(join(root, "TestResults", "IDEA-001", "SPEC-001"), { recursive: true });
+    writeFileSync(join(root, "TestResults", "IDEA-001", "SPEC-001", "test-run-summary.md"), `# Summary
+
+| Test | Result |
+|--|--|
+${row}
+`);
+    const r = runTool(root, "check-traceability", ["--repo-root", root, "--spec", "SPEC-001", "--json"], { capture: true });
+    return { rc: r.status, out: r.stdout };
+  };
+  test("PASS exits 0, FAIL exits 1, DEFERRED exits 3 with a warning and no error", () => {
+    const root = workspace("trace-deferred");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    writeFileSync(join(root, "src", "IDEA-001-demo", "app.test.ts"), "// T-001 export {};");
+    expect(trace(root, "| T-001 | PASS |").rc).toBe(0);
+    expect(trace(root, "| T-001 | FAIL |").rc).toBe(1);
+    const d = trace(root, "| T-001 | DEFERRED | needs a Docker daemon; connection failed |");
+    expect(d.rc).toBe(3);
+    expect(d.out).toContain("TRC-006");
+    expect(d.out).toMatch(/"errors"\s*:\s*0/);
+    expect(d.out).toMatch(/"status"\s*:\s*"deferred"/);
+  });
+});
+
