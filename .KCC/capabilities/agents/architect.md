@@ -86,7 +86,10 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    catalogue default cites it; every technology ADR names the concrete library
    or package and a version range (e.g. `fastify@^5`, OpenAPI generator by
    name, runtime `node >=20`). Write the runtime and tool ranges to the
-   `## Toolchain` table of `architecture/architecture.md`.
+   `## Toolchain` table of `architecture/architecture.md`. When the brief names
+   `mobile-app-architecture.md`, `data-engineering-and-science.md` or
+   `privacy-and-cybersecurity-regions.md`, apply them and record native vs
+   hybrid, regions in scope, residency and retention as ADRs or `## Decisions` rows.
 5b. **Versions follow the machine, the stack does not.** Probe the installed
    runtime (`node --version`, `python --version`) and pin each library to a
    release whose supported-runtime range includes it. For a package with a

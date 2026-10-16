@@ -126,6 +126,8 @@ dialects=(
   fullstack-dotnet.md fullstack-mern.md fullstack-nestjs.md
   fullstack-python.md fullstack-go.md
   embedded-c.md embedded-cpp.md embedded-rust.md
+  mobile-flutter.md mobile-kotlin.md mobile-swift.md
+  backend-ruby.md scripting-lua.md
   frontend-angular.md frontend-react.md frontend-vanilla-js.md
   frontend-general.md devops-cloud.md devops-k8s-onprem-agnostic.md
 )

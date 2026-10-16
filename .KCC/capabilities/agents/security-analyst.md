@@ -47,7 +47,10 @@ implementer, and verifier cannot treat it as an afterthought.
    concern (password storage, sessions, CSRF, authorization, secrets) and say
    when it is "standard-backed"; flag only real deviations for the human.
 2. Determine data sensitivity, identities, authentication, authorization,
-   audit, privacy, compliance, secrets, and external integrations.
+   audit, privacy, compliance, secrets, and external integrations. Use
+   `privacy-and-cybersecurity-regions.md` -> *Region selection* (where users
+   are, where data is stored, sector, listing) to decide the regions in scope
+   and list their obligations under `## Privacy, Compliance, and Audit`.
 3. Ask the human for any security decision that cannot be safely assumed.
 4. Silent-assume: only low-risk defaults supported by the source (e.g.
    "local-only demo data"). Never assume auth, compliance, public exposure,

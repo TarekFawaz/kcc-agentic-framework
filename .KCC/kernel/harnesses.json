@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "_doc": "How kcc-run invokes each harness, as data. Nothing in the drivers assumes a harness: they read the active harness's row here, and the model of each tier from kernel/models.json (settings run.registry picks another column, for example 'ollama' behind the opencode harness). Placeholders: {agent} {model} {effort} {skill}. Empty means the harness has no such option, and the driver leaves it out: no agent flag means a worker state runs under one orchestrator session instead of directly as the agent; no effort flag means the effort is not passed. insert_after is the token of the start template after which the flags go (continuity.start.<harness>). effort_map folds the neutral ladder low..max onto what the harness accepts. A project overrides any key with settings.json -> harness_invoke.<harness>.<key>.",
+  "harnesses": {
+    "claude": {
+      "insert_after": "-p",
+      "agent": "--agent {agent}",
+      "model": "--model {model}",
+      "effort": "--effort {effort}",
+      "effort_map": {},
+      "agent_dir": ".claude/agents",
+      "skill_path": ".claude/skills/{skill}/SKILL.md"
+    },
+    "codex": {
+      "insert_after": "exec",
+      "agent": "",
+      "model": "-m {model}",
+      "effort": "-c model_reasoning_effort={effort}",
+      "effort_map": { "xhigh": "high", "max": "high" },
+      "agent_dir": ".codex/agents",
+      "skill_path": ".codex/skills/{skill}/SKILL.md"
+    },
+    "opencode": {
+      "insert_after": "run",
+      "agent": "--agent {agent}",
+      "model": "-m {model}",
+      "effort": "",
+      "effort_map": {},
+      "agent_dir": ".opencode/agents",
+      "skill_path": ".opencode/skills/{skill}/SKILL.md"
+    },
+    "generic": {
+      "insert_after": "",
+      "agent": "",
+      "model": "",
+      "effort": "",
+      "effort_map": {},
+      "agent_dir": ".agents/agents",
+      "skill_path": ".agents/skills/{skill}/SKILL.md"
+    }
+  }
+}

@@ -40,7 +40,12 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    `confidence_threshold`, `budget` (token-guard estimate id, if one exists),
    `depthlevel` (1-5 from the AutoPolicy, default 5; omit at 5),
    `hints` (the active human hints for this agent: `kcc hint --pending --for
-   <agent> --all`; omit when none).
+   <agent> --all`; omit when none),
+   `protocols` (the domain protocols the briefs and ADRs selected for this
+   idea, by name: `mobile-app-architecture`, `data-engineering-and-science`,
+   `privacy-and-cybersecurity-regions` with its regions in scope; they are
+   chosen from the idea's context by the interrogators and the architect,
+   never by default, and an agent loads only the ones named; omit when none).
    Shape: `.KCC/kernel/protocols/handover.md`. Hints given while a subagent runs
    reach it by hook, and you relay them with `SendMessage`
    (`.KCC/kernel/protocols/hints.md`).
@@ -57,8 +62,14 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
 6. **Parallel fan-out.** Spawn independent units from the same
    `plan.md -> ## Waves` wave in **one** message, then wait for all of them
    before starting the next wave (`.KCC/kernel/protocols/parallel-execution.md`).
-7. **Model routing** (`.KCC/kernel/protocols/model-routing.md`). Start from the
-   agent's profile tier and effort, then move at most one tier, from signals:
+7. **Model routing** (`.KCC/kernel/protocols/model-routing.md`). **Before every
+   spawn, in every cycle, run the router and use its answer:**
+   `.KCC/tools/kcc-route.ps1 -Agent <name> [-Spec SPEC-ID [-Wave N | -Item key]] [-Attempt n]`
+   (bash: `kcc-route.sh --agent ...`). It prints `tier, model, effort, reasons`
+   for the active harness; pass that `model` and `effort` to the spawn and name the
+   reasons in the packet. A developer running a skill by hand does the same. The
+   rules it applies: start from the agent's profile tier and effort, then move at
+   most one tier, from signals:
    `research`/`architecture`/`security` never below balanced; a `novel`
    domain (`Research.md -> ## Domain`) one tier up and effort high; a
    `common` domain one tier down for spec, plan, docs and scaffold work;

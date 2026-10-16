@@ -68,6 +68,10 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
      identity, public exposure, compliance, secrets -> `/security-interrogator`;
      deployment, cloud/on-prem, K8s, production, scale, SLOs, DR, paid
      services -> `/infrastructure-interrogator`.
+   - Domain protocols the briefs name (`mobile-app-architecture`,
+     `data-engineering-and-science`, `privacy-and-cybersecurity-regions`):
+     link them under `## Architecture` and add the ACs their conformance
+     checks require, so the planner's `## Standards coverage` can cite them.
 4. **Investigate codebase.** Read `solution/solution.md` if present; verify
    each existing impacted file; new files go under `src/IDEA-{ID}-{slug}/...`;
    check `specs/IDEA-*-Specs/` for duplicate or conflicting specs/items.

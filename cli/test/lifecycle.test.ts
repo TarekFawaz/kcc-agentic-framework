@@ -304,3 +304,33 @@ describe("the plan says how each cited standard is verified (PLAN-006)", () => {
   });
 });
 
+describe("the router is asked for every dispatch, in every cycle", () => {
+  // kcc-run calls .KCC/tools/kcc-route for the state's agent. A harness that cannot select an agent (the generic stub) gets an
+  // orchestrator session that is told the tier and effort in its prompt; the choice is recorded as model-selected.
+  const logText = (root: string, name: string): string => readFileSync(join(root, "coordination", "run", "logs", name), "utf8");
+  test("fast track (generic harness, wrapper mode): the prompt names the routed tier and effort, and model-selected is emitted", () => {
+    const root = workspace("route-fast");
+    expect(drv(root, [...FT, "--until", "1"]).status).toBe(0);
+    const log = logText(root, "state-1-run-1.log");
+    expect(log).toContain("Routing (kcc-route): spawn the idea-interrogator subagent on tier balanced, effort high");
+    expect(log).toContain("Before any other spawn run");
+    const sel = readFileSync(join(root, "coordination", "backchannel.jsonl"), "utf8").split(String.fromCharCode(10)).filter((l) => l.includes('"model-selected"'));
+    expect(sel.length).toBeGreaterThanOrEqual(1);
+    expect(sel[0]).toContain('"agent":"idea-interrogator"');
+    expect(sel[0]).toContain('"source":"kcc-route"');
+  });
+  test("full lifecycle (no --fasttrack): the same routing sentence, no agent or model flags on the session", () => {
+    const root = workspace("route-full");
+    const r = drv(root, ["--input", "a tiny app", "--silent", "--assume", "--until", "1"]);
+    // The stub writes the fast-track idea set, so the full table's IDEA check fails and the run pauses at the loop gate (4);
+    // the dispatch itself, which is what this test is about, has already happened and is in the log.
+    expect([0, 4]).toContain(r.status);
+    const log = logText(root, "state-1-run-1.log");
+    expect(log).toContain("Routing (kcc-route): spawn the idea-interrogator subagent on tier balanced, effort high");
+    const cmd = log.split(String.fromCharCode(10))[1] ?? "";
+    expect(cmd).not.toContain("--model");
+    expect(cmd).not.toContain("--agent");
+    expect(readFileSync(join(root, "coordination", "backchannel.jsonl"), "utf8")).toContain('"mode":"wrapper"');
+  });
+});
+

@@ -178,6 +178,9 @@ is_approval_gate() { case "$1" in confirm|budget|budget-cap|windows) return 0 ;;
 SETTINGS_FLAT=""
 if [[ -f "$ROOT/.KCC/settings.json" ]]; then SETTINGS_FLAT="$(json_flat "$ROOT/.KCC/settings.json" 2>/dev/null || true)"; fi
 setting() { local v; v="$(flat_get "$SETTINGS_FLAT" "$1")"; if [[ -z "$v" || "$v" == "null" ]]; then v="$2"; fi; printf '%s' "$v"; }
+HARNESSES_FLAT=""; REGISTRY_FLAT=""
+if [[ -f "$ROOT/.KCC/kernel/harnesses.json" ]]; then HARNESSES_FLAT="$(json_flat "$ROOT/.KCC/kernel/harnesses.json" 2>/dev/null || true)"; fi
+if [[ -f "$ROOT/.KCC/kernel/models.json" ]]; then REGISTRY_FLAT="$(json_flat "$ROOT/.KCC/kernel/models.json" 2>/dev/null || true)"; fi
 CFG_MAX="$(setting run.max_attempts "$SM_MAX")"; [[ "$CFG_MAX" =~ ^[0-9]+$ && "$CFG_MAX" -ge 1 ]] || CFG_MAX=3
 if [[ "$MAXATT" -gt 0 ]]; then CFG_MAX="$MAXATT"; fi
 CFG_TIMEOUT="$(setting run.state_timeout_minutes 60)"; [[ "$CFG_TIMEOUT" =~ ^[0-9]+$ && "$CFG_TIMEOUT" -ge 1 ]] || CFG_TIMEOUT=60
@@ -282,6 +285,10 @@ derived_tools() {
   if printf '%s' "$txt" | grep -q 'backend-java'; then addt java; fi
   if printf '%s' "$txt" | grep -Eq 'backend-dotnet|fullstack-dotnet'; then addt dotnet; fi
   if printf '%s' "$txt" | grep -q 'flutter'; then addt dart,flutter; fi
+  if printf '%s' "$txt" | grep -q 'mobile-kotlin'; then addt java; fi
+  if printf '%s' "$txt" | grep -q 'mobile-swift'; then addt swift; fi
+  if printf '%s' "$txt" | grep -q 'backend-ruby'; then addt ruby; fi
+  if printf '%s' "$txt" | grep -q 'scripting-lua'; then addt lua; fi
   if printf '%s' "$txt" | grep -q 'devops-cloud'; then addt terraform; fi
   if printf '%s' "$txt" | grep -q 'devops-k8s-onprem-agnostic'; then addt terraform,kubectl,helm; fi
   if printf '%s' "$txt" | grep -Eq '(^|[^a-z])pnpm([^a-z]|$)'; then addt pnpm; fi
@@ -584,66 +591,68 @@ resolve_claude_model() { # bare aliases -> pinned 5.5 IDs (`haiku` can still mea
     *) echo "$1" ;;
   esac
 }
-# plan.md -> '## Routing' (written by `kcc route` from each item's Complexity, files, domain and risk): the model and effort
-# planned per backlog item. For a wave it is the strongest row among that wave's items; for the FIX pass (no wave), among the
-# whole spec's. The drivers only read it, so the rules stay in one place (cli/src/run/router.ts).
-# plan_routing ENTRY WAVE -> prints "model<TAB>effort<TAB>tier<TAB>items" or nothing
-plan_routing() {
-  local pf; pf="$(spec_dir "$1")/plan.md"
-  [[ -n "${1:-}" && -f "$pf" ]] || return 0
-  tr -d '\r' < "$pf" | awk -F'|' -v wave="${2:-}" '
-    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-    BEGIN { er["low"] = 1; er["medium"] = 2; er["high"] = 3; er["xhigh"] = 4; er["max"] = 5; tr_["fast"] = 1; tr_["balanced"] = 2; tr_["strong"] = 3 }
-    /^##[[:space:]]+Routing/ { inr = 1; next }
-    inr && /^##[[:space:]]/ { exit }
-    inr && /^[[:space:]]*\|/ {
-      if (!hdr) {
-        for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "item") ci = i; else if (c == "wave") cw = i; else if (c == "tier") ct = i; else if (c == "model") cm = i; else if (c == "effort") ce = i }
-        if (ci && ct && ce && cm) hdr = 1
-        next
-      }
-      if ($0 ~ /^[[:space:]]*\|[[:space:]:|-]+\|?[[:space:]]*$/) next
-      if (wave != "" && cw && trim($cw) != wave) next
-      t = tolower(trim($ct)); e = tolower(trim($ce)); m = trim($cm)
-      if (!(t in tr_) || !(e in er)) next
-      items = items (items == "" ? "" : ", ") trim($ci)
-      if (bt == "" || tr_[t] > tr_[bt]) { bt = t; bm = m }
-      if (be == "" || er[e] > er[be]) be = e
-    }
-    END { if (bt != "") printf "%s\t%s\t%s\t%s\n", bm, be, bt, items }'
+# ---- harness profile and model registry: nothing below assumes a particular harness ---------------------
+# kernel/harnesses.json says how each harness takes an agent, a model and an effort; kernel/models.json says which model each
+# tier is on each harness (settings run.registry picks another column, e.g. 'ollama' behind the opencode harness).
+hprofile() { # key -> settings harness_invoke.<harness>.<key>, else kernel/harnesses.json
+  local v; v="$(setting "harness_invoke.$HARNESS.$1" "")"
+  if [[ -z "$v" ]]; then v="$(flat_get "$HARNESSES_FLAT" "harnesses.$HARNESS.$1")"; fi
+  if [[ "$v" == "null" ]]; then v=""; fi
+  printf '%s' "$v"
 }
-agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODEL AM_WHY AM_WM AM_WE
-  # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
-  # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
-  # AS the agent (claude --agent) with no orchestrator above them unless run.fasttrack_direct is false (default true).
+heffort() { # neutral effort -> what the harness accepts (effort_map), unchanged when not mapped
+  local m; m="$(flat_get "$HARNESSES_FLAT" "harnesses.$HARNESS.effort_map.$1")"
+  if [[ -n "$m" && "$m" != "null" ]]; then printf '%s' "$m"; else printf '%s' "$1"; fi
+}
+tier_model() { # tier -> model id on the registry column of the active harness (with its prefix), or nothing
+  local reg id prefix; reg="$(setting run.registry "")"; [[ -n "$reg" ]] || reg="$HARNESS"
+  id="$(flat_get "$REGISTRY_FLAT" "harnesses.$reg.$1.id")"
+  if [[ -z "$id" || "$id" == "null" ]]; then return 0; fi
+  prefix="$(flat_get "$REGISTRY_FLAT" "harnesses.$reg._prefix")"; if [[ "$prefix" == "null" ]]; then prefix=""; fi
+  printf '%s%s' "$prefix" "$id"
+}
+# The model for the orchestrator wrapper or the escalation: an explicit run.<kind>_model wins, except that a Claude id is
+# never passed to another harness; otherwise the tier (run.<kind>_tier) on the active harness's registry column.
+run_model() { # kind defaultTier
+  local explicit tier; explicit="$(setting "run.$1_model" "" | tr -cd 'A-Za-z0-9._:/-')"
+  if [[ -n "$explicit" ]] && { [[ "$HARNESS" == "claude" ]] || ! [[ "$explicit" =~ ^(claude-|opus$|sonnet$|haiku$) ]]; }; then
+    if [[ "$HARNESS" == "claude" ]]; then resolve_claude_model "$explicit"; else printf '%s' "$explicit"; fi
+    return 0
+  fi
+  tier="$(setting "run.$1_tier" "$2" | tr -cd 'a-z')"
+  tier_model "$tier"
+}
+# Every dispatch, in every cycle, asks the router (`.KCC/tools/kcc-route`, the port of cli/src/run/router.ts) which tier,
+# model and effort the state's agent gets: from the agent's profile, the plan's Complexity and files for this wave or spec,
+# the idea's domain, CR-7 words and the attempt. One rulebook (kernel/protocols/model-routing.md), three identical copies.
+# get_route AGENT ATTEMPT -> sets RT_TIER RT_MODEL RT_EFFORT RT_WHY (empty when the router gave nothing)
+get_route() {
+  RT_TIER=""; RT_MODEL=""; RT_EFFORT=""; RT_WHY=""
+  [[ -n "${1:-}" && -f "$TOOLS/kcc-route.sh" ]] || return 0
+  local a=(--repo-root "$ROOT" --agent "$1" --attempt "$2" --harness "$HARNESS") line tab
+  tab="$(printf '\t')"
+  [[ -n "$C_SPEC" ]] && a+=(--spec "$C_SPEC")
+  [[ -n "$C_WAVE" ]] && a+=(--wave "$C_WAVE")
+  line="$(bash "$TOOLS/kcc-route.sh" "${a[@]}" 2>/dev/null | grep "$tab" | tail -n 1 || true)"
+  [[ -n "$line" ]] || return 0
+  IFS="$tab" read -r RT_TIER RT_MODEL RT_EFFORT RT_WHY _ <<< "$line"
+}
+agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODEL AM_EFFORT AM_WHY AM_TIER AM_SOURCE AM_WM AM_WE
+  # The state's agent (the table's agent_fasttrack) is routed in every cycle. Under --fasttrack, when the harness can select an
+  # agent and run.fasttrack_direct is not false, the state runs AS that agent with the routed model and effort; otherwise an
+  # orchestrator session runs the state (on the fast tier, low effort under fast track; the harness default in a full run) and is
+  # told which tier, model and effort to spawn the agent on.
   AM_MODE=""; AM_AGENT=""; AM_MODEL=""; AM_EFFORT=""; AM_WHY=""; AM_WM=""; AM_WE=""; AM_SOURCE=""; AM_TIER=""
-  [[ "$R_fasttrack" == "1" && "$HARNESS" == "claude" ]] || return 0
   AM_AGENT="${S_AGF[$1]:-}"
-  local em domain; em="$(resolve_claude_model "$(setting run.escalation_model claude-sonnet-5-5 | tr -cd 'A-Za-z0-9._-')")"
-  # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
-  # Complexity wave, or a retry moves the executor one tier up and raises the effort.
-  domain="$(idea_domain "$C_IDEA")"
-  local pr="" pr_model pr_effort pr_tier pr_items
-  if [[ "$AM_AGENT" == "implementer" ]]; then pr="$(plan_routing "$C_ENTRY" "$C_WAVE")"; fi
-  if [[ -n "$pr" ]]; then
-    # Planned per item by `kcc route`; a retry raises the effort one step (the router's retry rule).
-    IFS="$(printf '	')" read -r pr_model pr_effort pr_tier pr_items <<< "$pr"
-    AM_MODEL="$(resolve_claude_model "$(printf '%s' "$pr_model" | tr -cd 'A-Za-z0-9._-')")"; AM_EFFORT="$pr_effort"; AM_TIER="$pr_tier"; AM_SOURCE=plan
-    AM_WHY="plan routing: $pr_items ($pr_tier)"
-    if [[ "$2" -gt 0 ]]; then
-      case "$AM_EFFORT" in low) AM_EFFORT=medium ;; medium) AM_EFFORT=high ;; high) AM_EFFORT=xhigh ;; esac
-      AM_WHY="$AM_WHY; retry after a failed exit check"
-    fi
-  elif [[ "$AM_AGENT" == "implementer" ]]; then
-    local cx=""; if [[ -n "$C_ENTRY" && -n "$C_WAVE" ]]; then cx="$(wave_complexity "$C_ENTRY" "$C_WAVE")"; fi
-    if [[ "$cx" == "high" || "$cx" == "extra-high" ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="complexity $cx"
-    elif [[ "$2" -gt 0 ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="retry after a failed exit check"
-    elif [[ "$domain" == "novel" ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="novel domain"; fi
-  elif [[ -n "$AM_AGENT" && "$domain" == "novel" && "$2" -eq 0 ]]; then AM_EFFORT=high; AM_WHY="novel domain"
-  elif [[ -n "$AM_AGENT" && "$2" -gt 0 ]]; then AM_EFFORT=high; AM_WHY="retry after a failed exit check"; fi
-  AM_WM="$(resolve_claude_model "$(setting run.orchestrator_model claude-haiku-5-5 | tr -cd 'A-Za-z0-9._-')")"; AM_WE="$(setting run.orchestrator_effort low | tr -cd 'a-z')"
+  local fast=0; [[ "$R_fasttrack" == "1" ]] && fast=1
+  get_route "$AM_AGENT" "$(( $2 + 1 ))"
+  if [[ -n "$RT_TIER" ]]; then AM_TIER="$RT_TIER"; AM_MODEL="$RT_MODEL"; AM_EFFORT="$RT_EFFORT"; AM_WHY="$RT_WHY"; AM_SOURCE=kcc-route; fi
+  if [[ "$fast" -eq 1 ]]; then AM_WM="$(run_model orchestrator fast)"; AM_WE="$(setting run.orchestrator_effort low | tr -cd 'a-z')"; fi
   AM_MODE=wrapper
-  if [[ "$(setting run.fasttrack_direct true | tr 'A-Z' 'a-z')" != "false" && -n "$AM_AGENT" && -f "$ROOT/.claude/agents/$AM_AGENT.md" ]]; then AM_MODE=direct; fi
+  # Direct needs fast track, a harness that selects an agent by flag, and an agent file in that harness's agent folder.
+  local adir; adir="$(hprofile agent_dir)"
+  if [[ "$fast" -eq 1 && "$(setting run.fasttrack_direct true | tr 'A-Z' 'a-z')" != "false" && -n "$AM_AGENT" && -n "$(hprofile agent)" && -n "$adir" && -f "$ROOT/$adir/$AM_AGENT.md" ]]; then AM_MODE=direct; fi
+  if [[ -z "$AM_AGENT" && "$fast" -eq 0 ]]; then AM_MODE=""; fi
 }
 idea_domain() { # Research.md -> '## Domain' (common | specialised | novel)
   local f="$ROOT/ideation/${1:-}/Research.md" v=""
@@ -652,20 +661,36 @@ idea_domain() { # Research.md -> '## Domain' (common | specialised | novel)
   [[ "$v" == "specialized" ]] && v=specialised
   printf '%s' "$v"
 }
-harness_extra() { # after agent_mode
-  if [[ "$AM_MODE" == "direct" ]]; then printf -- '--agent %s%s%s' "$AM_AGENT" "${AM_MODEL:+ --model $AM_MODEL}" "${AM_EFFORT:+ --effort $AM_EFFORT}"
-  elif [[ "$AM_MODE" == "wrapper" ]]; then printf '%s%s' "${AM_WM:+--model $AM_WM}" "${AM_WE:+ --effort $AM_WE}"; fi
+hflag() { # template key value -> the flag with the value in it, or nothing
+  local tpl="$1" key="$2" val="$3" ph
+  if [[ -z "$tpl" || -z "$val" ]]; then return 0; fi
+  ph="{$key}"
+  printf '%s' "${tpl//"$ph"/$val}"
+}
+harness_extra() { # after agent_mode: the flags that pick the agent, model and effort, written the way the active harness takes them
+  local m e out="" f
+  if [[ "$AM_MODE" == "direct" ]]; then m="$AM_MODEL"; e="$AM_EFFORT"; out="$(hflag "$(hprofile agent)" agent "$AM_AGENT")"
+  elif [[ "$AM_MODE" == "wrapper" ]]; then m="$AM_WM"; e="$AM_WE"
+  else return 0; fi
+  f="$(hflag "$(hprofile model)" model "$m")"; if [[ -n "$f" ]]; then out="${out:+$out }$f"; fi
+  f="$(hflag "$(hprofile effort)" effort "$(heffort "$e")")"; if [[ -n "$f" ]]; then out="${out:+$out }$f"; fi
+  printf '%s' "$out"
 }
 convert_agent_body() { # "/skill args" -> instruction that names the skill file
   if [[ "$1" =~ ^/([a-z][a-z0-9-]*)[[:space:]]*(.*)$ ]]; then
-    printf 'Do the work of the skill described in .claude/skills/%s/SKILL.md (read it first) with these arguments: %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    local sp skill="${BASH_REMATCH[1]}" rest="${BASH_REMATCH[2]}"; sp="$(hprofile skill_path)"; if [[ -z "$sp" ]]; then sp=".claude/skills/{skill}/SKILL.md"; fi
+    printf 'Do the work of the skill described in %s (read it first) with these arguments: %s' "${sp//"{skill}"/$skill}" "$rest"
   else printf '%s' "$1"; fi
 }
 harness_cmd() {
-  local tpl perm p
+  local tpl perm p ins
   tpl="$(setting "continuity.start.$HARNESS" "")"
   if [[ -z "$tpl" ]]; then return 0; fi
-  if [[ -n "$HARNESS_EXTRA" && "$HARNESS" == "claude" ]]; then tpl="$(printf '%s' "$tpl" | sed -E "s/( -p)( )/\\1 $HARNESS_EXTRA\\2/")"; fi
+  ins="$(hprofile insert_after)"
+  if [[ -n "$HARNESS_EXTRA" && -n "$ins" ]]; then
+    # put the flags after the first " <ins> " token of the start template, without sed so no character of the flags is special
+    case "$tpl" in *" $ins "*) tpl="${tpl/" $ins "/" $ins $HARNESS_EXTRA "}" ;; esac
+  fi
   perm="$(setting continuity.permission_mode auto | sed 's/[^A-Za-z]//g')"; [[ -n "$perm" ]] || perm=auto
   p="$(sanitize_prompt "$1")"
   tpl="${tpl//\{resume_prompt\}/"$p"}"; tpl="${tpl//\{permission_mode\}/"$perm"}"; tpl="${tpl//\{session_id\}/}"
@@ -1034,12 +1059,12 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
         body="$(convert_agent_body "$body")"
         lead=". You are the $AM_AGENT agent running this state directly, with no orchestrator above you: do the work yourself and spawn no other agent. Do only this state, then stop. "
       else
-        lead="${lead% } Put the skill's arguments (\`--fasttrack\`, \`--depthlevel N\`, and the rest) verbatim in each subagent's handover packet and tell it to follow its \"Fast track and depth\" section; do not paraphrase them. "
-        if [[ -n "$AM_MODEL" ]]; then lead="${lead% } Spawn the $AM_AGENT subagent on model $AM_MODEL ($AM_WHY). "; fi
+        if [[ "$R_fasttrack" == "1" ]]; then lead="${lead% } Put the skill's arguments (\`--fasttrack\`, \`--depthlevel N\`, and the rest) verbatim in each subagent's handover packet and tell it to follow its \"Fast track and depth\" section; do not paraphrase them. "; fi
+        if [[ -n "$AM_TIER" ]]; then lead="${lead% } Routing (kcc-route): spawn the $AM_AGENT subagent on tier $AM_TIER${AM_MODEL:+, model $AM_MODEL}, effort $AM_EFFORT ($AM_WHY). Before any other spawn run \`.KCC/tools/kcc-route --agent <name> [--spec ${C_SPEC:-SPEC-ID}]\` and use its tier, model and effort. "; fi
       fi
-      AM_ITEM="spec"; if [[ -n "$C_WAVE" ]]; then AM_ITEM="wave $C_WAVE"; fi
-      if [[ "$AM_SOURCE" == "plan" ]]; then emit model-selected "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"$AM_ITEM\",\"tier\":\"$AM_TIER\",\"model\":\"$AM_MODEL\",\"effort\":\"$AM_EFFORT\",\"reasons\":\"$AM_WHY\",\"source\":\"plan-routing\"}"
-      elif [[ -n "$AM_MODEL" ]]; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
+      AM_ITEM="run"; if [[ -n "$C_SPEC" ]]; then AM_ITEM="spec"; fi; if [[ -n "$C_WAVE" ]]; then AM_ITEM="wave $C_WAVE"; fi
+      if [[ -n "$AM_TIER" ]]; then emit model-selected "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"$AM_ITEM\",\"tier\":\"$AM_TIER\",\"model\":\"$AM_MODEL\",\"effort\":\"$AM_EFFORT\",\"reasons\":\"$AM_WHY\",\"mode\":\"$AM_MODE\",\"source\":\"kcc-route\"}"
+      elif false; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
     fi
     prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi

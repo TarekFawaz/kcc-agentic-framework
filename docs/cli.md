@@ -65,6 +65,7 @@ terminal (`kcc run --input "<idea>"`).
 | `kcc doctor [--json]` | Checks the installation and names the fix for each problem |
 | `kcc run ...` | Drives the lifecycle and survives usage limits. See below |
 | `kcc models [--check\|--refresh] [--deep]` | Lists the model of each tier per harness. `--check` probes the pinned Claude ids; `--deep` adds the DeepThinking tier (about $0.80 per probe) |
+| `kcc route [SPEC-ID] [--dry-run]` | Decides the model and reasoning effort per backlog item from the plan and writes `## Routing` into `plan.md`; the drivers and the orchestrator ask the same router (`.KCC/tools/kcc-route`) before every spawn |
 | `kcc report [--skeleton-min N] [--app-min N] [--out file]` | Measures the run in this folder (time per stage, human waits, agents, cost) and judges it against a time budget; exit 1 on a miss |
 | `kcc limits [--json]` | Shows usage, the last limit hit, and the next resume |
 | `kcc hint "text" [--to all\|main\|subagents\|<agent>] [--expires <min>]` | Gives the running session and its subagents a hint, delivered by hook on the next tool call. Also `kcc --hint "text"`. `--list`, `--clear <id\|all>`, `--pending [--for <agent>]` manage and read hints. See `.KCC/kernel/protocols/hints.md` |

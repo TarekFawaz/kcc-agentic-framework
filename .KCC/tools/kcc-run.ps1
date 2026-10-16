@@ -290,7 +290,8 @@ function Get-DerivedTools([string]$entry) {
     $t = $text.ToLowerInvariant()
     $tools = New-Object System.Collections.ArrayList
     $map = [ordered]@{ 'fullstack-nextjs|frontend-react|backend-nodejs' = 'node,npm'; 'fullstack-python|backend-python' = 'python'; 'backend-go' = 'go'; 'backend-rust' = 'cargo';
-        'backend-java' = 'java'; 'backend-dotnet|fullstack-dotnet' = 'dotnet'; 'flutter' = 'dart,flutter'; 'devops-cloud' = 'terraform'; 'devops-k8s-onprem-agnostic' = 'terraform,kubectl,helm'; '\bpnpm\b' = 'pnpm' }
+        'backend-java' = 'java'; 'backend-dotnet|fullstack-dotnet' = 'dotnet'; 'flutter' = 'dart,flutter'; 'mobile-kotlin' = 'java'; 'mobile-swift' = 'swift'; 'backend-ruby' = 'ruby'; 'scripting-lua' = 'lua';
+        'devops-cloud' = 'terraform'; 'devops-k8s-onprem-agnostic' = 'terraform,kubectl,helm'; '\bpnpm\b' = 'pnpm' }
     foreach ($k in $map.Keys) { if ($t -match $k) { foreach ($x in ($map[$k] -split ',')) { if (-not $tools.Contains($x)) { [void]$tools.Add($x) } } } }
     if (-not $tools.Contains('git')) { [void]$tools.Add('git') }
     # plan.md '## Toolchain' rows '| node | >=20 |' pin a major version: the preflight checks node@>=20.
@@ -673,7 +674,7 @@ function Sanitize-Prompt([string]$p) {
 # ---- fasttrack worker states run AS the agent (`claude --agent`): no orchestrator session above them ----
 # The orchestrator wrapper session cost more than the worker it spawned. The agent keeps its own model,
 # effort, and tools. Complexity high (the planner marks security-sensitive items high) or a retry after a
-# failed check runs the implementer on `run.escalation_model` (default claude-sonnet-5-5) instead (the orchestrator complexity rule).
+# failed check runs the implementer on the `run.escalation_tier` model (balanced by default) of the active harness instead (the orchestrator complexity rule).
 $script:HarnessExtra = ''
 function Get-WaveComplexity([string]$entry, [string]$wave) {
     $rank = @{ 'low' = 1; 'medium' = 2; 'high' = 3; 'extra-high' = 4 }
@@ -705,74 +706,90 @@ function Resolve-ClaudeModel([string]$m) {
         default    { return $m }
     }
 }
-# plan.md -> '## Routing' (written by `kcc route` from each item's Complexity, files, domain and risk): the model and effort
-# planned per backlog item. For a wave it is the strongest row among that wave's items; for the FIX pass (no wave), among the
-# whole spec's. The drivers only read it, so the rules stay in one place (cli/src/run/router.ts).
-function Get-PlanRouting([string]$entry, [string]$wave) {
-    if (-not $entry) { return $null }
-    $pf = Join-Path (Get-SpecDir $entry) 'plan.md'
-    if (-not (Test-Path -LiteralPath $pf)) { return $null }
-    $erank = @{ 'low' = 1; 'medium' = 2; 'high' = 3; 'xhigh' = 4; 'max' = 5 }
-    $trank = @{ 'fast' = 1; 'balanced' = 2; 'strong' = 3 }
-    $in = $false; $hdr = $null; $bestE = ''; $bestT = ''; $bestM = ''; $items = @()
-    foreach ($l in (Read-Lines $pf)) {
-        if ($l -match '^##\s+Routing\b') { $in = $true; continue }
-        if (-not $in) { continue }
-        if ($l -match '^##\s') { break }
-        if ($l -notmatch '^\s*\|') { continue }
-        $c = @(($l.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
-        if (-not $hdr) {
-            $low = @($c | ForEach-Object { $_.ToLowerInvariant() })
-            if (($low -contains 'item') -and ($low -contains 'tier') -and ($low -contains 'model') -and ($low -contains 'effort')) { $hdr = $low }
-            continue
-        }
-        if ($l -match '^\s*\|[\s:|\-]+\|?\s*$') { continue }
-        $wi = [array]::IndexOf($hdr, 'wave')
-        if ($wave -and $wi -ge 0 -and $c[$wi] -ne $wave) { continue }
-        $t = $c[[array]::IndexOf($hdr, 'tier')].ToLowerInvariant(); $e = $c[[array]::IndexOf($hdr, 'effort')].ToLowerInvariant(); $m = $c[[array]::IndexOf($hdr, 'model')]
-        if (-not $trank.ContainsKey($t) -or -not $erank.ContainsKey($e)) { continue }
-        $items += $c[[array]::IndexOf($hdr, 'item')]
-        if ($bestT -eq '' -or $trank[$t] -gt $trank[$bestT]) { $bestT = $t; $bestM = $m }
-        if ($bestE -eq '' -or $erank[$e] -gt $erank[$bestE]) { $bestE = $e }
+# ---- harness profile and model registry: nothing below assumes a particular harness --------------------------
+# kernel/harnesses.json says how each harness takes an agent, a model and an effort; kernel/models.json says which model each
+# tier is on each harness (settings run.registry picks another column, e.g. 'ollama' behind the opencode harness).
+$script:HarnessProfiles = $null; $script:ModelRegistry = $null
+function Read-KernelJson([string]$name) {
+    $f = Join-Path (Join-Path $KccDir 'kernel') $name
+    if (Test-Path -LiteralPath $f) { try { return ([System.IO.File]::ReadAllText($f) | ConvertFrom-Json) } catch { } }
+    return $null
+}
+function Get-HProfile([string]$key) {
+    $v = Get-Setting @('harness_invoke', $script:HarnessName, $key) $null
+    if ($null -ne $v) { return [string]$v }
+    if ($null -eq $script:HarnessProfiles) { $script:HarnessProfiles = Read-KernelJson 'harnesses.json' }
+    if ($script:HarnessProfiles -and $script:HarnessProfiles.harnesses) {
+        $p = $script:HarnessProfiles.harnesses.PSObject.Properties[$script:HarnessName]
+        if ($p -and $p.Value.PSObject.Properties[$key]) { return [string]$p.Value.$key }
     }
-    if (-not $bestT) { return $null }
-    return @{ model = $bestM; effort = $bestE; tier = $bestT; items = ($items -join ', ') }
+    return ''
+}
+function Get-HEffort([string]$e) {
+    if (-not $e) { return '' }
+    if ($null -eq $script:HarnessProfiles) { $script:HarnessProfiles = Read-KernelJson 'harnesses.json' }
+    if ($script:HarnessProfiles -and $script:HarnessProfiles.harnesses) {
+        $p = $script:HarnessProfiles.harnesses.PSObject.Properties[$script:HarnessName]
+        if ($p -and $p.Value.PSObject.Properties['effort_map'] -and $p.Value.effort_map.PSObject.Properties[$e]) { return [string]$p.Value.effort_map.$e }
+    }
+    return $e
+}
+function Get-TierModel([string]$tier) {
+    $reg = [string](Get-Setting @('run', 'registry') ''); if (-not $reg) { $reg = $script:HarnessName }
+    if ($null -eq $script:ModelRegistry) { $script:ModelRegistry = Read-KernelJson 'models.json' }
+    if (-not $script:ModelRegistry -or -not $script:ModelRegistry.harnesses) { return '' }
+    $h = $script:ModelRegistry.harnesses.PSObject.Properties[$reg]
+    if (-not $h) { return '' }
+    $t = $h.Value.PSObject.Properties[$tier]
+    if (-not $t -or -not $t.Value.PSObject.Properties['id']) { return '' }
+    $prefix = ''; if ($h.Value.PSObject.Properties['_prefix']) { $prefix = [string]$h.Value._prefix }
+    return ($prefix + [string]$t.Value.id)
+}
+# The model for the orchestrator wrapper or the escalation: an explicit run.<kind>_model wins, except that a Claude id is
+# never passed to another harness; otherwise the tier (run.<kind>_tier) on the active harness's registry column.
+function Get-RunModel([string]$kind, [string]$defaultTier) {
+    $explicit = (([string](Get-Setting @('run', ($kind + '_model')) '')) -replace '[^A-Za-z0-9._:/-]', '')
+    if ($explicit -and ($script:HarnessName -eq 'claude' -or $explicit -notmatch '^(claude-|opus$|sonnet$|haiku$)')) {
+        if ($script:HarnessName -eq 'claude') { return (Resolve-ClaudeModel $explicit) }
+        return $explicit
+    }
+    $tier = ([string](Get-Setting @('run', ($kind + '_tier')) $defaultTier)) -replace '[^a-z]', ''
+    return (Get-TierModel $tier)
+}
+# Every dispatch, in every cycle, asks the router (`.KCC/tools/kcc-route`, the port of cli/src/run/router.ts) which tier,
+# model and effort the state's agent gets: from the agent's profile, the plan's Complexity and files for this wave or spec,
+# the idea's domain, CR-7 words and the attempt. One rulebook (kernel/protocols/model-routing.md), three identical copies.
+function Get-Route([string]$agent, $ctx, [int]$attempt) {
+    if (-not $agent) { return $null }
+    $a = @('-Agent', $agent, '-Attempt', [string]$attempt, '-Harness', $script:HarnessName)
+    if ($ctx.SPEC) { $a += @('-Spec', $ctx.SPEC) }
+    if ($ctx.WAVE) { $a += @('-Wave', $ctx.WAVE) }
+    $r = Invoke-Tool 'kcc-route' $a ''
+    if ($r.rc -ne 0) { return $null }
+    $line = @(($r.text -split "`n") | Where-Object { $_ -match "`t" })
+    if ($line.Count -eq 0) { return $null }
+    $f = $line[-1] -split "`t"
+    if ($f.Count -lt 3) { return $null }
+    return @{ tier = $f[0]; model = $f[1]; effort = $f[2]; why = $(if ($f.Count -gt 3) { $f[3] } else { '' }); items = $(if ($f.Count -gt 4) { $f[4] } else { '' }) }
 }
 function Get-AgentMode($st, $ctx, [int]$att) {
-    # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
-    # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
-    # AS the agent (claude --agent) with no orchestrator above them unless run.fasttrack_direct is false (default true).
-    if ($R.fasttrack -ne '1' -or $script:HarnessName -ne 'claude') { return $null }
+    # The state's agent (the table's agent_fasttrack) is routed in every cycle. Under --fasttrack, when the harness can select an
+    # agent and run.fasttrack_direct is not false, the state runs AS that agent with the routed model and effort; otherwise an
+    # orchestrator session runs the state (on the fast tier, low effort under fast track; the harness default in a full run) and is
+    # told which tier, model and effort to spawn the agent on.
     $agent = ''; if (Has $st 'agent_fasttrack') { $agent = [string]$st.agent_fasttrack }
-    $model = ''; $why = ''; $effort = ''
-    $em = Resolve-ClaudeModel (([string](Get-Setting @('run', 'escalation_model') 'claude-sonnet-5-5')) -replace '[^A-Za-z0-9._-]', '')
-    # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
-    # Complexity wave, or a retry moves the executor one tier up and raises the effort.
-    $domain = Get-IdeaDomain $ctx.IDEA
-    $source = ''
-    $pr = $null; if ($agent -eq 'implementer') { $pr = Get-PlanRouting $ctx.ENTRY $ctx.WAVE }
-    if ($pr) {
-        # Planned per item by `kcc route`; a retry raises the effort one step (the router's retry rule).
-        $model = Resolve-ClaudeModel (([string]$pr.model) -replace '[^A-Za-z0-9._-]', ''); $effort = $pr.effort; $source = 'plan'
-        $why = 'plan routing: ' + $pr.items + ' (' + $pr.tier + ')'
-        if ($att -gt 0) {
-            $steps = @('low', 'medium', 'high', 'xhigh'); $pos = [array]::IndexOf($steps, $effort)
-            if ($pos -ge 0 -and $pos -lt 3) { $effort = $steps[$pos + 1] }
-            $why += '; retry after a failed exit check'
-        }
-    }
-    elseif ($agent -eq 'implementer') {
-        $cx = ''; if ($ctx.ENTRY -and $ctx.WAVE) { $cx = Get-WaveComplexity $ctx.ENTRY $ctx.WAVE }
-        if ($cx -eq 'high' -or $cx -eq 'extra-high') { $model = $em; $effort = 'high'; $why = 'complexity ' + $cx }
-        elseif ($att -gt 0) { $model = $em; $effort = 'high'; $why = 'retry after a failed exit check' }
-        elseif ($domain -eq 'novel') { $model = $em; $effort = 'high'; $why = 'novel domain' }
-    } elseif ($agent -and $domain -eq 'novel' -and $att -eq 0) { $effort = 'high'; $why = 'novel domain' }
-    elseif ($agent -and $att -gt 0) { $effort = 'high'; $why = 'retry after a failed exit check' }
-    $direct = (([string](Get-Setting @('run', 'fasttrack_direct') 'true')).ToLowerInvariant() -ne 'false') -and $agent -and (Test-Path -LiteralPath (Join-Path $RepoRoot ('.claude/agents/' + $agent + '.md')))
-    $wm = Resolve-ClaudeModel (([string](Get-Setting @('run', 'orchestrator_model') 'claude-haiku-5-5')) -replace '[^A-Za-z0-9._-]', '')
-    $we = ([string](Get-Setting @('run', 'orchestrator_effort') 'low')) -replace '[^a-z]', ''
+    $model = ''; $why = ''; $effort = ''; $tier = ''; $source = ''
+    $route = Get-Route $agent $ctx ($att + 1)
+    if ($route) { $tier = $route.tier; $model = $route.model; $effort = $route.effort; $why = $route.why; $source = 'kcc-route' }
+    $fast = ($R.fasttrack -eq '1')
+    # Direct needs fast track, a harness that selects an agent by flag, and an agent file in that harness's agent folder.
+    $agentDir = Get-HProfile 'agent_dir'
+    $direct = $fast -and (([string](Get-Setting @('run', 'fasttrack_direct') 'true')).ToLowerInvariant() -ne 'false') -and $agent -and (Get-HProfile 'agent') -and $agentDir -and (Test-Path -LiteralPath (Join-Path $RepoRoot ($agentDir + '/' + $agent + '.md')))
+    $wm = ''; $we = ''
+    if ($fast) { $wm = Get-RunModel 'orchestrator' 'fast'; $we = ([string](Get-Setting @('run', 'orchestrator_effort') 'low')) -replace '[^a-z]', '' }
     $mode = 'wrapper'; if ($direct) { $mode = 'direct' }
-    return @{ mode = $mode; agent = $agent; model = $model; effort = $effort; why = $why; source = $source; tier = $(if ($pr) { $pr.tier } else { '' }); wrapperModel = $wm; wrapperEffort = $we }
+    if (-not $agent -and -not $fast) { return $null }
+    return @{ mode = $mode; agent = $agent; model = $model; effort = $effort; why = $why; source = $source; tier = $tier; wrapperModel = $wm; wrapperEffort = $we }
 }
 function Get-IdeaDomain([string]$idea) {
     # Research.md -> '## Domain' (common | specialised | novel), written by the idea-interrogator.
@@ -786,21 +803,31 @@ function Get-IdeaDomain([string]$idea) {
     $v = $m.Groups[1].Value.ToLowerInvariant(); if ($v -eq 'specialized') { $v = 'specialised' }
     return $v
 }
+function Format-HFlag([string]$tpl, [string]$key, [string]$value) {
+    if (-not $tpl -or -not $value) { return '' }
+    return $tpl.Replace('{' + $key + '}', $value)
+}
+# The flags that pick the agent, model and effort, written the way the active harness takes them (kernel/harnesses.json).
 function Get-HarnessExtra($am) {
     if (-not $am) { return '' }
-    if ($am.mode -eq 'direct') { $x = '--agent ' + $am.agent; if ($am.model) { $x += ' --model ' + $am.model }; if ($am.effort) { $x += ' --effort ' + $am.effort }; return $x }
-    $x = ''; if ($am.wrapperModel) { $x = '--model ' + $am.wrapperModel }; if ($am.wrapperEffort) { $x += ' --effort ' + $am.wrapperEffort }
-    return $x.Trim()
+    $parts = @()
+    if ($am.mode -eq 'direct') { $parts += (Format-HFlag (Get-HProfile 'agent') 'agent' $am.agent); $m = $am.model; $e = $am.effort }
+    else { $m = $am.wrapperModel; $e = $am.wrapperEffort }
+    $parts += (Format-HFlag (Get-HProfile 'model') 'model' $m)
+    $parts += (Format-HFlag (Get-HProfile 'effort') 'effort' (Get-HEffort $e))
+    return ((@($parts | Where-Object { $_ })) -join ' ')
 }
 function Convert-AgentBody([string]$body) {
     $m = [regex]::Match($body, '^/([a-z][a-z0-9-]*)\s*(.*)$')
     if (-not $m.Success) { return $body }
-    return ('Do the work of the skill described in .claude/skills/' + $m.Groups[1].Value + '/SKILL.md (read it first) with these arguments: ' + $m.Groups[2].Value)
+    $sp = Get-HProfile 'skill_path'; if (-not $sp) { $sp = '.claude/skills/{skill}/SKILL.md' }
+    return ('Do the work of the skill described in ' + $sp.Replace('{skill}', $m.Groups[1].Value) + ' (read it first) with these arguments: ' + $m.Groups[2].Value)
 }
 function Get-HarnessCommand([string]$prompt) {
     $tpl = Str (Get-Setting @('continuity', 'start', $script:HarnessName) '')
     if (-not $tpl) { return $null }
-    if ($script:HarnessExtra -and $script:HarnessName -eq 'claude') { $tpl = [regex]::Replace($tpl, '(\s-p)(\s)', ('$1 ' + $script:HarnessExtra + '$2'), 1) }
+    $ins = Get-HProfile 'insert_after'
+    if ($script:HarnessExtra -and $ins) { $tpl = [regex]::Replace($tpl, ('(\s' + [regex]::Escape($ins) + ')(\s)'), ('$1 ' + $script:HarnessExtra + '$2'), 1) }
     $perm = (Str (Get-Setting @('continuity', 'permission_mode') 'auto')) -replace '[^A-Za-z]', ''
     if (-not $perm) { $perm = 'auto' }
     return $tpl.Replace('{resume_prompt}', (Sanitize-Prompt $prompt)).Replace('{permission_mode}', $perm).Replace('{session_id}', '')
@@ -1142,11 +1169,10 @@ function Process-Unit($st, $ctx) {
                 $body = Convert-AgentBody $body
                 $lead = '. You are the ' + $am.agent + ' agent running this state directly, with no orchestrator above you: do the work yourself and spawn no other agent. Do only this state, then stop. '
             } else {
-                $lead = $lead.TrimEnd() + ' Put the skill''s arguments (`--fasttrack`, `--depthlevel N`, and the rest) verbatim in each subagent''s handover packet and tell it to follow its "Fast track and depth" section; do not paraphrase them. '
-                if ($am.model) { $lead = $lead.TrimEnd() + ' Spawn the ' + $am.agent + ' subagent on model ' + $am.model + ' (' + $am.why + '). ' }
+                if ($R.fasttrack -eq '1') { $lead = $lead.TrimEnd() + ' Put the skill''s arguments (`--fasttrack`, `--depthlevel N`, and the rest) verbatim in each subagent''s handover packet and tell it to follow its "Fast track and depth" section; do not paraphrase them. ' }
+                if ($am.tier) { $lead = $lead.TrimEnd() + ' Routing (kcc-route): spawn the ' + $am.agent + ' subagent on tier ' + $am.tier + $(if ($am.model) { ', model ' + $am.model } else { '' }) + ', effort ' + $am.effort + ' (' + $am.why + '). Before any other spawn run `.KCC/tools/kcc-route -Agent <name> [-Spec ' + $(if ($ctx.SPEC) { $ctx.SPEC } else { 'SPEC-ID' }) + ']` and use its tier, model and effort. ' }
             }
-            if ($am.source -eq 'plan') { [void](Emit 'model-selected' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = $(if ($ctx.WAVE) { 'wave ' + $ctx.WAVE } else { 'spec' }); tier = $am.tier; model = $am.model; effort = $am.effort; reasons = $am.why; source = 'plan-routing' })) }
-            elseif ($am.model) { [void](Emit 'model-escalated' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = ('wave ' + $ctx.WAVE); from = 'executor'; to = $am.model; reason = $am.why; source = 'kcc-run' })) }
+            if ($am.tier) { [void](Emit 'model-selected' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = $(if ($ctx.WAVE) { 'wave ' + $ctx.WAVE } elseif ($ctx.SPEC) { 'spec' } else { 'run' }); tier = $am.tier; model = $am.model; effort = $am.effort; reasons = $am.why; mode = $am.mode; source = 'kcc-route' })) }
         }
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }

@@ -61,6 +61,7 @@ turns your brief into ADRs, guardrails, and quality gates.
    - data/storage/integration; security/privacy/compliance/audit; performance, scale, reliability, availability; observability/operations; patterns to reuse or avoid;
    - **architecture style**: default Clean Architecture + DDD for backend/service/API/fullstack, event-driven for IoT/sensor/streaming; opt down only for static/frontend-only/trivial (architect records an ADR). Record the choice;
    - **API standard** (HTTP/REST only): default OpenAPI 3.x + served Swagger UI + verifier-checked conformance; waive only with recorded rationale (candidate ADR);
+   - **domain protocols** (selected from context, never always-on): mobile deliverable -> `mobile-app-architecture`; pipelines, warehouses, analytics or ML -> `data-engineering-and-science`; users or data in the EU, GCC or US -> `privacy-and-cybersecurity-regions`. Read the matching protocol, ask its selection questions (native vs hybrid, batch vs streaming, regions in scope), and name the protocols in the brief;
    - build/test/release pipeline; migration/backward compatibility.
 4. **Challenge the tech stack (mandatory).** For each choice (language,
    runtime, framework, datastore, deployment target, packaging format):

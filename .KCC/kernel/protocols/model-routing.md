@@ -76,7 +76,21 @@ csrf, token, crypto, payment, personal data), runs the rules above for the `impl
   when the table exists; without it they keep their older subset.
 - The planner does not write this table by hand; it fills the `Complexity` column.
 
-## Where it runs
+## Where it runs: one router, three identical copies, every cycle
+
+The reference is `cli/src/run/router.ts`; `.KCC/tools/kcc-route.ps1` and `kcc-route.sh` are line-for-line ports and a parity
+test feeds all three the same cases. Every flow asks it before it spawns an agent:
+
+| Flow | Who asks | How |
+|--|--|--|
+| `kcc run` / `kcc-run`, every state, every cycle (full `auto` and `--fasttrack`) | the driver | `kcc-route -Agent <state agent> -Spec -Wave -Attempt`; a direct worker (fast track) gets the model and effort as flags, an orchestrator session is told in its prompt which tier, model and effort to spawn the agent on; `model-selected` records it |
+| chat `auto`, and any skill a developer runs by hand | the orchestrator | spawn rule 7: run `kcc-route` before each spawn and pass its model and effort to the Agent call |
+| `kcc route [SPEC-ID]` | anyone | writes the per-item `## Routing` table into `plan.md` for reading and review |
+
+The answer is already in the active harness's terms: the model id from `kernel/models.json` (its registry column, `run.registry`)
+and the effort folded onto what the harness accepts (`kernel/harnesses.json`), so Codex, OpenCode, Ollama-behind-OpenCode and
+Claude all route the same way with their own models.
+
 
 - **Chat (`auto`)**: the orchestrator applies the rules when it writes the handover packet
   (`orchestrator.md` -> Spawn protocol rule 7) and names the tier, effort and reasons in the packet;

@@ -28,11 +28,19 @@ export interface ItemRoute {
 }
 
 const COMPLEXITIES = ["low", "medium", "high", "extra-high"];
-/** Words that make an item security-sensitive (CR-7): auth, credentials, crypto, secrets, tokens, sessions, personal data. */
-const SECURITY = /\b(auth(?:entication|orization|n|z)?|password|credential|crypto|secret|token|csrf|jwt|oauth|session|pii|personal data|payment|encrypt\w*)\b/i;
+/**
+ * Words that make an item security-sensitive (CR-7): auth, credentials, crypto, secrets, tokens, sessions, personal data.
+ * The same tokens, in the same order, as kcc-route.ps1 and kcc-route.sh (a parity test feeds all three the same text).
+ */
+const SECURITY = /\b(?:auth|authentication|authorization|authn|authz|password|credential|crypto|secret|token|csrf|jwt|oauth|session|pii|payment)s?\b|\bencrypt\w*/i;
 
 export function securityHit(text: string): string | undefined {
-  return SECURITY.exec(text)?.[1]?.toLowerCase();
+  const low = text.toLowerCase();
+  if (low.includes("personal data")) return "personal data";
+  const m = SECURITY.exec(low);
+  if (!m) return undefined;
+  const tok = m[0];
+  return tok.length > 3 && tok.endsWith("s") && !tok.startsWith("encrypt") ? tok.slice(0, -1) : tok;
 }
 
 function cells(line: string): string[] {

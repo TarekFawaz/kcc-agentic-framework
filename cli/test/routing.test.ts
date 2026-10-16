@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { applyPayload } from "../src/lock";
 import { parsePlanItems, routeAll, securityHit, withRouting } from "../src/run/routing";
 
 // Plan-time routing: model and effort per backlog item, decided once from the plan and read by the drivers.
+setDefaultTimeout(120000); // each kcc-route call is a PowerShell or bash process that reads the plan
 const root = mkdtempSync(join(tmpdir(), "kcc-routing-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const put = (rel: string, text: string): void => {
@@ -84,36 +85,33 @@ describe("kcc route", () => {
 });
 
 
-describe("the drivers read the routing table", () => {
-  // kcc-run (ps1 and sh) only reads `## Routing`. Each driver's reader is lifted out of the script and run on the plan above.
+describe("the drivers ask the router (kcc-route) for every dispatch", () => {
+  // kcc-run (ps1 and sh) call .KCC/tools/kcc-route, the port of router.ts, with the agent, spec, wave and attempt. Both ports
+  // read the same plan above and must agree with each other and with `kcc route`'s table.
   const TAB = String.fromCharCode(9);
-  const planDir = (): string => join(root, SPEC);
-  const tools = (n: string): string => readFileSync(join(root, ".KCC", "tools", n), "utf8");
+  const tools = join(root, ".KCC", "tools");
+  const sh = (args: string[]): string[] => spawnSync("bash", [join(tools, "kcc-route.sh"), "--repo-root", root, ...args], { encoding: "utf8" }).stdout.trim().split(TAB);
+  const ps = (args: string[]): string[] => spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(tools, "kcc-route.ps1"), "-RepoRoot", root, ...args], { encoding: "utf8" }).stdout.trim().split(TAB);
 
-  test("bash: the strongest row of a wave's items wins; with no wave, the strongest of the spec; no table, nothing", () => {
-    const src = tools("kcc-run.sh");
-    const fn = src.slice(src.indexOf("plan_routing() {"), src.indexOf("agent_mode() {"));
-    const script = `spec_dir() { printf '%s' "$SPEC_DIR"; }${String.fromCharCode(10)}${fn}${String.fromCharCode(10)}plan_routing "$1" "$2"`;
-    const run = (wave: string, dir = planDir()): string =>
-      spawnSync("bash", ["-c", script, "x", "e", wave], { encoding: "utf8", env: { ...process.env, SPEC_DIR: dir.split(String.fromCharCode(92)).join("/") } }).stdout.trim();
-    expect(run("3").startsWith(["claude-sonnet-5-5", "xhigh", "balanced"].join(TAB))).toBe(true); // Story-001 is extra-high
-    expect(run("2").split(TAB)[1]).toBe("high"); // Enabler-003 is security-sensitive
-    expect(run("").split(TAB)[1]).toBe("xhigh"); // the whole spec
-    expect(run("9")).toBe("");
-    put("specs/IDEA-001-demo-Specs/SPEC-009-none/plan.md", "# Plan");
-    expect(run("1", join(root, "specs", "IDEA-001-demo-Specs", "SPEC-009-none"))).toBe("");
+  test("bash: wave 3 (extra-high) is xhigh, wave 2 (security) is high, the whole spec is xhigh; a spec with no plan routes from the profile", () => {
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "3"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "xhigh"]);
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "2"])[2]).toBe("high");
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-001"])[2]).toBe("xhigh");
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-002"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]); // novel domain, no plan rows
+    expect(sh(["--agent", "architect"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
   });
 
   test("PowerShell: the same plan gives the same answers", () => {
     if (process.platform !== "win32") return;
-    const src = tools("kcc-run.ps1");
-    const fn = src.slice(src.indexOf("function Get-PlanRouting"), src.indexOf("function Get-AgentMode"));
-    const script = `function Get-SpecDir($e) { $env:SPEC_DIR }; function Read-Lines($p) { [System.IO.File]::ReadAllLines($p) }; ${fn}; $r = Get-PlanRouting 'e' $args[0]; if ($r) { ($r.model, $r.effort, $r.tier) -join ' ' }`;
-    const run = (wave: string): string =>
-      spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `& { ${script} } '${wave}'`], { encoding: "utf8", env: { ...process.env, SPEC_DIR: planDir() } }).stdout.trim();
-    expect(run("3")).toBe("claude-sonnet-5-5 xhigh balanced");
-    expect(run("2").split(" ")[1]).toBe("high");
-    expect(run("").split(" ")[1]).toBe("xhigh");
-    expect(run("9")).toBe("");
+    expect(ps(["-Agent", "implementer", "-Spec", "SPEC-001", "-Wave", "3"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "xhigh"]);
+    expect(ps(["-Agent", "implementer", "-Spec", "SPEC-001", "-Wave", "2"])[2]).toBe("high");
+    expect(ps(["-Agent", "implementer", "-Spec", "SPEC-001"])[2]).toBe("xhigh");
+    expect(ps(["-Agent", "architect"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
+  });
+
+  test("a retry raises the effort, and another harness gets its own model and a folded effort", () => {
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "1", "--attempt", "2"])[2]).toBe("xhigh"); // novel: high, retry: +1
+    const codex = sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "3", "--harness", "codex"]);
+    expect(codex.slice(0, 3)).toEqual(["balanced", "gpt-6.1-sol", "high"]); // xhigh folded to codex's high
   });
 });

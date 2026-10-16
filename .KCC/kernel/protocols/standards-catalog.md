@@ -15,8 +15,8 @@ tags:
   - architecture
   - standards
 created: 2026-10-15
-updated: 2026-10-15
-version: 1.0.0
+updated: 2026-10-16
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -55,6 +55,7 @@ Two rules apply to every row:
 | Secrets | OWASP Secrets Management Cheat Sheet; Twelve-Factor config | secrets from the environment or a secret store, never in the repo; `.env.example` lists names only |
 | Security headers | OWASP Secure Headers Project | CSP, `X-Content-Type-Options`, `Referrer-Policy`, HSTS behind TLS |
 | Logging of security events | OWASP Logging Cheat Sheet | log auth events and access failures; never log secrets, tokens, passwords, or full personal data |
+| Regional privacy and cyber law | GDPR, NIS2, DORA, GCC PDPLs, US state and sectoral laws ([[privacy-and-cybersecurity-regions]]) | selected from where users are, where data is stored, sector and listing, never always-on; obligations, controls and the verifier check live in that protocol |
 
 ## APIs
 
@@ -77,6 +78,7 @@ Two rules apply to every row:
 | Schema change | expand / migrate / contract | forward-only, numbered migrations; reversible where data allows |
 | Personal data | GDPR principles (lawfulness, minimisation, storage limitation) | collect the minimum, define retention, support export and deletion when users are people |
 | Identifiers | RFC 9562 (UUID) | UUIDv7 or ULID for public ids; never expose sequential ids that leak counts when that matters |
+| Pipelines, warehouses, analytics, ML | [[data-engineering-and-science]] | applies when data moves between systems or a model is trained or called: contracts, quality tests in CI, PII inventory, an eval report per model |
 
 ## Quality and operations
 
@@ -88,6 +90,7 @@ Two rules apply to every row:
 | Reliability targets | SRE practice (SLI, SLO, error budget) | one availability and one latency SLO per user-facing service in `technical-budgets.md` |
 | Containers | CIS Docker Benchmark | non-root user, pinned base image digest or version, minimal image, health check, read-only filesystem where possible |
 | Testing | test pyramid; [[testing-unit]], [[testing-integration]] | most tests at unit level, integration per adapter, a thin end-to-end layer; coverage floor from settings |
+| Mobile deliverables | [[mobile-app-architecture]]; OWASP MASVS | applies to any app installed on a phone or tablet: native-vs-hybrid ADR, secure storage, signing out of the repo, mobile test pyramid |
 
 ## Accessibility and UX
 
@@ -110,5 +113,6 @@ Two rules apply to every row:
 
 - Architecture styles: [[architecture-styles]]
 - API standards: [[api-standards]]
+- Context-selected domain protocols: [[mobile-app-architecture]], [[data-engineering-and-science]], [[privacy-and-cybersecurity-regions]]
 - Architecture governance: [[architecture-governance]]
 - Toolchain preflight: [[toolchain-preflight]]

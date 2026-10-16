@@ -296,7 +296,7 @@ discover_projects() {
 
 dialect_stacks() {
   [[ -n "$SPEC_DIR" ]] || return 0
-  grep -rhoE '(backend|fullstack|frontend|embedded)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php)\b' "$SPEC_DIR" 2>/dev/null | sort -u | while IFS= read -r d; do
+  grep -rhoE '(backend|fullstack|frontend|embedded|mobile|scripting)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php|flutter|kotlin|swift|ruby|lua)\b' "$SPEC_DIR" 2>/dev/null | sort -u | while IFS= read -r d; do
     case "$d" in
       backend-nodejs|fullstack-mern|fullstack-nestjs|frontend-react|frontend-angular|frontend-vanilla-js) echo "node $d" ;;
       backend-python|fullstack-python) echo "python $d" ;;
@@ -306,6 +306,11 @@ dialect_stacks() {
       backend-java) echo "java $d" ;;
       backend-cpp|embedded-c|embedded-cpp) echo "cpp $d" ;;
       backend-php) echo "php $d" ;;
+      mobile-flutter) echo "flutter $d" ;;
+      mobile-kotlin) echo "kotlin $d" ;;
+      mobile-swift) echo "swift $d" ;;
+      backend-ruby) echo "ruby $d" ;;
+      scripting-lua) echo "lua $d" ;;
     esac
   done
 }

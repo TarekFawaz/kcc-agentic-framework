@@ -414,11 +414,13 @@ function Get-DialectStacks {
         'backend-csharp' = 'dotnet'; 'fullstack-dotnet' = 'dotnet'; 'backend-go' = 'go'; 'fullstack-go' = 'go'
         'backend-rust' = 'rust'; 'embedded-rust' = 'rust'; 'backend-java' = 'java'; 'backend-cpp' = 'cpp'
         'embedded-c' = 'cpp'; 'embedded-cpp' = 'cpp'; 'backend-php' = 'php'
+        'mobile-flutter' = 'flutter'; 'mobile-kotlin' = 'kotlin'; 'mobile-swift' = 'swift'
+        'backend-ruby' = 'ruby'; 'scripting-lua' = 'lua'
     }
     $seen = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $SpecDir -Recurse -File -Filter '*.md' -ErrorAction SilentlyContinue)) {
         $text = [IO.File]::ReadAllText($f.FullName)
-        foreach ($m in [regex]::Matches($text, '\b(backend|fullstack|frontend|embedded)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php)\b')) {
+        foreach ($m in [regex]::Matches($text, '\b(backend|fullstack|frontend|embedded|mobile|scripting)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php|flutter|kotlin|swift|ruby|lua)\b')) {
             $d = $m.Value
             if ($map.ContainsKey($d) -and (-not $seen.ContainsKey($d))) { $seen[$d] = $true; [void]$res.Add(@{ stack = $map[$d]; dialect = $d }) }
         }

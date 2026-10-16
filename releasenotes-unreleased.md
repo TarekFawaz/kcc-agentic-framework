@@ -52,6 +52,24 @@ Everything is additive: a run that uses none of the new flags behaves as before.
   too many (DEEP-002), or a task outside the list (DEEP-003). `kcc models --check` skips the deep probe (it costs money);
   `--deep` adds it. Skill: `/deep`. Protocol: `.KCC/kernel/protocols/deep-thinking.md`.
 
+- **No harness is special.** `kcc-run` used to build its agent, model and effort flags only for Claude and read Claude model
+  ids from settings, so fast track and per-item routing worked on Claude alone. How each harness takes an agent, a model and an
+  effort is now data (`kernel/harnesses.json`: Claude, Codex, OpenCode, generic; override a key per project with
+  `settings.json -> harness_invoke.<harness>.<key>`), and which model each tier is on each harness is the registry
+  (`kernel/models.json`; `run.registry: "ollama"` runs Ollama models behind OpenCode). Settings carry tiers
+  (`run.orchestrator_tier`, `run.escalation_tier`), not model ids; an explicit `run.orchestrator_model` still works, but a Claude
+  id is never passed to another harness. A harness with no agent flag (Codex) runs worker states under one orchestrator session;
+  one with no effort flag gets none; efforts a harness cannot take are folded (Codex tops out at `high`). Skills and agents are
+  looked up in the harness's own folders. Both drivers build identical commands; the harness CLIs themselves are not
+  installed in the test environment, so the commands are verified, not live runs on Codex or OpenCode.
+- **The router runs in every cycle, on every harness.** `.KCC/tools/kcc-route.ps1|.sh` are line-for-line ports of the router
+  (`cli/src/run/router.ts`; a parity test feeds all three 400 signal rows). `kcc-run` asks it for every dispatch in the full
+  `auto` lifecycle and under `--fasttrack`: a direct worker gets the model and effort as flags, an orchestrator session is told
+  which tier, model and effort to spawn the agent on, and `model-selected` records the choice. Spawn rule 7 and every skill's
+  spawn footer tell the orchestrator and a developer to run it before each spawn.
+- **New dialects:** Flutter (with package guidelines), Kotlin, Swift, Ruby and Lua. **New domain protocols**, selected from the
+  idea's context by the interrogators and architect, never always-on: mobile app architecture (iOS, Android, hybrid), data
+  engineering and data science, and privacy and cybersecurity by region (EU, GCC, US, global baseline).
 - **Routing per backlog item, decided at plan time.** `kcc route [SPEC-ID]` turns each item's Complexity, files, domain and
   security words into a model and effort and writes them into `plan.md` as `## Routing`; `kcc run` does it after SPECS. `kcc-run`
   (both drivers) passes each wave and the FIX pass the strongest row of its items and emits `model-selected`, so the rules live

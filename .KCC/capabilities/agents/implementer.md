@@ -60,7 +60,10 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
    gates are requirements.
 5. Load item dialects from `.KCC/kernel/protocols/dialects/`, plus
    `testing-unit` + `testing-integration` always and `testing-performance` /
-   `testing-security` when a Test ID has that level.
+   `testing-security` when a Test ID has that level. Also load any domain
+   protocol the plan's `## Standards coverage` names (`mobile-app-architecture`,
+   `data-engineering-and-science`, `privacy-and-cybersecurity-regions`, under
+   `.KCC/kernel/protocols/`); its rules are requirements for your items.
 6. **Stack fidelity (HARD RULE).** The ADR / `TechnicalDecisionBrief.md`
    dictates the stack, not the installed toolchain. Never swap stacks (e.g.
    static HTML/JS for declared TS + React), in any mode incl.

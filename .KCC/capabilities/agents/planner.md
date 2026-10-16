@@ -118,7 +118,9 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
     test that spawns it and asserts the result.
 11b. **`## Standards coverage`.** Read the `Verifier conformance check` of
     each standard the architecture cites (`api-standards.md` for any HTTP API,
-    `standards-catalog.md` rows for security, data, operations, supply chain)
+    `standards-catalog.md` rows for security, data, operations, supply chain,
+    and any domain protocol the briefs or ADRs name: `mobile-app-architecture.md`,
+    `data-engineering-and-science.md`, `privacy-and-cybersecurity-regions.md`)
     and list `| Standard | Verifier check | Covered by (Test ID or Verification
     Step) |`. A deliverable a standard requires (a checked-in OpenAPI
     document, a migration, a lockfile) is a Test ID or a named file in an

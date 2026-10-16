@@ -6,8 +6,8 @@ tags:
   - kcc/kernel
   - dialects
 created: 2026-05-25
-updated: 2026-06-06
-version: 0.5.0
+updated: 2026-10-16
+version: 0.6.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -61,6 +61,7 @@ Independent of dialect, two framework defaults apply:
 | Backend Java | [[backend-java]] |
 | Backend C++ | [[backend-cpp]] |
 | Backend NodeJS | [[backend-nodejs]] |
+| Backend Ruby | [[backend-ruby]] |
 | Full-stack .NET | [[fullstack-dotnet]] |
 | Full-stack MERN | [[fullstack-mern]] |
 | Full-stack NestJS | [[fullstack-nestjs]] |
@@ -69,10 +70,14 @@ Independent of dialect, two framework defaults apply:
 | Embedded C | [[embedded-c]] |
 | Embedded C++ | [[embedded-cpp]] |
 | Embedded Rust | [[embedded-rust]] |
+| Mobile Flutter | [[mobile-flutter]] |
+| Mobile Kotlin | [[mobile-kotlin]] |
+| Mobile Swift | [[mobile-swift]] |
 | Frontend Angular | [[frontend-angular]] |
 | Frontend React | [[frontend-react]] |
 | Frontend Vanilla JS | [[frontend-vanilla-js]] |
 | Frontend general | [[frontend-general]] |
+| Scripting Lua | [[scripting-lua]] |
 | DevOps cloud | [[devops-cloud]] |
 | DevOps K8s on-prem/agnostic | [[devops-k8s-onprem-agnostic]] |
 

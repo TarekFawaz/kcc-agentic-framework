@@ -321,7 +321,7 @@ function New-SkillSpawnFooter {
     $economy = "`n`n## Output economy`n`nHonour ``depthlevel`` (1-5, default 5) from the AutoPolicy per ``.KCC/kernel/protocols/depth-levels.md``; write each fact once, tables over prose, stay under the artifact length caps.`n"
     if (-not $delegates.Count) { return $economy }
     $names = ($delegates | ForEach-Object { ('`{0}`' -f $_) }) -join ', '
-    return "`n`n## Spawning`n`nDelegate to $names per ``coordination/orchestrator.md`` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (``orchestrator.json`` -> ``agents[].spawn``), handover packet in, lean return out.`n" + $economy
+    return "`n`n## Spawning`n`nDelegate to $names per ``coordination/orchestrator.md`` -> *Spawn protocol*: fresh subagent per unit; before each spawn run ``.KCC/tools/kcc-route`` (``-Agent <name> [-Spec SPEC-ID]``) and pass the model and effort it prints (its default is the agent's profile in ``orchestrator.json`` -> ``agents[].spawn``), handover packet in, lean return out.`n" + $economy
 }
 
 function New-SkillPackageContent {

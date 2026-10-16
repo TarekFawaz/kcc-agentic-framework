@@ -77,6 +77,7 @@ atomic test case. Spec folder:
    | 9e | Traceability | every spec | `.KCC/tools/check-traceability -Spec SPEC-{ID}` exit != 0 (AC -> Test ID -> test -> result gap). |
    | 9f | `quality-gate` | every spec | `.KCC/tools/quality-gate -Spec SPEC-{ID}` exit 1; exit 3 -> verdict **QUALITY_DEFERRED** (never a pass). Includes `QG-PROD` (`.KCC/kernel/protocols/architecture-governance.md` -> *Quality gate catalog*). |
    | 9g | Open bugs | every spec | any `Backlog/Bug-*.md` with severity `blocker`/`major` not `verified`/`wontfix` (`check-run-conformance -Scope bugs`). |
+   | 9h | Domain protocols | plan `## Standards coverage` names one | any row of the *Verifier conformance check* in `.KCC/kernel/protocols/mobile-app-architecture.md`, `data-engineering-and-science.md`, or `privacy-and-cybersecurity-regions.md` fails; cite the row and the artifact. |
 
 10. **Toolchain re-check** before any suite: see
     `.KCC/kernel/protocols/toolchain-preflight.md` -> *The install gate

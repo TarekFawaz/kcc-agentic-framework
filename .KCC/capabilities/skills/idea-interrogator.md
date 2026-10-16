@@ -102,7 +102,11 @@ threshold (95% default).
    "we'll use Java because that's what we use" for a small CLI tool, the
    agent must surface alternatives (Go, Rust, single-binary trade-offs) and
    ask for an explicit decision. Output: `TechnicalDecisionBrief.md` in the
-   idea folder.
+   idea folder. The domain protocols under `.KCC/kernel/protocols/`
+   (`mobile-app-architecture`, `data-engineering-and-science`,
+   `privacy-and-cybersecurity-regions`) are selected from the idea's context
+   (mobile deliverable, data or ML work, users or data in the EU, GCC or US),
+   not applied to every idea.
 
 5. **UX interrogation (conditional).** If the idea is user-facing, invoke
    `/ux-ui-interrogator` with the idea folder. The ux-ui-designer agent MUST

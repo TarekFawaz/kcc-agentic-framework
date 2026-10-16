@@ -675,7 +675,7 @@ prep_skills() {
     mget "s$i" delegates_to
     if [[ -n "$R" ]]; then
       backtick_list "$R"
-      SK_FOOT[i]=$'\n\n## Spawning\n\nDelegate to '"$R"$' per `coordination/orchestrator.md` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (`orchestrator.json` -> `agents[].spawn`), handover packet in, lean return out.\n'"$ECONOMY"
+      SK_FOOT[i]=$'\n\n## Spawning\n\nDelegate to '"$R"$' per `coordination/orchestrator.md` -> *Spawn protocol*: fresh subagent per unit; before each spawn run `.KCC/tools/kcc-route` (`--agent <name> [--spec SPEC-ID]`) and pass the model and effort it prints (its default is the agent\'s profile in `orchestrator.json` -> `agents[].spawn`), handover packet in, lean return out.\n'"$ECONOMY"
     else
       SK_FOOT[i]="$ECONOMY"
     fi

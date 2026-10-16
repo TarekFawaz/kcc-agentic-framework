@@ -49,6 +49,7 @@
       "fast":     { "id": "anthropic/claude-haiku-5-5" }
     },
     "ollama": {
+      "_prefix": "ollama/",
       "strong":   { "id": "qwen2.5:72b" },
       "balanced": { "id": "qwen2.5:32b" },
       "fast":     { "id": "qwen2.5:14b" }

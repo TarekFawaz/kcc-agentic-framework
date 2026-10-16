@@ -92,9 +92,9 @@
     "max_attempts": 3,
     "state_timeout_minutes": 60,
     "harness": "claude",
-    "orchestrator_model": "claude-haiku-5-5",
+    "orchestrator_tier": "fast",
     "orchestrator_effort": "low",
-    "escalation_model": "claude-sonnet-5-5",
+    "escalation_tier": "balanced",
     "fasttrack_direct": true,
     "butler": "on"
   },

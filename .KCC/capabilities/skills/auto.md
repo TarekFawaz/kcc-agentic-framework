@@ -202,8 +202,10 @@ Rules that hold in every fast-track state:
   `run.butler` is on.
 - **Specs move on their own clock**: a spec builds as soon as the specs it depends on are APPROVED,
   independent specs side by side; nothing waits for an unrelated spec.
-- **Models**: the orchestrator session runs on `run.orchestrator_model`; agents keep their own
-  tier; `run.escalation_model` for a `high` wave or a retry (`model-escalated`).
+- **Models**: the orchestrator session runs on the `run.orchestrator_tier` model (default `fast`) of the active harness;
+  agents keep their own tier; the plan's `## Routing` (`kcc route`) sets the implementer's model and effort per item.
+  Nothing is Claude-specific: `kernel/harnesses.json` says how each harness takes an agent, model and effort, and
+  `kernel/models.json` which model each tier is on it.
 - **Never relaxed**: CR-7 prohibited assumptions, CR-9 toolchain gate, CR-12 stack from the
   Decisions table, CR-13 no silent spec drop, CR-16 repo bootstrap, exit 3 is not a pass, and the
   full `quality-gate` scope.

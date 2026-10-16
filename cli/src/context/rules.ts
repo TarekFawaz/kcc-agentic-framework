@@ -15,6 +15,11 @@ const STACK_DIALECTS: Record<Stack, string[]> = {
   cpp: ["backend-cpp"],
   c: [],
   php: ["backend-php"],
+  flutter: ["mobile-flutter"],
+  kotlin: ["mobile-kotlin"],
+  swift: ["mobile-swift"],
+  ruby: ["backend-ruby"],
+  lua: ["scripting-lua"],
 };
 
 const FULLSTACK: Partial<Record<Stack, string>> = { python: "fullstack-python", dotnet: "fullstack-dotnet", go: "fullstack-go" };

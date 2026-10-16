@@ -44,7 +44,11 @@ Interrogate technical decisions for: <ARGS>
    folder exists, or an inline technical decision brief for ad-hoc requests.
    The brief must include architecture depth, candidate technical approach,
    selected or candidate tech stack, selected KCC dialects from
-   `.KCC/kernel/protocols/dialects/`, and open technical decisions.
+   `.KCC/kernel/protocols/dialects/`, and open technical decisions. When the
+   idea is mobile, data/ML, or has users or data in the EU, GCC or US, the
+   brief also names the matching domain protocol (`mobile-app-architecture`,
+   `data-engineering-and-science`, `privacy-and-cybersecurity-regions`);
+   these are selected from the idea's context, never applied to every idea.
 4. If the agent reports confidence below the configured threshold (95% by
    default), invoke `/critical-human-gate` and pause `/spec-create`.
 5. Pass the technical decision brief to the **architect**, specialist

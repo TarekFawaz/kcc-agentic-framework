@@ -68,7 +68,11 @@ tech-stack decisions. Use this mapping as the baseline:
 | `backend-rust` | `rustup` / `cargo`, `git` |
 | `backend-java` | a JDK (`java`/`javac`), `maven` or `gradle`, `git` |
 | `backend-dotnet`, `fullstack-dotnet` | `dotnet` SDK, `git` |
-| flutter / mobile | `dart`, `flutter`, `git` |
+| `mobile-flutter` | `flutter`, `dart`, `git` |
+| `mobile-kotlin` | a JDK (`java`), `gradle` (wrapper), Android SDK, `git` |
+| `mobile-swift` | `swift`, `xcodebuild` (Xcode), `git` |
+| `backend-ruby` | `ruby`, `bundler`, `git` |
+| `scripting-lua` | `lua` (or `luajit`), `luarocks`, `git` |
 | `devops-cloud` | `terraform`, the cloud CLI (`aws` / `az` / `gcloud`), `git` |
 | `devops-k8s-onprem-agnostic` | `terraform`, `kubectl`, `helm`, `git` |
 | **always** | `git` |
