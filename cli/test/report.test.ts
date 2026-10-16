@@ -2,7 +2,8 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { report } from "../src/commands/report";
+import { buildReport, report } from "../src/commands/report";
+import { readFileSync } from "node:fs";
 import { applyPayload } from "../src/lock";
 import { runTool } from "../src/platform";
 
@@ -79,5 +80,19 @@ describe("kcc report", () => {
     setup([ev(0, "auto-policy-parsed"), ev(5, "implement-completed", {}, "SPEC-001"), ev(9, "session-closed")], true);
     const r = runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
     expect(r.status).toBe(0);
+  });
+  test("a run that never closed is INCOMPLETE inside the budget (exit 2), a miss after it", () => {
+    n = 0;
+    setup([ev(0, "auto-policy-parsed"), ev(20, "idea-interrogation-completed"), ev(30, "implement-completed", {}, "SPEC-001")], true);
+    expect(runTool(root, "build-dashboard", ["--repo-root", root], { capture: true }).status).toBe(0);
+    const html = readFileSync(join(root, "dashboard", "index.html"), "utf8");
+    const early = buildReport(html, { skeletonMin: 45, appMin: 180, srcFiles: 3, now: T0 + 60 * 60000 });
+    expect(early.incomplete).toBe(true);
+    expect(early.pass).toBe(false);
+    expect(early.markdown).toContain("## Verdict: INCOMPLETE");
+    expect(early.markdown).toContain("kcc run --resume");
+    const late = buildReport(html, { skeletonMin: 45, appMin: 180, srcFiles: 3, now: T0 + 200 * 60000 });
+    expect(late.incomplete).toBe(false);
+    expect(late.markdown).toContain("## Verdict: FAIL");
   });
 });

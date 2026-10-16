@@ -7,7 +7,8 @@ import { runTool } from "../platform";
  * `kcc report [--skeleton-min N] [--app-min N] [--out file] [--no-build]`
  *
  * One run, measured: stages, human waits, agents, cost, outcome, and a verdict against a time budget
- * (default: a walking skeleton within 45 minutes, the whole app within 180). It reads the dashboard's data
+ * (default: a walking skeleton within 45 minutes, the whole app within 180). Exit 0 pass, 1 miss, 2 incomplete (the
+ * run has not closed and is still inside the budget: resume it). It reads the dashboard's data
  * block and runs the dashboard's own stage-timing functions (the block between the stage-timing markers),
  * so the report and the page cannot disagree. Exit 1 when a budget is missed, naming the slowest stages.
  */
@@ -37,7 +38,7 @@ function countFiles(dir: string, cap = 5000): number {
 }
 
 export interface ReportOptions { skeletonMin: number; appMin: number; srcFiles: number; now?: number }
-export interface ReportResult { markdown: string; pass: boolean; skeletonMs: number | null; appMs: number | null }
+export interface ReportResult { markdown: string; pass: boolean; incomplete: boolean; skeletonMs: number | null; appMs: number | null }
 
 export function buildReport(html: string, o: ReportOptions): ReportResult {
   const data = /<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html);
@@ -58,6 +59,7 @@ export function buildReport(html: string, o: ReportOptions): ReportResult {
   const gates = T.gateSpans(D, end);
   const humanMs = gates.reduce((s, g) => s + Math.max(0, g.end - g.start), 0);
   const wall = end - start;
+  const min = (ms: number): number => ms / 60000;
 
   const specs: { id: string; status?: string }[] = D.specs ?? [];
   const firstSpec = specs.map((s) => s.id).sort()[0] ?? events.map((e) => e.spec ?? "").filter((s) => /^SPEC-/.test(s)).sort()[0];
@@ -65,10 +67,14 @@ export function buildReport(html: string, o: ReportOptions): ReportResult {
   const closed = [...events].reverse().find((e) => e.kind === "session-closed");
   const skeletonMs = skel ? (T.toMs(skel.ts) ?? start) - start : null;
   const appMs = closed ? (T.toMs(closed.ts) ?? start) - start : null;
-  const min = (ms: number): number => ms / 60000;
   const okSkel = skeletonMs != null && min(skeletonMs) <= o.skeletonMin;
   const okApp = appMs != null && min(appMs) <= o.appMin;
   const pass = okSkel && okApp && o.srcFiles > 0;
+  // A run that never closed has not finished: inside the app budget that is "incomplete" (resume it), past it a miss.
+  // A stopped or interrupted run must not read as a failed framework.
+  const elapsed = (o.now ?? Date.now()) - start;
+  const incomplete = !pass && !closed && min(elapsed) <= o.appMin;
+  const label = pass ? "PASS" : incomplete ? "INCOMPLETE" : "FAIL";
 
   const agents: any[] = D.agents ?? [];
   const byModel = new Map<string, { n: number; cost: number; ms: number }>();
@@ -84,9 +90,10 @@ export function buildReport(html: string, o: ReportOptions): ReportResult {
   const verdict = (ok: boolean, ms: number | null, budget: number): string => (ms == null ? "FAIL (not reached)" : `${ok ? "PASS" : "FAIL"} (${f(ms)} of ${budget} min)`);
 
   const L: string[] = [];
-  L.push(`# Round report`, "", `Generated ${new Date(end).toISOString()}. Run status: **${run.status ?? "unknown"}**${run.reason ? ` (${run.reason})` : ""}. Flags: ${run.fasttrack === "1" ? "--fasttrack " : ""}${run.depthlevel ? `--depthlevel ${run.depthlevel}` : ""}`.trimEnd(), "");
-  L.push(`## Verdict: ${pass ? "PASS" : "FAIL"}`, "", `| Budget | Result |`, `|--|--|`, `| Walking skeleton (first spec built) | ${verdict(okSkel, skeletonMs, o.skeletonMin)} |`, `| Whole app (session closed) | ${verdict(okApp, appMs, o.appMin)} |`, `| Code written under src/ | ${o.srcFiles > 0 ? `PASS (${o.srcFiles} files)` : "FAIL (none)"} |`, "");
-  if (!pass && slow.length) L.push(`Slowest stages: ${slow.map((r) => `${r.name} ${f(r.totalMs)}`).join(", ")}.`, "");
+  L.push(`# Round report`, "", `Generated ${new Date(o.now ?? Date.now()).toISOString()}; last event ${new Date(lastStamp).toISOString()}. Run status: **${run.status ?? "unknown"}**${run.reason ? ` (${run.reason})` : ""}. Flags: ${run.fasttrack === "1" ? "--fasttrack " : ""}${run.depthlevel ? `--depthlevel ${run.depthlevel}` : ""}`.trimEnd(), "");
+  L.push(`## Verdict: ${label}`, "", `| Budget | Result |`, `|--|--|`, `| Walking skeleton (first spec built) | ${verdict(okSkel, skeletonMs, o.skeletonMin)} |`, `| Whole app (session closed) | ${verdict(okApp, appMs, o.appMin)} |`, `| Code written under src/ | ${o.srcFiles > 0 ? `PASS (${o.srcFiles} files)` : "FAIL (none)"} |`, "");
+  if (incomplete) L.push(`The run has not closed (status ${run.status ?? "unknown"}${run.reason ? `: ${run.reason}` : ""}); ${f(elapsed)} of ${o.appMin} min used. Resume it with kcc run --resume, then run kcc report again.`, "");
+  if (!pass && !incomplete && slow.length) L.push(`Slowest stages: ${slow.map((r) => `${r.name} ${f(r.totalMs)}`).join(", ")}.`, "");
   L.push(`## Time`, "", `Wall clock ${f(wall)}; agents ${f(st.totals.agentMs)}; waiting on the human ${f(humanMs)} across ${gates.length} gate${gates.length === 1 ? "" : "s"}.`, "");
   L.push(`| Stage | Attempts | Agent | Human | Total |`, `|--|--|--|--|--|`);
   for (const r of st.rows) if (!r.skipped && r.totalMs > 0) L.push(`| ${r.id} ${r.name} | ${r.attempts} | ${f(r.agentMs)} | ${f(r.humanMs)} | ${f(r.totalMs)} |`);
@@ -95,7 +102,7 @@ export function buildReport(html: string, o: ReportOptions): ReportResult {
   L.push(`## Output`, "", `${specs.length} spec${specs.length === 1 ? "" : "s"}: ${specs.map((s) => `${s.id} ${s.status ?? "?"}`).join(", ") || "none"}. ${o.srcFiles} file${o.srcFiles === 1 ? "" : "s"} under src/.`, "");
   const deep = events.filter((e) => e.kind === "deep-spawned").length;
   if (deep) L.push(`DeepThinking spawns: ${deep}.`, "");
-  return { markdown: L.join("\n"), pass, skeletonMs, appMs };
+  return { markdown: L.join("\n"), pass, incomplete, skeletonMs, appMs };
 }
 
 export function report(argv: string[]): number {
@@ -113,7 +120,7 @@ export function report(argv: string[]): number {
     const out = resolve(values.out);
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, r.markdown + "\n");
-    console.log(`Report: ${out} (${r.pass ? "PASS" : "FAIL"})`);
+    console.log(`Report: ${out} (${r.pass ? "PASS" : r.incomplete ? "INCOMPLETE" : "FAIL"})`);
   } else console.log(r.markdown);
-  return r.pass ? 0 : 1;
+  return r.pass ? 0 : r.incomplete ? 2 : 1;
 }
