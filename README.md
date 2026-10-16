@@ -289,7 +289,9 @@ full hand-off mode.
 
 Add `--parallel` to any of these to force parallel agent sessions - spec
 creation fans out one subagent per epic, and parallel windows open without the
-per-spec prompt (e.g. `auto <idea> --parallel`). See
+per-spec prompt (e.g. `auto <idea> --parallel`). Add `--fasttrack` for a lean
+build-first run (no budget gates or traces, lite docs), and `--depthlevel 1-5`
+to cut how much detail agents write. See
 [QUICKSTART.md](./QUICKSTART.md#the-auto-skill-in-depth).
 
 ## Source Package vs Generated Output

@@ -91,6 +91,8 @@ Useful flags:
 | `--accuracy NN%` | Sets the confidence floor. Default is 95%. |
 | `--budget NN [CCY]` | Sets hosted-model spend cap. Local models remain token-only. |
 | `--parallel` | Forces spec fan-out and later implementation wave fan-out when safe. |
+| `--fasttrack` | Developer fast path: no budget gates, no traces, lite ideation and architecture, small specs, then straight to build, test, and review. Safety gates stay. |
+| `--depthlevel N` | 1-5 (default 5, `--fasttrack` implies 2). Lower means shorter documents and fewer output tokens; required sections are never dropped. |
 
 ### Option C: Interrogate first, then resume with `auto`
 

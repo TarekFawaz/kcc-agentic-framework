@@ -63,7 +63,7 @@ in its frontmatter. **Validator enforces presence** - see
 Currently all capabilities default to `tarek.fawaz1983@gmail.com` until
 individual maintainers claim them via PR.
 
-### Lifecycle agents (6) - `model-class: strong-reasoning`
+### Lifecycle agents (6) - `model-class: balanced` (`implementer`: `fast-implementation`, the executor)
 
 | Capability | Current maintainer | Status |
 |---|---|---|
@@ -74,7 +74,7 @@ individual maintainers claim them via PR.
 | `verifier` | `tarek.fawaz1983@gmail.com` | L2 Proven |
 | `architect` | `tarek.fawaz1983@gmail.com` | L1 Experimental |
 
-### Specialist agents (3) - `model-class: strong-reasoning`
+### Specialist agents (4) - `model-class: balanced`
 
 | Capability | Current maintainer | Status |
 |---|---|---|

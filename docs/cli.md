@@ -64,6 +64,8 @@ terminal (`kcc run --input "<idea>"`).
 | `kcc validate [--mode cell\|repo]` | Runs the framework validator |
 | `kcc doctor [--json]` | Checks the installation and names the fix for each problem |
 | `kcc run ...` | Drives the lifecycle and survives usage limits. See below |
+| `kcc models [--check\|--refresh] [--deep]` | Lists the model of each tier per harness. `--check` probes the pinned Claude ids; `--deep` adds the DeepThinking tier (about $0.80 per probe) |
+| `kcc report [--skeleton-min N] [--app-min N] [--out file]` | Measures the run in this folder (time per stage, human waits, agents, cost) and judges it against a time budget; exit 1 on a miss |
 | `kcc limits [--json]` | Shows usage, the last limit hit, and the next resume |
 | `kcc hint "text" [--to all\|main\|subagents\|<agent>] [--expires <min>]` | Gives the running session and its subagents a hint, delivered by hook on the next tool call. Also `kcc --hint "text"`. `--list`, `--clear <id\|all>`, `--pending [--for <agent>]` manage and read hints. See `.KCC/kernel/protocols/hints.md` |
 | `kcc doctor --fix-hooks` | Adds the missing KCC hooks (hint delivery, StopFailure limit resume, limit guard) to `.claude/settings.json` without touching your own entries |
@@ -125,7 +127,9 @@ tool-contract shape used by the other KCC tools.
 
 ```text
 kcc run --input <idea | path | IDEA-ID | SPEC-ID | all> [--silent --assume] [--budget NN --currency CCY]
-        [--harness claude|codex|opencode|generic] [--parallel] [--dry-run] [--json]
+        [--harness claude|codex|opencode|generic] [--parallel] [--fasttrack] [--depthlevel 1-5]
+        [--open-dashboard | --no-open-dashboard]
+        [--dry-run] [--json]
 kcc run --resume
 kcc run --answer <choice>
 kcc run --wrap [--harness <name>] -- <any harness command>
