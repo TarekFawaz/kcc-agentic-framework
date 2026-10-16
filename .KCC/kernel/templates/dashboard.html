@@ -219,6 +219,14 @@ if(!D){view.innerHTML='<p class="empty">This is the dashboard template. Run <cod
 ['ideas','specs','roadmaps','events','checkpoints','sessions','decisions','humanDecisions','adrs','states','notes','agents','profiles','runLogs'].forEach(function(k){if(!Array.isArray(D[k]))D[k]=[];});
 D.memory=D.memory||{total:0};
 D.events.forEach(function(e){if(typeof e.payload==='string'&&/^[\[{]/.test(e.payload)){try{e.payload=JSON.parse(e.payload);}catch(x){}}});
+/* After the shared states the driver stops at --until 9 and the lane scheduler builds the specs, so run.json can say
+   "stopped" for hours while lanes work. A lane whose own run is running and whose files changed in the last 30
+   minutes means the run is running, at the earliest lane stage. */
+(function(){var L=(D.lanes||[]).filter(function(l){var u=Date.parse(l.updated||'');return l.runStatus==='running'&&!isNaN(u)&&(Date.parse(D.generatedAt||'')||Date.now())-u<30*60000;});
+  if(!L.length||!D.run||!/^(stopped|idle)$/.test(D.run.status||''))return;
+  var st=L.map(function(l){return Number(l.runState);}).filter(function(n){return isFinite(n)&&n>0;});
+  D.run.status='running';D.run.reason='specs running in lanes: '+L.map(function(l){return l.spec||l.name;}).join(', ');
+  if(st.length)D.run.state=Math.min.apply(null,st);})();
 
 /* ---------- helpers ---------- */
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -469,8 +477,8 @@ function workingNow(){
 function lanesCard(){
   var L=D.lanes||[];if(!L.length)return '';
   var gen=Date.parse(D.generatedAt||'')||Date.now();
-  return '<div class="card"><h2>Development lanes</h2><div class="scroll"><table><tr><th>Lane</th><th>Spec</th><th>Kind</th><th>Source files</th><th>Last change</th></tr>'+L.map(function(l){var u=Date.parse(l.updated||'');
-    return '<tr><td class="mono"><b>'+esc(l.name)+'</b></td><td>'+(l.spec?'<a href="#/specs/'+esc(l.spec)+'">'+esc(l.spec)+'</a>':'-')+'</td><td>'+esc(l.kind==='worktrees'?'git worktree':'kcc lane')+'</td><td class="mono">'+esc(l.files)+'</td><td class="mono">'+(isNaN(u)?'-':(Math.max(0,Math.round((gen-u)/60000))+' min ago'))+'</td></tr>';}).join('')+'</table></div></div>';}
+  return '<div class="card"><h2>Development lanes</h2><div class="scroll"><table><tr><th>Lane</th><th>Spec</th><th>Kind</th><th>Stage</th><th>Source files</th><th>Last change</th></tr>'+L.map(function(l){var u=Date.parse(l.updated||''),sn=(D.states||[]).filter(function(s){return String(s.id)===String(l.runState);})[0];
+    return '<tr><td class="mono"><b>'+esc(l.name)+'</b></td><td>'+(l.spec?'<a href="#/specs/'+esc(l.spec)+'">'+esc(l.spec)+'</a>':'-')+'</td><td>'+esc(l.kind==='worktrees'?'git worktree':'kcc lane')+'</td><td>'+(l.runState?esc((sn?sn.name:l.runState)+(l.runWave?' wave '+l.runWave:'')+(l.runStatus?' ('+l.runStatus+')':'')):'-')+'</td><td class="mono">'+esc(l.files)+'</td><td class="mono">'+(isNaN(u)?'-':(Math.max(0,Math.round((gen-u)/60000))+' min ago'))+'</td></tr>';}).join('')+'</table></div></div>';}
 function vOverview(){
   var h=pipeline()+workingNow()+lanesCard();
   setTimeout(function(){var c=document.querySelector('.step.cur,.step.bad'),box=c&&c.parentNode;if(box)box.scrollLeft=Math.max(0,c.offsetLeft-box.clientWidth/2);},0);

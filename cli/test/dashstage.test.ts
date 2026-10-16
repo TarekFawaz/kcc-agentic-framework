@@ -41,3 +41,28 @@ describe("dashboard stage of a chat-driven run", () => {
     expect(run.state).toBe(14); // fast-track table (no PLAN state): SPEC-001 is implementing, SPEC-002 waits at PREFLIGHT
   });
 });
+
+describe("dashboard during the lane phase", () => {
+  // Rounds 8 and 9: the driver stopped at --until 9 and run.json said "stopped at PREFLIGHT" while a lane built SPEC-001.
+  test("each kcc lane reports its own stage, and the page treats a stopped run with a live lane as running", () => {
+    const r = mkdtempSync(join(tmpdir(), "kcc-dash-lane-"));
+    try {
+      applyPayload(r);
+      mkdirSync(join(r, "coordination", "run"), { recursive: true });
+      writeFileSync(join(r, "coordination", "run", "run.json"), JSON.stringify({ status: "stopped", reason: "until 9", state: "14", scenario: "S2", fasttrack: "1" }));
+      const lane = join(r, ".kcc-lanes", "SPEC-001");
+      mkdirSync(join(lane, "coordination", "run"), { recursive: true });
+      mkdirSync(join(lane, "src"), { recursive: true });
+      writeFileSync(join(lane, "src", "a.ts"), "export {};");
+      writeFileSync(join(lane, "coordination", "run", "run.json"), JSON.stringify({ status: "running", state: "15", wave: "1" }));
+      expect(runTool(r, "build-dashboard", ["--repo-root", r], { capture: true }).status).toBe(0);
+      const html = readFileSync(join(r, "dashboard", "index.html"), "utf8");
+      const data = JSON.parse(/<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!);
+      expect(data.lanes[0]).toMatchObject({ spec: "SPEC-001", runState: "15", runWave: "1", runStatus: "running" });
+      expect(html).toContain("specs running in lanes: ");
+    } finally {
+      rmSync(r, { recursive: true, force: true });
+    }
+  });
+});
+

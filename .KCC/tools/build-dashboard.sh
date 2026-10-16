@@ -320,7 +320,7 @@ derive_state() { # prints "<state> <running|done>" or nothing
 
 # ---- lanes: git worktrees (.worktrees/) and kcc run lanes (.kcc-lanes/) where specs are being built ----
 emit_lanes() {
-  local ld d n files last first=1 spec
+  local ld d n files last first=1 spec lrf lst lwv lss
   for ld in .worktrees .kcc-lanes; do
     [[ -d "$REPO_ROOT/$ld" ]] || continue
     for d in "$REPO_ROOT/$ld"/*/; do
@@ -330,7 +330,9 @@ emit_lanes() {
       last="$(find "$d" -maxdepth 4 -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)"
       [[ -n "$last" ]] && last="$(date -u -d "@$last" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
       [[ $first -eq 1 ]] || printf ','; first=0
-      printf '{"name":%s,"kind":%s,"spec":%s,"files":%s,"updated":%s}' "$(q "$n")" "$(q "${ld#.}")" "$(q "$spec")" "${files:-0}" "$(q "$last")"
+      lrf="$d/coordination/run/run.json"; lst=""; lwv=""; lss=""
+      if [[ -f "$lrf" ]]; then lst="$(rawval "$lrf" state)"; lwv="$(rawval "$lrf" wave)"; lss="$(rawval "$lrf" status)"; fi
+      printf '{"name":%s,"kind":%s,"spec":%s,"files":%s,"updated":%s,"runState":%s,"runWave":%s,"runStatus":%s}' "$(q "$n")" "$(q "${ld#.}")" "$(q "$spec")" "${files:-0}" "$(q "$last")" "$(q "$lst")" "$(q "$lwv")" "$(q "$lss")"
     done
   done
 }

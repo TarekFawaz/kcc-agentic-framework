@@ -731,7 +731,11 @@ foreach ($ld in @('.worktrees', '.kcc-lanes')) {
         $files = @(); if (Test-Path -LiteralPath $src) { $files = @(Get-ChildItem -LiteralPath $src -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' }) }
         $last = $d.LastWriteTimeUtc; foreach ($f in $files) { if ($f.LastWriteTimeUtc -gt $last) { $last = $f.LastWriteTimeUtc } }
         $sm = [regex]::Match($d.Name, 'SPEC-[0-9A-Za-z]+')
-        $lanes += [ordered]@{ name = $d.Name; kind = $ld.TrimStart('.'); spec = $sm.Value; files = $files.Count; updated = $last.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        # A kcc lane runs its own kcc-run: its state, wave and status say which stage the spec is in.
+        $lr = $null; $lrp = Join-Path $d.FullName 'coordination/run/run.json'
+        if (Test-Path -LiteralPath $lrp) { try { $lr = [System.IO.File]::ReadAllText($lrp) | ConvertFrom-Json } catch { $lr = $null } }
+        $lanes += [ordered]@{ name = $d.Name; kind = $ld.TrimStart('.'); spec = $sm.Value; files = $files.Count; updated = $last.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            runState = $(if ($lr) { [string]$lr.state } else { '' }); runWave = $(if ($lr) { [string]$lr.wave } else { '' }); runStatus = $(if ($lr) { [string]$lr.status } else { '' }) }
     }
 }
 $data['lanes'] = $lanes
