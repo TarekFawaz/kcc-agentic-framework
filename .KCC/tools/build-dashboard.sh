@@ -159,6 +159,13 @@ collect_specs() {
       [[ -d "$sd/$group/$sf" ]] || continue
       local dir="$sd/$group/$sf"
       specId="$(printf '%s' "$sf" | grep -oE '^SPEC-[0-9A-Za-z]+' | head -n 1 || true)"
+      # A spec built in a lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) changes its backlog, plan, review and test results there;
+      # the workspace copy only catches up when the lane merges. Read the lane copy when there is one.
+      local trroot="$REPO_ROOT" ld lc
+      for ld in .kcc-lanes .worktrees; do
+        lc="$REPO_ROOT/$ld/$specId/specs/$group/$sf"
+        if [[ -d "$lc" ]]; then dir="$lc"; trroot="$REPO_ROOT/$ld/$specId"; break; fi
+      done
       note="$(ls -1 "$dir"/SPEC-*.md 2>/dev/null | grep -vi backlog | head -n 1 || true)"
       status=""; prio=""; cat=""; wave=""; title=""
       if [[ -n "$note" ]]; then
@@ -242,7 +249,7 @@ EOF
         rverdict="$(grep -oiwE 'APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED' "$dir/review.md" | head -n 1 | tr 'a-z' 'A-Z' || true)"
       fi
       # test results
-      local verdict="null" trf="$REPO_ROOT/TestResults/$ideaId/$specId/test-run-summary.md" tp tf
+      local verdict="null" trf="$trroot/TestResults/$ideaId/$specId/test-run-summary.md" tp tf
       if [[ -f "$trf" ]]; then
         tp="$(grep -oiwE 'PASS|PASSED' "$trf" | awk 'END{print NR}')"; tf="$(grep -oiwE 'FAIL|FAILED' "$trf" | awk 'END{print NR}')"
         verdict="{\"pass\":$(num "$tp"),\"fail\":$(num "$tf")}"

@@ -3,10 +3,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UsageError, workspace } from "../args";
 import { readJson, writeJson } from "../fsutil";
-import { isWindows, runTool } from "../platform";
+import { isWindows, runTool, runToolAsync } from "../platform";
 import { readSettings } from "../settings";
 import { startDashboardServer, type DashServer } from "../commands/dashboard";
-import { findRoadmap, laneDir, scheduleSpecs } from "./lanes";
+import { findRoadmap, laneDir, liveSyncLane, scheduleSpecs } from "./lanes";
 import { routeAll } from "./routing";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
@@ -110,6 +110,37 @@ async function superviseDriver(root: string, args: string[], p: Policy, wait: bo
     const rec = readJson<{ resets_at?: number | null }>(limitFile(root));
     if (!(await holdForReset(root, p, "kcc-run", rec?.resets_at ?? undefined, resumes))) return 5;
     current = ["--resume", "--repo-root", root];
+  }
+}
+
+/**
+ * Runs one lane's driver on its own (`kcc run --lane SPEC-X ...`). Unlike the scheduler it used to copy nothing back, so the
+ * workspace and the dashboard kept showing the gate as open and the old bugs for the whole run. This keeps the same live sync
+ * the scheduler does while the driver runs, and prints a line so the console shows it is working.
+ */
+async function superviseLane(root: string, dir: string, spec: string, args: string[], p: Policy, wait: boolean): Promise<number> {
+  const sync = (): void => {
+    try {
+      liveSyncLane(root, dir, spec);
+      runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
+    } catch {
+      /* a convenience copy; never stops the lane */
+    }
+  };
+  console.log(`kcc: running  in its lane; the workspace and the dashboard are synced every 20 seconds`);
+  const timer = setInterval(sync, 20000);
+  try {
+    let current = args;
+    for (let resumes = 0; ; resumes++) {
+      const r = await runToolAsync(dir, "kcc-run", current, { capture: false, env: wait ? { KCC_SUPERVISED: "1" } : {} });
+      if (r.status !== 5 || !wait) return r.status;
+      const rec = readJson<{ resets_at?: number | null }>(limitFile(dir));
+      if (!(await holdForReset(dir, p, "kcc-run", rec?.resets_at ?? undefined, resumes))) return 5;
+      current = ["--resume", "--repo-root", dir];
+    }
+  } finally {
+    clearInterval(timer);
+    sync();
   }
 }
 
@@ -218,7 +249,7 @@ async function runInner(argv: string[]): Promise<number> {
   if (lane) {
     const dir = laneDir(root, lane);
     if (!existsSync(join(dir, "coordination", "run", "run.json"))) throw new UsageError(`no lane for ${lane} (expected ${dir})`);
-    return superviseDriver(dir, [...rest, "--repo-root", dir], p, wait);
+    return superviseLane(root, dir, lane, [...rest, "--repo-root", dir], p, wait);
   }
   // A dry run or a status query never waits.
   const passive = rest.includes("--dry-run") || rest.includes("--help") || rest.includes("-h");

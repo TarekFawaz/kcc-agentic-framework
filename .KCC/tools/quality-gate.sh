@@ -402,7 +402,22 @@ check_lock() { # stack proj dir
   local st="$1" proj="$2" dir="$3" f=""
   in_scope lock || return 0
   case "$st" in
-    node) f="$(find_up "$dir" package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock || true)" ;;
+    node)
+      f="$(find_up "$dir" package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock || true)"
+      # A monorepo keeps ONE lockfile at the workspace root, which can sit above the spec's src folder (npm/yarn/pnpm
+      # workspaces). Accept it from an ancestor, up to the repository root, when that ancestor declares workspaces.
+      if [[ -z "$f" ]]; then
+        a="$(dirname "$WS")"
+        while [[ -n "$a" && ${#a} -ge ${#REPO_ROOT} && -z "$f" ]]; do
+          if { [[ -f "$a/package.json" ]] && grep -q '"workspaces"' "$a/package.json"; } || [[ -f "$a/pnpm-workspace.yaml" ]]; then
+            for n in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock; do if [[ -e "$a/$n" ]]; then f="$a/$n"; break; fi; done
+          fi
+          [[ "$a" == "$REPO_ROOT" ]] && break
+          p="$(dirname "$a")"; [[ "$p" == "$a" ]] && break
+          a="$p"
+        done
+      fi
+      ;;
     python)
       f="$(find_up "$dir" poetry.lock uv.lock Pipfile.lock pdm.lock || true)"
       if [[ -z "$f" && -f "$dir/requirements.txt" ]]; then

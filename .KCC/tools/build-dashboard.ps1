@@ -275,7 +275,15 @@ if (Test-Path -LiteralPath $specsDir) {
         }
         foreach ($sf in @(Get-ChildItem -LiteralPath $group.FullName -Directory -Filter 'SPEC-*' -ErrorAction SilentlyContinue | Sort-Object Name)) {
             $specId = [regex]::Match($sf.Name, '^SPEC-[0-9A-Za-z]+').Value
-            $note = Get-ChildItem -LiteralPath $sf.FullName -Filter 'SPEC-*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'backlog' } | Select-Object -First 1
+            # A spec being built in a lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) changes its backlog, plan, review and test results
+            # there; the workspace copy only catches up when the lane merges. Read the lane copy when there is one.
+            $sdir = $sf.FullName; $trRoot = $RepoRoot
+            foreach ($ld in @(".kcc-lanes", ".worktrees")) {
+                $laneRoot = Join-Path (Join-Path $RepoRoot $ld) $specId
+                $lc = Join-Path $laneRoot ("specs/" + $group.Name + "/" + $sf.Name)
+                if (Test-Path -LiteralPath $lc) { $sdir = $lc; $trRoot = $laneRoot; break }
+            }
+            $note = Get-ChildItem -LiteralPath $sdir -Filter 'SPEC-*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'backlog' } | Select-Object -First 1
             $sText = $null; if ($note) { $sText = Read-TextOrNull $note.FullName }
             $sLines = Get-Lines $sText
             $head = @(Get-Table (@($sLines | Select-Object -First 12)))
@@ -301,7 +309,7 @@ if (Test-Path -LiteralPath $specsDir) {
             # backlog items: spec table first, then item files (status in the item file wins)
             $blTable = @(Get-Table (Get-Section $sLines '^Backlog'))
             $items = @(); $bugs = @()
-            $bdir = Join-Path $sf.FullName 'Backlog'
+            $bdir = Join-Path $sdir 'Backlog'
             $seen = @{}
             if (Test-Path -LiteralPath $bdir) {
                 foreach ($bf in @(Get-ChildItem -LiteralPath $bdir -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
@@ -348,7 +356,7 @@ if (Test-Path -LiteralPath $specsDir) {
             }
             # plan
             $plan = [ordered]@{ exists = $false; status = ''; waves = 0; tests = 0 }
-            $pt = Read-TextOrNull (Join-Path $sf.FullName 'plan.md')
+            $pt = Read-TextOrNull (Join-Path $sdir 'plan.md')
             if ($pt) {
                 $pl = Get-Lines $pt
                 $plan.exists = $true; $plan.status = (Get-Frontmatter $pt 'status')
@@ -358,7 +366,7 @@ if (Test-Path -LiteralPath $specsDir) {
             }
             # review
             $review = [ordered]@{ exists = $false; verdict = '' }
-            $rvt = Read-TextOrNull (Join-Path $sf.FullName 'review.md')
+            $rvt = Read-TextOrNull (Join-Path $sdir 'review.md')
             if ($rvt) {
                 $review.exists = $true
                 $vm = [regex]::Match($rvt, '(?i)\b(APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED)\b')
@@ -366,13 +374,13 @@ if (Test-Path -LiteralPath $specsDir) {
             }
             # test verdicts
             $verdict = $null
-            $trf = Join-Path (Join-Path (Join-Path $RepoRoot 'TestResults') $ideaId) (Join-Path $specId 'test-run-summary.md')
+            $trf = Join-Path (Join-Path (Join-Path $trRoot 'TestResults') $ideaId) (Join-Path $specId 'test-run-summary.md')
             $trt = Read-TextOrNull $trf
             if ($trt) {
                 $verdict = [ordered]@{ pass = ([regex]::Matches($trt, '(?i)\bPASS(ED)?\b')).Count; fail = ([regex]::Matches($trt, '(?i)\bFAIL(ED)?\b')).Count }
             }
             # ADR references
-            $refText = [string]$sText + [string](Read-TextOrNull (Join-Path $sf.FullName 'arch.md')) + [string]$pt
+            $refText = [string]$sText + [string](Read-TextOrNull (Join-Path $sdir 'arch.md')) + [string]$pt
             $adrRefs = @([regex]::Matches($refText, 'ADR-\d+') | ForEach-Object { $_.Value } | Select-Object -Unique)
             $data.specs += [ordered]@{
                 id = $specId; ideaId = $ideaId; folder = $sf.Name; title = $title; status = $status; priority = $prio; category = $cat; wave = $wave

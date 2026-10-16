@@ -548,7 +548,22 @@ function Test-Lock([string]$Stack, [string]$Project, [string]$Dir) {
     if (-not (Test-InScope 'lock')) { return }
     $f = $null
     switch ($Stack) {
-        'node' { $f = Find-Up $Dir @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock') }
+        'node' {
+            $lockNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock')
+            $f = Find-Up $Dir $lockNames
+            # A monorepo keeps ONE lockfile at the workspace root, which can sit above the spec's src folder (npm/yarn/pnpm
+            # workspaces). Accept it from an ancestor, up to the repository root, when that ancestor declares workspaces.
+            if (-not $f) {
+                $a = Split-Path -Parent $WS
+                while ($a -and ($a.Length -ge $RepoRoot.Length) -and -not $f) {
+                    $pj = Join-Path $a 'package.json'
+                    $isWs = ((Test-Path -LiteralPath $pj) -and ([System.IO.File]::ReadAllText($pj) -match '"workspaces"')) -or (Test-Path -LiteralPath (Join-Path $a 'pnpm-workspace.yaml'))
+                    if ($isWs) { foreach ($n in $lockNames) { $c = Join-Path $a $n; if (Test-Path -LiteralPath $c) { $f = $c; break } } }
+                    if ($a -ieq $RepoRoot) { break }
+                    $a = Split-Path -Parent $a
+                }
+            }
+        }
         'python' {
             $f = Find-Up $Dir @('poetry.lock', 'uv.lock', 'Pipfile.lock', 'pdm.lock')
             $req = Join-Path $Dir 'requirements.txt'
