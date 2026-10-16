@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
@@ -54,7 +54,7 @@ const states = (out: string) => [...out.matchAll(/^\[(?:skip\] )?(?:\[)?(\d+)\]?
 describe("state tables", () => {
   const root = workspace("tables");
   test("--fasttrack runs its own table: no ROI, CONFIRM, ARCH-GATE, BUDGET or WINDOWS states, in both drivers", () => {
-    const want = ["0 REPO", "1 IDEA", "4 BRIEFS", "5 ASK", "6 ARCH", "9 SPECS", "14 PREFLIGHT", "15 IMPLEMENT", "16 TEST", "17 REVIEW", "18 CLOSE"];
+    const want = ["0 REPO", "1 IDEA", "4 BRIEFS", "5 ASK", "6 ARCH", "9 SPECS", "14 PREFLIGHT", "15 IMPLEMENT", "19 FIX", "16 TEST", "17 REVIEW", "18 CLOSE"];
     const a = sh(root, [...FT, "--dry-run"]);
     expect(a.status).toBe(0);
     expect(states(a.stdout)).toEqual(want);
@@ -90,7 +90,7 @@ describe("fast track, happy path", () => {
     expect(d.status).toBe(0);
     const html = readFileSync(join(root, "dashboard", "index.html"), "utf8");
     const data = JSON.parse(html.match(/<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/)![1]!);
-    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 16, 17, 18]);
+    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 19, 16, 17, 18]);
     expect(data.runLogs.length).toBe(6);
     expect(data.runLogs.every((l: any) => l.started && l.ended)).toBe(true);
   });
@@ -127,5 +127,60 @@ describe("fast track refuses empty work", () => {
     const r = drv(root, ["--resume"]);
     expect(r.status).toBe(4);
     expect(r.stdout).toContain("WAVE-004");
+  });
+});
+
+describe("the FIX state (a failed TEST or REVIEW sends the spec back to the implementer)", () => {
+  const bug = (status: string) => `# Bug-001: stale assertion
+
+| Type | Parent | Source | Severity | Status | Story / AC | Regression test | Evidence |
+|--|--|--|--|--|--|--|--|
+| Bug | [[../SPEC-001]] | verifier | major | ${status} | Story-001 / AC-1 | T-001 | none |
+
+## Impacted Files
+- src/IDEA-001-demo/app.ts
+`;
+  const place = (root: string, status: string): string => {
+    const dir = readdirSync(join(root, "specs")).find((d) => d.startsWith("IDEA-"))!;
+    const spec = readdirSync(join(root, "specs", dir)).find((d) => d.startsWith("SPEC-"))!;
+    const f = join(root, "specs", dir, spec, "Backlog", "Bug-001-stale.md");
+    mkdirSync(join(root, "specs", dir, spec, "Backlog"), { recursive: true });
+    writeFileSync(f, bug(status));
+    return f;
+  };
+  const fixCalls = (root: string) => calls(root).filter((l) => /state=19/.test(l)).length;
+
+  test("with no open Bug the state passes on its check alone: the implementer is not dispatched", () => {
+    const root = workspace("fix-none");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    const r = drv(root, ["--resume", "--until", "19"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("done   state 19 FIX SPEC-001 (exit check already passes)");
+    expect(fixCalls(root)).toBe(0);
+  });
+  test("an open Bug sends the implementer, which closes it; the check then passes", () => {
+    const root = workspace("fix-open");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    const f = place(root, "open");
+    const r = drv(root, ["--resume", "--from", "19", "--until", "19"]);
+    expect(r.status).toBe(0);
+    expect(fixCalls(root)).toBe(1);
+    expect(readFileSync(f, "utf8")).toContain("| fixed |");
+  });
+  test("a Bug the implementer leaves open fails BUG-OPEN and, after the attempts, pauses at the loop gate", () => {
+    const root = workspace("fix-stuck");
+    expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+    place(root, "open");
+    mode(root, "no-fix");
+    const r = drv(root, ["--resume", "--from", "19", "--until", "19"]);
+    expect(r.status).toBe(4);
+    expect(r.stdout).toContain("BUG-OPEN");
+    expect(r.stdout).toContain("Bug-001");
+  });
+  test("TEST and REVIEW go to FIX on failure, in the table both drivers read", () => {
+    const t = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", ".KCC", "kernel", "auto-states-fasttrack.json"), "utf8")).states as any[];
+    expect(t.find((s) => s.name === "TEST").on_fail_goto).toBe(19);
+    expect(t.find((s) => s.name === "REVIEW").on_fail_goto).toBe(19);
+    expect(t.map((s) => s.name).slice(7, 10)).toEqual(["IMPLEMENT", "FIX", "TEST"]);
   });
 });

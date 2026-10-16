@@ -98,7 +98,7 @@ describe("fasttrack stays orchestrated, and the butler works in every run", () =
     const fast = plan(["--fasttrack"]);
     expect(fast.length).toBeGreaterThanOrEqual(9);
     const direct = fast.filter((l) => l.includes("--agent"));
-    expect(direct.length).toBe(6); // IDEA ARCH IMPLEMENT TEST REVIEW(x: verifier) in the fast-track table -> IDEA, ARCH, IMPLEMENT, TEST, REVIEW + SPECS
+    expect(direct.length).toBe(7); // IDEA ARCH SPECS IMPLEMENT FIX TEST REVIEW: every state with one agent runs it directly
     for (const l of fast.filter((l) => !l.includes("--agent"))) expect(l).toContain("--model claude-haiku-5-5 --effort low");
     expect(plan([]).join("\n")).not.toContain("--model claude-haiku"); // a normal run is unchanged
   });

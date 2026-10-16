@@ -194,6 +194,8 @@ kcc-run right after `auto-policy-parsed`, and the only approval `check-impl-lock
 accepts without an idea or spec id, valid until the next `auto-policy-parsed`).
 The complexity rule in the spawn protocol adds `model-escalated` (`agent`,
 `item`, `from`, `to`, `reason`).
+A failed TEST or REVIEW sends the spec to the FIX state (`implementer --bugs`), which closes the open Bug items and
+emits `fix-completed` before TEST runs again.
 DeepThinking (`deep-thinking.md`) adds `deep-proposed` (`agent`, `task`, `reason`,
 `est_usd_low`, `est_usd_high`), `deep-approved` (`agent`, `task`, `effort`,
 `est_usd_high`, `approved_by`: `human` | `pre-approved`), `deep-declined` (`agent`,

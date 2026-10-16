@@ -2,7 +2,7 @@
 # Stub harness for lifecycle tests. kcc-run calls it in place of `claude -p` with the state's prompt as $1.
 # It writes the artifacts a real orchestrator would produce for that state (or deliberately does not,
 # per .kcc-stub/mode), so a test can prove the state machine: order, exit checks that refuse empty
-# states, gates, resume. Modes: happy | empty-idea | over-arch | empty-wave.
+# states, gates, resume. Modes: happy | empty-idea | over-arch | empty-wave | no-fix.
 set -u
 prompt="${1:-}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -245,6 +245,11 @@ EOF
 // T-001
 export const items: string[] = [];
 EOF
+    ;;
+  19)
+    # the FIX state: close every open Bug item (mode no-fix leaves them open)
+    [ "$mode" = no-fix ] && exit 0
+    for f in "$SPECS"/*/Backlog/Bug-*.md; do [ -f "$f" ] && sed -i 's/| open |/| fixed |/' "$f"; done
     ;;
   18)
     w "coordination/run/closed.md" <<'EOF'

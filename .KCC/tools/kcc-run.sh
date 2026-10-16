@@ -450,6 +450,18 @@ run_check() { # $1 idx, $2 label, $3 = "then"
       elif [[ "$pct" -ge "$min" ]]; then CHK_RC=0
       else CHK_RC=1; CHK_VIOL="ROI-002 (human): ROI confidence $pct% is below $min%"; fi
       return 0 ;;
+    internal:no-open-bugs)
+      # Bug items of the spec (Backlog/Bug-*.md) whose Status cell is open or fixing: the FIX state is done when none is left.
+      local bf bsv bopen=""
+      if [[ -n "$C_ENTRY" && -d "$(spec_dir "$C_ENTRY")/Backlog" ]]; then
+        for bf in "$(spec_dir "$C_ENTRY")"/Backlog/Bug-*.md; do
+          [[ -f "$bf" ]] || continue
+          bsv="$(tr -d '\r' < "$bf" | awk -F'|' '/^\| *Type *\|/ { for (i = 1; i <= NF; i++) { c = tolower($i); gsub(/^ +| +$/, "", c); if (c == "status") col = i } getline; getline; if (col) { v = tolower($col); gsub(/^ +| +$/, "", v); print v } exit }')"
+          if [[ "$bsv" == "open" || "$bsv" == "fixing" ]]; then bopen="$bopen $(basename "$bf" .md | sed -E 's/^(Bug-[0-9]+).*/\1/')"; fi
+        done
+      fi
+      if [[ -z "$bopen" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="BUG-OPEN (implementer): $C_SPEC still has open bug item(s)${bopen// /, }; fix each test-first and set its Status to fixed"; fi
+      return 0 ;;
     internal:file-exists)
       local p; p="$(render "${S_CP[$i]}")"
       if [[ -e "$ROOT/$p" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-001 (agent): missing $p"; fi
@@ -990,6 +1002,7 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
     fi
     prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi
+    if [[ $att -eq 0 && -n "$R_last_violations" ]] && test_force "${S_ID[$i]}"; then prompt="$prompt A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: $R_last_violations"; fi
     if [[ -n "$R_note" ]]; then prompt="$prompt Human note: $R_note"; R_note=""; fi
     if [[ "${S_SCOPE[$i]}" == "wave" && $att -eq 0 ]]; then invoke_checkpoint manual "kcc-run: baseline before $label"; fi
     local tag="run"; if [[ -n "$C_SPEC" ]]; then tag="$C_SPEC"; if [[ -n "$C_WAVE" ]]; then tag="$tag-w$C_WAVE"; fi; fi

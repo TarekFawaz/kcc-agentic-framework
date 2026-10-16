@@ -545,6 +545,29 @@ function Run-Check($chk, $ctx, [string]$label) {
         if (-not $v) { $v = 'missing' }
         return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + '; fix the open bugs and failing acceptance criteria listed in review.md, then re-review') }
     }
+    if ($tool -eq 'internal:no-open-bugs') {
+        # Bug items of the spec (Backlog/Bug-*.md) whose Status cell is open or fixing: the FIX state is done when none is left.
+        $open = @()
+        if ($ctx.ENTRY) {
+            $bd = Join-Path (Get-SpecDir $ctx.ENTRY) 'Backlog'
+            if (Test-Path -LiteralPath $bd) {
+                foreach ($bf in @(Get-ChildItem -LiteralPath $bd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                    $bl = [System.IO.File]::ReadAllLines($bf.FullName); $col = -1; $stv = ''
+                    for ($bi = 0; $bi -lt $bl.Count - 2; $bi++) {
+                        if ($bl[$bi] -match '^\|\s*Type\s*\|') {
+                            $cells = @($bl[$bi].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() })
+                            $col = [array]::IndexOf($cells, 'status')
+                            if ($col -ge 0) { $vals = @($bl[$bi + 2].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() }); if ($vals.Count -gt $col) { $stv = $vals[$col] } }
+                            break
+                        }
+                    }
+                    if ($stv -eq 'open' -or $stv -eq 'fixing') { $open += ($bf.BaseName -replace '^(Bug-\d+).*$', '$1') }
+                }
+            }
+        }
+        if ($open.Count -eq 0) { return @{ rc = 0; viol = '' } }
+        return @{ rc = 1; viol = ('BUG-OPEN (implementer): ' + $ctx.SPEC + ' still has open bug item(s) ' + ($open -join ', ') + '; fix each test-first and set its Status to fixed') }
+    }
     if ($tool -eq 'internal:file-exists') {
         $rel = Render (Str $chk.path) $ctx
         if (Test-Path -LiteralPath (Join-Path $RepoRoot $rel)) { return @{ rc = 0; viol = '' } }
@@ -1080,6 +1103,7 @@ function Process-Unit($st, $ctx) {
         }
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }
+        elseif ((Test-Force $st.id) -and $R.last_violations) { $prompt += ' A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: ' + $R.last_violations }
         if ($R.note) { $prompt += ' Human note: ' + $R.note; $R.note = '' }
         if ($st.scope -eq 'wave' -and $att -eq 0) { Invoke-Checkpoint 'manual' ('kcc-run: baseline before ' + $label) }
         $log = Join-Path $LogDir ('state-' + $st.id + '-' + (Safe-Name $(if ($ctx.SPEC) { $ctx.SPEC + $(if ($ctx.WAVE) { '-w' + $ctx.WAVE } else { '' }) } else { 'run' })) + '-' + ($att + 1) + '.log')

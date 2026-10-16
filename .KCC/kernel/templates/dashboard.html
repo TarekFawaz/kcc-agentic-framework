@@ -354,7 +354,7 @@ function renderTabs(){$('tabs').innerHTML=VIEWS.map(function(v){var c=v[2]?'<spa
    runs from the previous milestone event to its completion event. In both, human time is the span
    from human-gate-triggered to the matching human-gate-decision, and that span is never agent time.
    The open interval of the current stage runs to `now`. */
-var EV_DONE={'idea-interrogation-completed':1,'architecture-pass-complete':6,'spec-created':9,'roadmap-created':9,'plan-created':11,'toolchain-preflight-result':14,'implement-completed':15,'test-completed':16,'review-produced':17,'session-closed':18};
+var EV_DONE={'idea-interrogation-completed':1,'architecture-pass-complete':6,'spec-created':9,'roadmap-created':9,'plan-created':11,'toolchain-preflight-result':14,'implement-completed':15,'fix-completed':19,'test-completed':16,'review-produced':17,'session-closed':18};
 function toMs(s){var v=Date.parse(s);return isNaN(v)?null:v;}
 function evState(e){var k=e.kind||'';if(k==='specialist-brief-created')return /technical/.test(e.from||'')?3:4;return Object.prototype.hasOwnProperty.call(EV_DONE,k)?EV_DONE[k]:-1;}
 /* Interval helpers: lists of [start,end]. */

@@ -444,10 +444,10 @@ emit_sessions() {
 # Each transcript is summarised once (awk) and cached under dashboard/.agent-cache until it changes,
 # so refreshing after every event stays cheap; one final awk pass writes the JSON.
 MAX_SESSIONS=80
-claude_project_dir() {
+claude_project_dir() { # [root] -> the Claude project folder of the workspace, or of a lane when given
   local base="${CLAUDE_CONFIG_DIR:-}" p
   if [[ -z "$base" ]]; then base="${HOME:-}/.claude"; fi
-  p="$REPO_ROOT"
+  p="${1:-$REPO_ROOT}"
   if command -v cygpath >/dev/null 2>&1; then p="$(cygpath -w "$REPO_ROOT" 2>/dev/null || printf '%s' "$REPO_ROOT")"; fi
   printf '%s/projects/%s' "$base" "$(printf '%s' "$p" | sed 's/[^A-Za-z0-9]/-/g')"
 }
@@ -506,11 +506,17 @@ emit_profiles() {
   done
 }
 emit_agents() {
-  local pd sf sid sum label jf meta atype adesc pe pm tsv="$TMP/agents.tsv" sd key sessions
+  local pd sf sid sum label jf meta atype adesc pe pm tsv="$TMP/agents.tsv" sd key sessions lane dirs=()
   : > "$tsv"
-  pd="$(claude_project_dir)"
-  [[ -d "$pd" ]] || return 0
-  sessions="$(ls -1t "$pd"/*.jsonl 2>/dev/null | head -n "$MAX_SESSIONS" || true)"
+  # A lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) runs its sessions with the lane as the working folder, so its
+  # transcripts live under the lane's own project folder.
+  pd="$(claude_project_dir)"; [[ -d "$pd" ]] && dirs+=("$pd")
+  for lane in "$REPO_ROOT"/.kcc-lanes/*/ "$REPO_ROOT"/.worktrees/*/; do
+    [[ -d "$lane" ]] || continue
+    pd="$(claude_project_dir "${lane%/}")"; [[ -d "$pd" ]] && dirs+=("$pd")
+  done
+  [[ ${#dirs[@]} -gt 0 ]] || return 0
+  sessions="$(for pd in "${dirs[@]}"; do ls -1 "$pd"/*.jsonl 2>/dev/null; done | while IFS= read -r one; do printf '%s %s\n' "$(stat -c %Y "$one" 2>/dev/null || stat -f %m "$one" 2>/dev/null || echo 0)" "$one"; done | sort -rn | head -n "$MAX_SESSIONS" | cut -d' ' -f2- || true)"
   while IFS= read -r sf; do
     [[ -n "$sf" ]] || continue
     sid="$(basename "$sf" .jsonl)"
@@ -518,7 +524,7 @@ emit_agents() {
     [[ -n "$(printf '%s' "$sum" | cut -f1)" ]] || continue
     label="$(printf '%s' "$sum" | cut -f4)"
     printf 'session\t%s\t\tmain session\t%s\t%s\t\t\t%s\n' "$sid" "$label" "$label" "$sum" >> "$tsv"
-    sd="$pd/$sid/subagents"
+    sd="$(dirname "$sf")/$sid/subagents"
     if [[ -d "$sd" ]]; then
       for jf in $(ls -1 "$sd"/agent-*.jsonl 2>/dev/null | LC_ALL=C sort); do
         meta="${jf%.jsonl}.meta.json"; atype=""; adesc=""
@@ -574,8 +580,12 @@ mtime_iso() { # file -> ISO UTC of its last write (GNU stat, then BSD stat)
   date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ""
 }
 emit_runlogs() {
-  local d="$REPO_ROOT/coordination/run/logs" f base first=1 spec started
-  [[ -d "$d" ]] || return 0
+  local d f base first=1 spec started root rel
+  for root in "$REPO_ROOT" "$REPO_ROOT"/.kcc-lanes/*/ "$REPO_ROOT"/.worktrees/*/; do
+  root="${root%/}"; [[ -d "$root" ]] || continue
+  d="$root/coordination/run/logs"
+  [[ -d "$d" ]] || continue
+  rel=""; [[ "$root" != "$REPO_ROOT" ]] && rel="${root#"$REPO_ROOT"/}/"
   for f in $(ls -1tr "$d"/state-*.log 2>/dev/null); do
     base="$(basename "$f")"
     [[ "$base" =~ ^state-([0-9]+)-(run|SPEC-[0-9A-Za-z]+)(-w([0-9]+))?-([0-9]+|install)\.log$ ]] || continue
@@ -583,7 +593,8 @@ emit_runlogs() {
     started="$(head -n 1 "$f" | sed -nE 's/^# kcc-run ([^ ]+).*/\1/p')"
     [[ $first -eq 1 ]] || printf ','
     first=0
-    printf '{"state":%s,"spec":%s,"wave":%s,"attempt":%s,"started":%s,"ended":%s,"file":%s}' "${BASH_REMATCH[1]}" "$(q "$spec")" "$(q "${BASH_REMATCH[4]:-}")" "$(q "${BASH_REMATCH[5]}")" "$(q "$started")" "$(q "$(mtime_iso "$f")")" "$(q "coordination/run/logs/$base")"
+    printf '{"state":%s,"spec":%s,"wave":%s,"attempt":%s,"started":%s,"ended":%s,"file":%s}' "${BASH_REMATCH[1]}" "$(q "$spec")" "$(q "${BASH_REMATCH[4]:-}")" "$(q "${BASH_REMATCH[5]}")" "$(q "$started")" "$(q "$(mtime_iso "$f")")" "$(q "${rel}coordination/run/logs/$base")"
+  done
   done
 }
 

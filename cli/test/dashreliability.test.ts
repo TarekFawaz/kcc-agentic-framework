@@ -179,7 +179,7 @@ describe("a chat run with no run.json", () => {
     const html = readFileSync(join(root, "dashboard", "index.html"), "utf8");
     const data = JSON.parse(html.match(/<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/)![1]!);
     expect(data.run.fasttrack).toBe(true);
-    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 16, 17, 18]);
+    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 19, 16, 17, 18]);
   });
 });
 

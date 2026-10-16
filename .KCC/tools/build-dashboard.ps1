@@ -553,14 +553,24 @@ if ($memText) {
 # ~/.claude/projects/<workspace path with non-alphanumerics replaced by '-'>/. They record the
 # resolved model, token usage and, per session, the cost summary. CLAUDE_CONFIG_DIR is honoured.
 $MaxSessions = 80
-function Get-ClaudeProjectDir {
+function Get-ClaudeProjectDir([string]$Root = $RepoRoot) {
     $base = $env:CLAUDE_CONFIG_DIR
     if (-not $base) {
         $h = $env:USERPROFILE; if (-not $h) { $h = $env:HOME }
         if ($h) { $base = Join-Path $h '.claude' }
     }
     if (-not $base) { return '' }
-    return (Join-Path (Join-Path $base 'projects') ([regex]::Replace($RepoRoot, '[^A-Za-z0-9]', '-')))
+    return (Join-Path (Join-Path $base 'projects') ([regex]::Replace($Root, '[^A-Za-z0-9]', '-')))
+}
+# A spec built in a lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) runs its sessions with the lane as the working
+# folder, so its transcripts live under the lane's own project folder, not the workspace's.
+function Get-LaneRoots {
+    $out = @()
+    foreach ($ld in @('.kcc-lanes', '.worktrees')) {
+        $lp = Join-Path $RepoRoot $ld
+        if (Test-Path -LiteralPath $lp) { foreach ($d in @(Get-ChildItem -LiteralPath $lp -Directory -ErrorAction SilentlyContinue)) { $out += $d.FullName } }
+    }
+    return $out
 }
 function Get-RawTs([string]$line) {
     $m = [regex]::Match($line, '"timestamp"\s*:\s*"([^"]+)"')
@@ -652,8 +662,11 @@ if (Test-Path -LiteralPath $agentsDir) {
 }
 $data['profiles'] = @($profiles.Values | Sort-Object { $_.name })
 $agentRuns = @()
-if ($projDir -and (Test-Path -LiteralPath $projDir)) {
-    $sessions = @(Get-ChildItem -LiteralPath $projDir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+$projDirs = @(); if ($projDir) { $projDirs += $projDir }
+foreach ($lr0 in @(Get-LaneRoots)) { $lpd = Get-ClaudeProjectDir $lr0; if ($lpd) { $projDirs += $lpd } }
+$projDirs = @($projDirs | Where-Object { Test-Path -LiteralPath $_ })
+if ($projDirs.Count -gt 0) {
+    $sessions = @($projDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.jsonl' -File -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending)
     if ($sessions.Count -gt $MaxSessions) { $data.notes += ('Agent history shows the newest ' + $MaxSessions + ' of ' + $sessions.Count + ' Claude sessions.'); $sessions = @($sessions | Select-Object -First $MaxSessions) }
     foreach ($sf in $sessions) {
         $sid = $sf.BaseName
@@ -665,7 +678,7 @@ if ($projDir -and (Test-Path -LiteralPath $projDir)) {
         $srun['mode'] = $(if ($tr.direct) { 'direct' } else { 'orchestrator' })
         if ($tr.direct -and $profiles.Contains($tr.direct)) { $srun['profileModel'] = $profiles[$tr.direct].model }
         $agentRuns += $srun
-        $subDir = Join-Path (Join-Path $projDir $sid) 'subagents'
+        $subDir = Join-Path (Join-Path $sf.DirectoryName $sid) 'subagents'
         if (Test-Path -LiteralPath $subDir) {
             foreach ($jf in @(Get-ChildItem -LiteralPath $subDir -Filter 'agent-*.jsonl' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
                 $metaText = Read-TextOrNull ([System.IO.Path]::ChangeExtension($jf.FullName, '.meta.json'))
@@ -703,8 +716,12 @@ if ($script:derivedRun -and $data.run -and $data.run.status -eq 'running') {
 # ---- stage timing: one row per harness dispatch (coordination/run/logs/state-*.log) -------------------
 # The log header carries the start time; the last write is the end (the harness writes at exit).
 $runLogs = @()
-$logDir = Join-Path $RepoRoot 'coordination/run/logs'
-if (Test-Path -LiteralPath $logDir) {
+$logDirs = @($RepoRoot)
+foreach ($lr1 in @(Get-LaneRoots)) { $logDirs += $lr1 }
+foreach ($root1 in $logDirs) {
+    $logDir = Join-Path $root1 'coordination/run/logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { continue }
+    $relBase = ''; if ($root1 -ne $RepoRoot) { $relBase = ($root1.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/') + '/' }
     foreach ($lf in @(Get-ChildItem -LiteralPath $logDir -Filter 'state-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc)) {
         $lm = [regex]::Match($lf.Name, '^state-(\d+)-(run|SPEC-[0-9A-Za-z]+)(?:-w(\d+))?-(\d+|install)\.log$')
         if (-not $lm.Success) { continue }
@@ -715,7 +732,7 @@ if (Test-Path -LiteralPath $logDir) {
         $runLogs += [ordered]@{
             state = [int]$lm.Groups[1].Value; spec = $sp; wave = $lm.Groups[3].Value; attempt = $lm.Groups[4].Value
             started = $(if ($hm.Success) { $hm.Groups[1].Value } else { '' })
-            ended = $lf.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); file = ('coordination/run/logs/' + $lf.Name)
+            ended = $lf.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); file = ($relBase + 'coordination/run/logs/' + $lf.Name)
         }
     }
 }
