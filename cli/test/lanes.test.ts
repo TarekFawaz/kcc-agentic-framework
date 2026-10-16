@@ -2,7 +2,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createLane, groupByOrder, laneDir, mergeLane, parseRoadmap, readySpecs, scheduleSpecs, snapshot } from "../src/run/lanes";
+import { createLane, groupByOrder, laneDir, mergeLane, mirrorRun, parseRoadmap, readySpecs, scheduleSpecs, snapshot } from "../src/run/lanes";
 import { applyPayload } from "../src/lock";
 import { isWindows } from "../src/platform";
 
@@ -174,5 +174,24 @@ describe("a lane that is busy does not crash the scheduler's snapshot", () => {
     const s = snapshot(lane);
     expect(Object.keys(s)).toEqual(["src/api/app.ts"]);
     expect(snapshot(join(temp, "no-such-lane"))).toEqual({});
+  });
+});
+
+describe("the run shows what the lanes are doing", () => {
+  // Round 8 and 9: run.json said "stopped (until 9)" at PREFLIGHT for hours while SPEC-001 was being built.
+  test("while lanes run, the run is running at the earliest lane stage; when one needs attention it is stopped with the reason", () => {
+    const main = join(temp, "mirror-main");
+    const lane = join(temp, "mirror-lane");
+    put(main, "coordination/run/run.json", JSON.stringify({ status: "stopped", reason: "until 9", state: "14", updated: "2026-01-01T00:00:00Z" }));
+    put(lane, "coordination/run/run.json", JSON.stringify({ status: "running", state: "16" }));
+    const state = { "SPEC-001": { status: "running", dir: lane } };
+    mirrorRun(main, state, ["SPEC-001"]);
+    let run = JSON.parse(read(main, "coordination/run/run.json"));
+    expect(run).toMatchObject({ status: "running", reason: "specs running in lanes: SPEC-001", state: "16" });
+    expect(run.updated).not.toBe("2026-01-01T00:00:00Z");
+    mirrorRun(main, state, [], { status: "stopped", reason: "specs need attention: SPEC-001" });
+    run = JSON.parse(read(main, "coordination/run/run.json"));
+    expect(run).toMatchObject({ status: "stopped", reason: "specs need attention: SPEC-001" });
+    expect(() => mirrorRun(join(temp, "no-run"), state, ["SPEC-001"])).not.toThrow();
   });
 });

@@ -220,6 +220,35 @@ export interface LaneState {
   finished?: string;
 }
 
+/**
+ * While specs run in their lanes the driver that wrote run.json has already stopped at `--until 9`, so the
+ * run looked "stopped at PREFLIGHT" on the dashboard for hours. The scheduler owns the run's visible state
+ * during that phase: running, at the earliest stage a lane is in, naming the lanes.
+ */
+export function mirrorRun(root: string, state: Record<string, { status: string; dir: string }>, running: Iterable<string>, extra?: { status: string; reason: string }): void {
+  const file = join(root, "coordination", "run", "run.json");
+  const run = readJson<Record<string, string>>(file);
+  if (!run) return;
+  const names = [...running];
+  const stages = names
+    .map((s) => Number(readJson<{ state?: string }>(join(state[s]?.dir ?? "", "coordination", "run", "run.json"))?.state))
+    .filter((n) => Number.isFinite(n));
+  if (extra) {
+    run.status = extra.status;
+    run.reason = extra.reason;
+  } else if (names.length) {
+    run.status = "running";
+    run.reason = `specs running in lanes: ${names.join(", ")}`;
+    if (stages.length) run.state = String(Math.min(...stages));
+  }
+  run.updated = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  try {
+    writeJson(file, run);
+  } catch {
+    /* the run file is rewritten by the driver as well; a clash is retried at the next tick */
+  }
+}
+
 export function lanesFile(root: string): string {
   return join(root, "coordination", "lanes.json");
 }
@@ -419,6 +448,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         syncOwned(root, lane.dir, ownedPaths(root, spec));
         syncBackchannel(root, lane.dir);
       }
+      mirrorRun(root, state, running.keys());
       if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
     } catch (e) {
       log(`kcc: lane sync skipped this round: ${(e as Error).message}`);
@@ -432,11 +462,16 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
       start(spec);
     }
     if (!running.size) break;
+    mirrorRun(root, state, running.keys());
     await Promise.race([...running.values(), tick()]);
   }
   if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
   const stopped = rows.filter((r) => state[r.spec]?.status !== "merged").map((r) => r.spec);
-  if (!stopped.length) return 0;
+  if (!stopped.length) {
+    mirrorRun(root, state, [], { status: "running", reason: "all specs merged; closing the run" });
+    return 0;
+  }
+  mirrorRun(root, state, [], { status: "stopped", reason: `specs need attention: ${stopped.join(", ")}` });
   for (const s of stopped) {
     const lane = state[s];
     log(lane ? `kcc: ${s} needs attention: ${lane.reason ?? lane.status}. Answer with: kcc run --lane ${s} --answer <choice>, then kcc run --resume` : `kcc: ${s} waits for its dependencies`);
