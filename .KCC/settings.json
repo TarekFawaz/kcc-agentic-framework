@@ -98,6 +98,9 @@
     "fasttrack_direct": true,
     "butler": "on"
   },
+  "routing": {
+    "implement_max_tier": "balanced"
+  },
   "deep": {
     "enabled": true,
     "max_per_run": 2,

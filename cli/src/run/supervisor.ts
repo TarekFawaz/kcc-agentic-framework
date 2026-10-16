@@ -7,6 +7,7 @@ import { isWindows, runTool } from "../platform";
 import { readSettings } from "../settings";
 import { startDashboardServer, type DashServer } from "../commands/dashboard";
 import { findRoadmap, laneDir, scheduleSpecs } from "./lanes";
+import { routeAll } from "./routing";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
 const RESUME_PROMPT = "Read coordination/checkpoints/latest.md and continue the KCC run from next_action.";
@@ -262,6 +263,12 @@ async function lifecycleRun(root: string, args: string[], p: Policy, wait: boole
   if (!findRoadmap(root)) {
     console.error("kcc: the shared states finished but no specs/IDEA-*/ROADMAP.md exists");
     return 6;
+  }
+  try {
+    const routed = routeAll(root);
+    if (routed.length) console.log(`kcc: routed ${routed.reduce((n, r) => n + r.routes.length, 0)} backlog items in ${routed.length} plans (model and effort per item, in plan.md -> ## Routing)`);
+  } catch {
+    /* routing is guidance for the drivers; a plan it cannot read keeps the driver's own rules */
   }
   const b = await scheduleSpecs(root, { passthrough: flags, maxParallel });
   if (b !== 0) return b;

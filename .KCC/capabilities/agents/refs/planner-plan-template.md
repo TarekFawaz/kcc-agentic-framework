@@ -103,6 +103,9 @@ Verification Steps, or a test that spawns them.
 One row per standard the architecture cites. A required deliverable is a Test ID
 or a file in an item's Impacted Files; the plan follows the standard when they differ.
 
+## Routing
+Written by `kcc route` from the Complexity column above; do not fill it by hand.
+
 ## Verification Steps
 {Concrete commands or checks mapped to epic criteria and backlog items; cite
 the Test IDs above where applicable}

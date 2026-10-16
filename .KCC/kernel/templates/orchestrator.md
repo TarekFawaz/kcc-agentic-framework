@@ -72,10 +72,11 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    (Haiku on Claude); measured 2026-10-16, `claude-haiku-5-5` and `claude-sonnet-5-5`
    cost the same per token (`models.json -> tier_cost_observed`), so the cheaper
    class saved nothing and wrote weaker code (stale assertions, missing deliverables).
-   For a backlog item whose `plan.md` Complexity is `high`/`extra-high`, whose SZ-3/SZ-4
-   count is at its cap, or that is security-sensitive (auth, crypto, secrets, personal
-   data, untrusted input), and on a retry after a FAIL, raise the effort to `high`.
-   Any move to `strong-reasoning` still needs the gate.
+   Run `kcc route SPEC-ID` after each plan: it writes `## Routing` into `plan.md` (model
+   and effort per backlog item, from its Complexity, files, domain and security words). Put each
+   item's row in its handover packet; a wave runs on the strongest row of its items, and a retry
+   after a FAIL raises the effort one step. Security-sensitive items (auth, crypto, secrets, personal data,
+   untrusted input) never run below `high` effort. Any move to `strong-reasoning` still needs the gate.
 8. **Gates are scripts.** A delegate's work is done only when the state's
    exit-check tool passes (`.KCC/kernel/contracts/tool-contract.md`). Route
    violations to their `fix_owner`. Exit 3 (deferred) is never a pass.

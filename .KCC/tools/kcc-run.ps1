@@ -705,6 +705,39 @@ function Resolve-ClaudeModel([string]$m) {
         default    { return $m }
     }
 }
+# plan.md -> '## Routing' (written by `kcc route` from each item's Complexity, files, domain and risk): the model and effort
+# planned per backlog item. For a wave it is the strongest row among that wave's items; for the FIX pass (no wave), among the
+# whole spec's. The drivers only read it, so the rules stay in one place (cli/src/run/router.ts).
+function Get-PlanRouting([string]$entry, [string]$wave) {
+    if (-not $entry) { return $null }
+    $pf = Join-Path (Get-SpecDir $entry) 'plan.md'
+    if (-not (Test-Path -LiteralPath $pf)) { return $null }
+    $erank = @{ 'low' = 1; 'medium' = 2; 'high' = 3; 'xhigh' = 4; 'max' = 5 }
+    $trank = @{ 'fast' = 1; 'balanced' = 2; 'strong' = 3 }
+    $in = $false; $hdr = $null; $bestE = ''; $bestT = ''; $bestM = ''; $items = @()
+    foreach ($l in (Read-Lines $pf)) {
+        if ($l -match '^##\s+Routing\b') { $in = $true; continue }
+        if (-not $in) { continue }
+        if ($l -match '^##\s') { break }
+        if ($l -notmatch '^\s*\|') { continue }
+        $c = @(($l.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+        if (-not $hdr) {
+            $low = @($c | ForEach-Object { $_.ToLowerInvariant() })
+            if (($low -contains 'item') -and ($low -contains 'tier') -and ($low -contains 'model') -and ($low -contains 'effort')) { $hdr = $low }
+            continue
+        }
+        if ($l -match '^\s*\|[\s:|\-]+\|?\s*$') { continue }
+        $wi = [array]::IndexOf($hdr, 'wave')
+        if ($wave -and $wi -ge 0 -and $c[$wi] -ne $wave) { continue }
+        $t = $c[[array]::IndexOf($hdr, 'tier')].ToLowerInvariant(); $e = $c[[array]::IndexOf($hdr, 'effort')].ToLowerInvariant(); $m = $c[[array]::IndexOf($hdr, 'model')]
+        if (-not $trank.ContainsKey($t) -or -not $erank.ContainsKey($e)) { continue }
+        $items += $c[[array]::IndexOf($hdr, 'item')]
+        if ($bestT -eq '' -or $trank[$t] -gt $trank[$bestT]) { $bestT = $t; $bestM = $m }
+        if ($bestE -eq '' -or $erank[$e] -gt $erank[$bestE]) { $bestE = $e }
+    }
+    if (-not $bestT) { return $null }
+    return @{ model = $bestM; effort = $bestE; tier = $bestT; items = ($items -join ', ') }
+}
 function Get-AgentMode($st, $ctx, [int]$att) {
     # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
     # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
@@ -716,7 +749,19 @@ function Get-AgentMode($st, $ctx, [int]$att) {
     # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
     # Complexity wave, or a retry moves the executor one tier up and raises the effort.
     $domain = Get-IdeaDomain $ctx.IDEA
-    if ($agent -eq 'implementer') {
+    $source = ''
+    $pr = $null; if ($agent -eq 'implementer') { $pr = Get-PlanRouting $ctx.ENTRY $ctx.WAVE }
+    if ($pr) {
+        # Planned per item by `kcc route`; a retry raises the effort one step (the router's retry rule).
+        $model = Resolve-ClaudeModel (([string]$pr.model) -replace '[^A-Za-z0-9._-]', ''); $effort = $pr.effort; $source = 'plan'
+        $why = 'plan routing: ' + $pr.items + ' (' + $pr.tier + ')'
+        if ($att -gt 0) {
+            $steps = @('low', 'medium', 'high', 'xhigh'); $pos = [array]::IndexOf($steps, $effort)
+            if ($pos -ge 0 -and $pos -lt 3) { $effort = $steps[$pos + 1] }
+            $why += '; retry after a failed exit check'
+        }
+    }
+    elseif ($agent -eq 'implementer') {
         $cx = ''; if ($ctx.ENTRY -and $ctx.WAVE) { $cx = Get-WaveComplexity $ctx.ENTRY $ctx.WAVE }
         if ($cx -eq 'high' -or $cx -eq 'extra-high') { $model = $em; $effort = 'high'; $why = 'complexity ' + $cx }
         elseif ($att -gt 0) { $model = $em; $effort = 'high'; $why = 'retry after a failed exit check' }
@@ -727,7 +772,7 @@ function Get-AgentMode($st, $ctx, [int]$att) {
     $wm = Resolve-ClaudeModel (([string](Get-Setting @('run', 'orchestrator_model') 'claude-haiku-5-5')) -replace '[^A-Za-z0-9._-]', '')
     $we = ([string](Get-Setting @('run', 'orchestrator_effort') 'low')) -replace '[^a-z]', ''
     $mode = 'wrapper'; if ($direct) { $mode = 'direct' }
-    return @{ mode = $mode; agent = $agent; model = $model; effort = $effort; why = $why; wrapperModel = $wm; wrapperEffort = $we }
+    return @{ mode = $mode; agent = $agent; model = $model; effort = $effort; why = $why; source = $source; tier = $(if ($pr) { $pr.tier } else { '' }); wrapperModel = $wm; wrapperEffort = $we }
 }
 function Get-IdeaDomain([string]$idea) {
     # Research.md -> '## Domain' (common | specialised | novel), written by the idea-interrogator.
@@ -1100,7 +1145,8 @@ function Process-Unit($st, $ctx) {
                 $lead = $lead.TrimEnd() + ' Put the skill''s arguments (`--fasttrack`, `--depthlevel N`, and the rest) verbatim in each subagent''s handover packet and tell it to follow its "Fast track and depth" section; do not paraphrase them. '
                 if ($am.model) { $lead = $lead.TrimEnd() + ' Spawn the ' + $am.agent + ' subagent on model ' + $am.model + ' (' + $am.why + '). ' }
             }
-            if ($am.model) { [void](Emit 'model-escalated' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = ('wave ' + $ctx.WAVE); from = 'executor'; to = $am.model; reason = $am.why; source = 'kcc-run' })) }
+            if ($am.source -eq 'plan') { [void](Emit 'model-selected' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = $(if ($ctx.WAVE) { 'wave ' + $ctx.WAVE } else { 'spec' }); tier = $am.tier; model = $am.model; effort = $am.effort; reasons = $am.why; source = 'plan-routing' })) }
+            elseif ($am.model) { [void](Emit 'model-escalated' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = ('wave ' + $ctx.WAVE); from = 'executor'; to = $am.model; reason = $am.why; source = 'kcc-run' })) }
         }
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }

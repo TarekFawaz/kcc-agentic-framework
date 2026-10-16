@@ -584,18 +584,57 @@ resolve_claude_model() { # bare aliases -> pinned 5.5 IDs (`haiku` can still mea
     *) echo "$1" ;;
   esac
 }
+# plan.md -> '## Routing' (written by `kcc route` from each item's Complexity, files, domain and risk): the model and effort
+# planned per backlog item. For a wave it is the strongest row among that wave's items; for the FIX pass (no wave), among the
+# whole spec's. The drivers only read it, so the rules stay in one place (cli/src/run/router.ts).
+# plan_routing ENTRY WAVE -> prints "model<TAB>effort<TAB>tier<TAB>items" or nothing
+plan_routing() {
+  local pf; pf="$(spec_dir "$1")/plan.md"
+  [[ -n "${1:-}" && -f "$pf" ]] || return 0
+  tr -d '\r' < "$pf" | awk -F'|' -v wave="${2:-}" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    BEGIN { er["low"] = 1; er["medium"] = 2; er["high"] = 3; er["xhigh"] = 4; er["max"] = 5; tr_["fast"] = 1; tr_["balanced"] = 2; tr_["strong"] = 3 }
+    /^##[[:space:]]+Routing/ { inr = 1; next }
+    inr && /^##[[:space:]]/ { exit }
+    inr && /^[[:space:]]*\|/ {
+      if (!hdr) {
+        for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "item") ci = i; else if (c == "wave") cw = i; else if (c == "tier") ct = i; else if (c == "model") cm = i; else if (c == "effort") ce = i }
+        if (ci && ct && ce && cm) hdr = 1
+        next
+      }
+      if ($0 ~ /^[[:space:]]*\|[[:space:]:|-]+\|?[[:space:]]*$/) next
+      if (wave != "" && cw && trim($cw) != wave) next
+      t = tolower(trim($ct)); e = tolower(trim($ce)); m = trim($cm)
+      if (!(t in tr_) || !(e in er)) next
+      items = items (items == "" ? "" : ", ") trim($ci)
+      if (bt == "" || tr_[t] > tr_[bt]) { bt = t; bm = m }
+      if (be == "" || er[e] > er[be]) be = e
+    }
+    END { if (bt != "") printf "%s\t%s\t%s\t%s\n", bm, be, bt, items }'
+}
 agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODEL AM_WHY AM_WM AM_WE
   # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
   # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
   # AS the agent (claude --agent) with no orchestrator above them unless run.fasttrack_direct is false (default true).
-  AM_MODE=""; AM_AGENT=""; AM_MODEL=""; AM_EFFORT=""; AM_WHY=""; AM_WM=""; AM_WE=""
+  AM_MODE=""; AM_AGENT=""; AM_MODEL=""; AM_EFFORT=""; AM_WHY=""; AM_WM=""; AM_WE=""; AM_SOURCE=""; AM_TIER=""
   [[ "$R_fasttrack" == "1" && "$HARNESS" == "claude" ]] || return 0
   AM_AGENT="${S_AGF[$1]:-}"
   local em domain; em="$(resolve_claude_model "$(setting run.escalation_model claude-sonnet-5-5 | tr -cd 'A-Za-z0-9._-')")"
   # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
   # Complexity wave, or a retry moves the executor one tier up and raises the effort.
   domain="$(idea_domain "$C_IDEA")"
-  if [[ "$AM_AGENT" == "implementer" ]]; then
+  local pr="" pr_model pr_effort pr_tier pr_items
+  if [[ "$AM_AGENT" == "implementer" ]]; then pr="$(plan_routing "$C_ENTRY" "$C_WAVE")"; fi
+  if [[ -n "$pr" ]]; then
+    # Planned per item by `kcc route`; a retry raises the effort one step (the router's retry rule).
+    IFS="$(printf '	')" read -r pr_model pr_effort pr_tier pr_items <<< "$pr"
+    AM_MODEL="$(resolve_claude_model "$(printf '%s' "$pr_model" | tr -cd 'A-Za-z0-9._-')")"; AM_EFFORT="$pr_effort"; AM_TIER="$pr_tier"; AM_SOURCE=plan
+    AM_WHY="plan routing: $pr_items ($pr_tier)"
+    if [[ "$2" -gt 0 ]]; then
+      case "$AM_EFFORT" in low) AM_EFFORT=medium ;; medium) AM_EFFORT=high ;; high) AM_EFFORT=xhigh ;; esac
+      AM_WHY="$AM_WHY; retry after a failed exit check"
+    fi
+  elif [[ "$AM_AGENT" == "implementer" ]]; then
     local cx=""; if [[ -n "$C_ENTRY" && -n "$C_WAVE" ]]; then cx="$(wave_complexity "$C_ENTRY" "$C_WAVE")"; fi
     if [[ "$cx" == "high" || "$cx" == "extra-high" ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="complexity $cx"
     elif [[ "$2" -gt 0 ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="retry after a failed exit check"
@@ -998,7 +1037,9 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
         lead="${lead% } Put the skill's arguments (\`--fasttrack\`, \`--depthlevel N\`, and the rest) verbatim in each subagent's handover packet and tell it to follow its \"Fast track and depth\" section; do not paraphrase them. "
         if [[ -n "$AM_MODEL" ]]; then lead="${lead% } Spawn the $AM_AGENT subagent on model $AM_MODEL ($AM_WHY). "; fi
       fi
-      if [[ -n "$AM_MODEL" ]]; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
+      AM_ITEM="spec"; if [[ -n "$C_WAVE" ]]; then AM_ITEM="wave $C_WAVE"; fi
+      if [[ "$AM_SOURCE" == "plan" ]]; then emit model-selected "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"$AM_ITEM\",\"tier\":\"$AM_TIER\",\"model\":\"$AM_MODEL\",\"effort\":\"$AM_EFFORT\",\"reasons\":\"$AM_WHY\",\"source\":\"plan-routing\"}"
+      elif [[ -n "$AM_MODEL" ]]; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
     fi
     prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi

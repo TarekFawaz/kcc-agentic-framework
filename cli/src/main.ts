@@ -6,6 +6,7 @@ import { init } from "./commands/init";
 import { dashboard } from "./commands/dashboard";
 import { models } from "./commands/models";
 import { report } from "./commands/report";
+import { route } from "./commands/route";
 import { runTailor } from "./commands/tailor";
 import { upgrade } from "./commands/upgrade";
 import { registerMcp } from "./mcp/register";
@@ -39,6 +40,9 @@ Check
                       pinned Claude ids and the generated agents; --refresh also shows what each
                       alias resolves to today (a newer generation shows up here).
                       --deep adds the DeepThinking tier to the probes (about $0.80 each).
+  route [SPEC-ID] [--dry-run] [--json]
+                      Decide the model and reasoning effort per backlog item from the plan (Complexity, files,
+                      domain, security risk) and write them into plan.md as ## Routing. kcc run does this after SPECS.
   report [--skeleton-min N] [--app-min N] [--out file]
                       Measure the run in this folder: time per stage, human waits, agents and cost, and a
                       verdict against a budget (default skeleton 45 min, whole app 180); exit 1 on a miss.
@@ -127,6 +131,8 @@ async function main(argv: string[]): Promise<number> {
       return models(rest);
     case "report":
       return report(rest);
+    case "route":
+      return route(rest);
     case "validate": {
       const { positionals, values } = parse(rest, [], ["dir", "mode"]);
       const root = workspace(target(positionals, values.dir, false).dir);

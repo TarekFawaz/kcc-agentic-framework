@@ -57,6 +57,25 @@ implementer on an auth module (risk) runs `balanced / high`; a spec-writer (`bal
 common domain writes on `fast / high`; an architect (`balanced`, `high`) on a novel domain runs
 `strong / high`.
 
+## Plan time, per backlog item (`## Routing`)
+
+The architect and the planner are the ones who know how hard each item is, so the decision is taken once, after the plan,
+per item (story, enabler), not per agent for the whole run. `kcc route [SPEC-ID]` reads each item's `Complexity`, the
+files in its Backlog item, `Research.md -> ## Domain` and the CR-7 words in its notes and ACs (auth, password, session,
+csrf, token, crypto, payment, personal data), runs the rules above for the `implement` task, and writes
+`## Routing` into `plan.md`:
+
+| Item | Wave | Tier | Model | Effort | Why |
+
+- `kcc run` does this itself right after SPECS; in a chat run the orchestrator runs `kcc route SPEC-ID` after the plan.
+- Implementation is capped at `routing.implement_max_tier` (settings, default `balanced`): a novel domain raises its
+  effort, not its price class. `extra-high` Complexity gives `xhigh` effort. Set the cap to `strong` to let the
+  router go higher.
+- `kcc-run` reads the table and passes each wave (and the FIX pass) the strongest model and effort among that wave's
+  items, emitting `model-selected`. A retry raises the effort one step. The drivers hold no routing rules of their own
+  when the table exists; without it they keep their older subset.
+- The planner does not write this table by hand; it fills the `Complexity` column.
+
 ## Where it runs
 
 - **Chat (`auto`)**: the orchestrator applies the rules when it writes the handover packet

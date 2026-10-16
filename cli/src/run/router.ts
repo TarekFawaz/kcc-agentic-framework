@@ -22,6 +22,8 @@ export interface RouteInput {
   files?: number;
   attempt?: number;
   budgetLeftPct?: number;
+  /** A task-level ceiling (settings routing.implement_max_tier): the router never returns a tier above it. */
+  maxTier?: Tier;
 }
 export interface Route {
   tier: Tier;
@@ -49,10 +51,12 @@ export function route(i: RouteInput): Route {
   if (i.domain === "novel") { tier = up(tier, maxTier); effort = effAtLeast(effort, "high"); reasons.push("novel domain"); }
   else if (i.domain === "common" && ["spec", "plan", "docs", "scaffold"].includes(i.task)) { tier = down(tier, minTier); reasons.push(`common domain, ${i.task}`); }
   if (risk) { tier = atLeast(tier, "balanced"); effort = effAtLeast(effort, "high"); reasons.push(i.risk ? "CR-7 risk" : `complexity ${i.complexity}`); }
+  if (i.complexity === "extra-high") { effort = effAtLeast(effort, "xhigh"); reasons.push("extra-high complexity: xhigh effort"); }
   if ((i.items ?? 0) > 3 || (i.files ?? 0) > 5) { effort = effUp(effort); reasons.push("large unit"); }
   if ((i.attempt ?? 1) >= 2) { tier = up(tier, maxTier); effort = effUp(effort); reasons.push(`attempt ${i.attempt}`); }
   if (i.budgetLeftPct !== undefined && i.budgetLeftPct < 20 && !risk) { tier = atMost(tier, "balanced"); reasons.push("budget under 20%"); }
   tier = atMost(atLeast(tier, minTier), maxTier);
+  if (i.maxTier && TIERS.indexOf(tier) > TIERS.indexOf(i.maxTier)) { tier = i.maxTier; reasons.push(`capped at ${i.maxTier} for ${i.task}`); }
   return { tier, effort, reasons };
 }
 

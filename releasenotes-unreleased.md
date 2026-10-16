@@ -52,6 +52,16 @@ Everything is additive: a run that uses none of the new flags behaves as before.
   too many (DEEP-002), or a task outside the list (DEEP-003). `kcc models --check` skips the deep probe (it costs money);
   `--deep` adds it. Skill: `/deep`. Protocol: `.KCC/kernel/protocols/deep-thinking.md`.
 
+- **Routing per backlog item, decided at plan time.** `kcc route [SPEC-ID]` turns each item's Complexity, files, domain and
+  security words into a model and effort and writes them into `plan.md` as `## Routing`; `kcc run` does it after SPECS. `kcc-run`
+  (both drivers) passes each wave and the FIX pass the strongest row of its items and emits `model-selected`, so the rules live
+  in `router.ts` only. Implementation is capped at `routing.implement_max_tier` (default `balanced`); `extra-high` gives `xhigh`.
+- **Gates that catch what round 9 found late.** Each wave also runs the workspace tests (`check-wave-scope -TestCommand auto`);
+  a failed TEST or REVIEW goes to a FIX state (`implementer --bugs`); a DEFERRED test row exits 3 instead of failing; a Bug no
+  test can express may say `n/a (reason)`; the plan keeps commands out of Test IDs and maps each cited standard's verifier check
+  (`## Standards coverage`, PLAN-006).
+- **A live dashboard.** `kcc dashboard --serve`, and `kcc run` serves it for the run: the page is rebuilt from the files on every
+  request and shows a stale or dead state honestly. Lane work (`src/`, specs, results) reaches the workspace while it runs.
 - **`kcc report`.** Measures the run in a folder: time per stage, human waits, agents, cost and output, with a pass/fail
   verdict against a time budget (default: walking skeleton 45 minutes, whole app 180) that names the slowest stages.
   It reuses the dashboard's own stage-timing code. `TestRounds/new-round.sh <slug> --measure` runs one unattended
