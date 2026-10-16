@@ -76,7 +76,7 @@ atomic test case. Spec folder:
    | 9d | `QG-ARCH-DOCS` | every spec | no architecture-critic **CONFORMANT** verdict on record (and no `/critical-human-gate` override) -> must pass `/architecture-review`; `architecture.md` thin MOC/stub; `.mmd` / `architecture/diagrams/` present; supporting docs missing or thin: `fitness-functions.md`, `nfrs.md`, `technical-budgets.md`, `guardrails.md`, `quality-gates.md`, `adrs/` + `adrs.md`. |
    | 9e | Traceability | every spec | `.KCC/tools/check-traceability -Spec SPEC-{ID}` exit != 0 (AC -> Test ID -> test -> result gap). |
    | 9f | `quality-gate` | every spec | `.KCC/tools/quality-gate -Spec SPEC-{ID}` exit 1; exit 3 -> verdict **QUALITY_DEFERRED** (never a pass). Includes `QG-PROD` (`.KCC/kernel/protocols/architecture-governance.md` -> *Quality gate catalog*). |
-   | 9g | Open bugs | every spec | any `Backlog/Bug-*.md` with severity `blocker`/`major` not `verified`/`wontfix` (`check-run-conformance -Scope bugs`). |
+   | 9g | Open bugs | every spec | any `Backlog/Bug-*.md` with severity `blocker`/`major` not `verified`/`wontfix` (`blocked` counts as open: it is waiting for a human ruling; `check-run-conformance -Scope bugs`). |
    | 9h | Domain protocols | plan `## Standards coverage` names one | any row of the *Verifier conformance check* in `.KCC/kernel/protocols/mobile-app-architecture.md`, `data-engineering-and-science.md`, or `privacy-and-cybersecurity-regions.md` fails; cite the row and the artifact. |
 
 10. **Toolchain re-check** before any suite: see
@@ -100,11 +100,12 @@ atomic test case. Spec folder:
     `screenshots/`; browser temp in `.tmp/` or OS temp. Each failing AC also
     becomes `Backlog/Bug-{NNN}-{slug}.md` (`Source: verifier`, severity,
     status `open`; spec-layout -> *Bug item shape*). Fixed bugs that now pass
-    -> status `verified`.
+    -> status `verified`. A bug whose Status is `blocked` (the implementer wrote a `## Ruling needed`) is not yours to
+    change: list it under Bugs as blocked, and never mark it `verified`.
 14. **Create `review.md`** (no stub exists). Frontmatter status `approved` |
     `changes-needed` | `quality-deferred` | `toolchain-deferred`, version
-    `1.0.0`. `## Evidence` lists every command the verifier itself ran with
-    its exit code. Self-check: `check-run-conformance -Scope review`.
+    `1.0.0`, and `commit: <sha of HEAD you verified>` (a re-verification diffs against it). `## Evidence` lists every command
+    the verifier itself ran with its exit code. Self-check: `check-run-conformance -Scope review`.
 15. Confidence below threshold (95% default) -> `/critical-human-gate`
     before approving or closing.
 
@@ -128,6 +129,23 @@ blocker/major bug, QG-PROD + QG-ARCH-DOCS pass, every AC/Test ID PASS.
 Otherwise **CHANGES_NEEDED** (file:line, Test IDs/ACs, Bug links),
 **QUALITY_DEFERRED** (quality-gate exit 3), or **TOOLCHAIN_DEFERRED**
 (commands not run + missing tools). Deferred verdicts are never a pass.
+
+## Re-verification mode
+
+The first verification of a spec is a **full pass** (steps 1-15): do all of it, smoke tests and image and dependency scans
+included, and file every finding then; at most two full passes are allowed per spec. When the prompt says
+`RE-VERIFICATION MODE` (a previous `review.md` has the verdict `CHANGES_NEEDED`), run a **scoped pass**:
+
+1. Re-verify only (a) Bug items whose Status changed since that review (run the regression test and the commands that exercise
+   the fix; `fixed` and passing -> `verified`) and (b) the ACs and Test IDs whose files changed in `git diff <commit>..HEAD`
+   plus uncommitted changes, `commit:` being the one in the previous `review.md` frontmatter.
+2. Always run `quality-gate` and `check-traceability` whole; their exit codes go in `## Evidence`.
+3. Copy every other verdict row unchanged and say once in the new `review.md` that they were carried over and not re-run;
+   carried-over rows are never your own evidence.
+4. A failure in the re-verified scope or a changed file is a new Bug; anything else suspicious is an observation for a human, not a
+   wider pass. Record the HEAD you verified as `commit:`. The verdict rules are unchanged.
+
+`/spec-review` and a scoped pass are routed at `balanced` tier, `high` effort at most.
 
 ## Fast track and depth
 

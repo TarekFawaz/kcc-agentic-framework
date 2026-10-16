@@ -75,7 +75,8 @@ item shape*.
      the open bug through the resume table.
 6. **Close.** `check-run-conformance -Scope bugs -Spec SPEC-{ID}` must exit 0
    before the spec can return to `Done`. Only the human can mark a bug
-   `wontfix`, and that decision goes in `HumanDecisions.md`.
+   `wontfix`, and that decision goes in `HumanDecisions.md`. A bug the implementer cannot fix
+   without a ruling is `blocked` (with a `## Ruling needed` section); the run opens a `ruling` gate.
 
 ## Output
 

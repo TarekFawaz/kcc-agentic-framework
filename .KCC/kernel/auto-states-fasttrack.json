@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "profile": "fasttrack",
-  "doc": "The fast-track lifecycle: a running app first, with as little paperwork as the quality gates allow. kcc-run and the auto skill use this table instead of auto-states.json when --fasttrack is set; the full lifecycle is untouched. Same placeholders and check grammar as auto-states.json. State ids are the ids of the matching full-lifecycle states (the dashboard and the event kinds depend on them); states that are not here do not exist in fast track (no ROI, CONFIRM, ARCH-GATE, BUDGET-*, WINDOWS). internal:files-exist takes a paths list (all must exist) or any:true (one is enough).",
+  "doc": "The fast-track lifecycle: a running app first, with as little paperwork as the quality gates allow. kcc-run and the auto skill use this table instead of auto-states.json when --fasttrack is set; the full lifecycle is untouched. Same placeholders and check grammar as auto-states.json. State ids are the ids of the matching full-lifecycle states (the dashboard and the event kinds depend on them); states that are not here do not exist in fast track (no ROI, CONFIRM, ARCH-GATE, BUDGET-*, WINDOWS). WRITE (one spec-writer per spec) and PLAN (one planner per spec) are per-spec `fanout` states: `kcc run` runs each of them for all specs at the same time in lanes (a spec's note and plan need only its own files, the architecture and the dialects), the bare kcc-run driver does them spec by spec. SPECS writes only the split (ROADMAP.md plus a stub note per spec).",
   "exit_codes": { "pass": 0, "fail": 1, "usage": 2, "deferred": 3, "paused": 4, "suspended": 5, "stopped": 6 },
   "max_attempts": 3,
   "states": [
@@ -28,10 +28,19 @@
       "check": { "tool": "check-run-conformance", "args": ["-Scope", "architecture", "-RunProfile", "fasttrack"] },
       "event": "architecture-pass-complete" },
     { "id": 9, "name": "SPECS", "scope": "run", "agent_fasttrack": "spec-writer",
-      "command": "/spec-create ideation/{IDEA}/SpecWriterStarter.md --fasttrack {silent_assume} {depthlevel}: propose the split first (at most the spec budget, SPEC-001 a walking skeleton that runs end to end, every later spec a user-visible feature on it, explicit Depends on); {silent_assume} given: apply the budget, otherwise ask the human once to approve or change it (gate events around the question). Then plan every spec at once: one /spec-plan SPEC-{ID} --fasttrack {depthlevel} subagent per spec in one message.",
+      "command": "/spec-create ideation/{IDEA}/SpecWriterStarter.md --fasttrack --split-only {silent_assume} {depthlevel}: propose the split first (at most the spec budget, SPEC-001 a walking skeleton that runs end to end, every later spec a user-visible feature on it, explicit Depends on); {silent_assume} given: apply the budget, otherwise ask the human once to approve or change it (gate events around the question). Then write ONLY the split: ROADMAP.md (Execution Plan with Order, Spec, Delivery, Depends on, Lane) and, per spec, its folder with a stub note SPEC-NNN-slug.md (frontmatter id, title, status Draft, one-line Delivery, Depends on). No Backlog items, no arch.md, no plan.md, and do not write the specs in full: the WRITE state writes each spec afterwards, one writer per spec, and the PLAN state plans each one.",
       "precheck_requires": "specs/{IDEA}-Specs/ROADMAP.md",
-      "check": { "tool": "check-run-conformance", "args": ["-Scope", "specs", "-RunProfile", "fasttrack"], "then": { "tool": "check-run-conformance", "args": ["-Scope", "plan", "-RunProfile", "fasttrack"] } },
+      "check": { "tool": "internal:roadmap-specs" },
+      "event": "roadmap-created" },
+    { "id": 10, "name": "WRITE", "scope": "spec", "agent_fasttrack": "spec-writer", "fanout": true,
+      "command": "/spec-create --spec {SPEC} --fasttrack {depthlevel}: write the full spec note, its Backlog items and arch.md for {SPEC} only, from its stub in ROADMAP.md and ideation/{IDEA}/SpecWriterStarter.md. Change no other spec and not ROADMAP.md.",
+      "check": { "tool": "check-run-conformance", "args": ["-Scope", "specs", "-Spec", "{SPEC}", "-RunProfile", "fasttrack"] },
       "event": "spec-created" },
+    { "id": 11, "name": "PLAN", "scope": "spec", "agent_fasttrack": "planner", "fanout": true,
+      "command": "/spec-plan {SPEC} --fasttrack {depthlevel}",
+      "check": { "tool": "check-run-conformance", "args": ["-Scope", "plan", "-Spec", "{SPEC}", "-RunProfile", "fasttrack"] },
+      "event": "plan-created" },
+
     { "id": 14, "name": "PREFLIGHT", "scope": "spec",
       "check": { "tool": "toolchain-preflight", "args": ["-Tools", "{TOOLS}"] },
       "gate": { "all": "toolchain" }, "event": "toolchain-preflight-result" },
@@ -61,6 +70,7 @@
     "toolchain": ["install", "human-install", "defer"],
     "quality-deferred-on-exit-3": ["install", "accept-deferred", "abort"],
     "interactive": ["done", "abort"],
-    "loop": ["revise", "escalate", "abort"]
+    "loop": ["revise", "escalate", "abort"],
+    "ruling": ["revise", "waive", "escalate", "abort"]
   }
 }

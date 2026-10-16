@@ -24,6 +24,8 @@ export interface RouteInput {
   budgetLeftPct?: number;
   /** A task-level ceiling (settings routing.implement_max_tier): the router never returns a tier above it. */
   maxTier?: Tier;
+  /** A ceiling for the effort: a quick diff review (REVIEW) and a scoped re-verification never go above it (high). */
+  maxEffort?: Effort;
 }
 export interface Route {
   tier: Tier;
@@ -53,10 +55,13 @@ export function route(i: RouteInput): Route {
   if (risk) { tier = atLeast(tier, "balanced"); effort = effAtLeast(effort, "high"); reasons.push(i.risk ? "CR-7 risk" : `complexity ${i.complexity}`); }
   if (i.complexity === "extra-high") { effort = effAtLeast(effort, "xhigh"); reasons.push("extra-high complexity: xhigh effort"); }
   if ((i.items ?? 0) > 3 || (i.files ?? 0) > 5) { effort = effUp(effort); reasons.push("large unit"); }
-  if ((i.attempt ?? 1) >= 2) { tier = up(tier, maxTier); effort = effUp(effort); reasons.push(`attempt ${i.attempt}`); }
+  // A retry escalates the agent that is fixing something (implementer, spec-writer ...). A verifier or critic (task review) is
+  // never escalated for a retry: its second run is a re-check of the fixes, not harder work, and its cost was the problem in round 10.
+  if ((i.attempt ?? 1) >= 2 && i.task !== "review") { tier = up(tier, maxTier); effort = effUp(effort); reasons.push(`attempt ${i.attempt}`); }
   if (i.budgetLeftPct !== undefined && i.budgetLeftPct < 20 && !risk) { tier = atMost(tier, "balanced"); reasons.push("budget under 20%"); }
   tier = atMost(atLeast(tier, minTier), maxTier);
   if (i.maxTier && TIERS.indexOf(tier) > TIERS.indexOf(i.maxTier)) { tier = i.maxTier; reasons.push(`capped at ${i.maxTier} for ${i.task}`); }
+  if (i.maxEffort && EFFORTS.indexOf(effort) > EFFORTS.indexOf(i.maxEffort)) { effort = i.maxEffort; reasons.push(`effort capped at ${i.maxEffort} for ${i.task}`); }
   return { tier, effort, reasons };
 }
 

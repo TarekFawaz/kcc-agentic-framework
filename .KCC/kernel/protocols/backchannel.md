@@ -194,7 +194,7 @@ kcc-run right after `auto-policy-parsed`, and the only approval `check-impl-lock
 accepts without an idea or spec id, valid until the next `auto-policy-parsed`).
 The complexity rule in the spawn protocol adds `model-escalated` (`agent`,
 `item`, `from`, `to`, `reason`).
-`model-selected` (`agent`, `item`, `tier`, `model`, `effort`, `reasons`, `source: plan-routing`) records what a driver read from
+`model-selected` (`agent`, `item`, `tier`, `model`, `effort`, `reasons`, `source: plan-routing`; the driver's own also `mode` and, for the verifier, `pass: full|scoped`) records what a driver read from
 `plan.md -> ## Routing` for a wave or the FIX pass.
 A failed TEST or REVIEW sends the spec to the FIX state (`implementer --bugs`), which closes the open Bug items and
 emits `fix-completed` before TEST runs again.

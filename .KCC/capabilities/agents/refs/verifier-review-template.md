@@ -19,6 +19,8 @@ Write into `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/review.md` (create it;
 |---|--|--|--|
 | AC-1 | {criterion text} | PASS/FAIL | {file, commit, Test ID, or manual check} |
 
+> Re-verification (the prompt says `RE-VERIFICATION MODE`): put one line here saying which rows were carried over unchanged from the previous review and were not re-run, and mark each re-verified row `(re-verified)` in its Evidence cell. See `agents/verifier.md` -> *Re-verification mode*.
+
 ## Backlog Item Verification
 
 ### Stories
@@ -158,6 +160,7 @@ created: <original>
 updated: <today>
 status: {approved | changes-needed | quality-deferred | toolchain-deferred}
 verdict: {APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED}
+commit: {sha of the HEAD that was verified; the next, scoped, re-verification diffs against it}
 version: 1.0.0
 ---
 ```

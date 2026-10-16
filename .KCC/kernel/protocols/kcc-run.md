@@ -42,6 +42,9 @@ With no arguments and an existing `run.json`, it behaves like `-Resume`.
 3. Dispatch the preamble plus the rendered command (`{input} {IDEA} {SPEC} {WAVE} {silent_assume} {parallel} {fasttrack} {depthlevel} {TOOLS}`). A retry adds the previous violations. For the S1 `interactive_in` states, the driver prints the command and opens an `interactive` gate (`done` / `abort`) instead.
 4. If the harness output matches a usage-limit pattern (the same patterns as `kcc-limit-watch`), the run is SUSPENDED.
 5. Run the check, then its `then` check. Exit 0 = done. Exit 1 = retry, up to `max_attempts`, then the `loop` gate. Exit 3 = the state's gate, or `quality-deferred-on-exit-3`. A REVIEW failure goes to state 15 for that spec (`on_fail_goto`) and counts toward the attempts.
+   - **FIX and blocked bugs.** The FIX state's check (`internal:no-open-bugs`) counts `open` and `fixing` Bug items as `BUG-OPEN`. A Bug with `Status: blocked` (it needs a human ruling, with a `## Ruling needed` section) is `BUG-006` (owner human): when only blocked Bugs are left, the driver opens the `ruling` gate at once, before dispatching the implementer and without using an attempt, so a fix that cannot proceed is never retried.
+   - **TEST: full pass, then scoped re-verification.** The first TEST of a spec is a full verification. When a `review.md` with the verdict `CHANGES_NEEDED` exists, the next TEST prompt carries `RE-VERIFICATION MODE`: re-verify only the Bug items whose Status changed and the ACs and Test IDs whose files changed since the commit recorded in that `review.md` (`commit:`), always run `quality-gate` and `check-traceability`, and copy the other verdict rows unchanged (`agents/verifier.md` -> *Re-verification mode*). `model-selected` carries `pass: full|scoped`.
+   - **At most two full verifier passes per spec** (counter `full:SPEC-ID` in `run.json -> attempts`). A third full pass is not run: the driver opens the `loop` gate (CR-3) listing the still-open Bug items; `revise` or `escalate` grants exactly one more full pass.
 6. When a unit completes, emit its `event` (or `run-state-completed`). Checkpoint `spec-reviewed` after REVIEW. Before the first attempt of each wave, write a `manual` baseline checkpoint, because `check-wave-scope` diffs against the newest restore point.
 
 Specs run in `ROADMAP.md` Order, sequentially in v1 even within an order slot.
@@ -60,10 +63,14 @@ otherwise it exits 4. `-Answer` checks the answer against
 | `abort` | ABORTED |
 | `approve` (budget) | Emits `estimate-approved`, then runs the check |
 | `revise` / `escalate` | Resets the attempts and re-runs the state (ROI and CONFIRM re-run the previous command state) |
+| `ruling` gate: `revise` / `escalate` | Sets each blocked Bug item back to `open`, appends the answer under `## Ruling` in the Bug file, and re-runs FIX with the `-Note` as the ruling (no note: the recommended option of the `## Ruling needed` section applies) |
+| `ruling` gate: `waive` | Sets each blocked Bug item to `wontfix` (a human decision, recorded in the Bug file) and re-checks |
 | `increase` + `-Budget` | Raises the cap and re-checks |
 | `install` | Sends an install prompt to the harness, then re-checks |
 | `init-local` / `connect-remote` / `skip` | Runs `repo-bootstrap -Apply <answer>` |
 | `defer` / `accept-deferred` / `sequential` / `confirm` / `proceed` | Marks the unit done |
+
+A `--silent --assume` run answers only `quality-deferred-on-exit-3` itself. It never answers a `ruling` gate (nor `loop`): a ruling is a human decision, so the run pauses (exit 4) and waits for `-Answer`.
 
 Budget in S2: emits `auto-policy-approved-unlimited`. Budget in S3: the latest
 `estimate-issued` amount (`cost_total_usd`, ...) that the driver did not emit
@@ -75,7 +82,7 @@ itself is compared with the cap. At or under the cap it emits
 - `coordination/run/run.json` holds the policy, input, idea, specs, pointer, attempts and pending gate. Older runs are kept as `run-<ts>.json`.
 - `coordination/run/logs/state-{id}-{spec}-{attempt}.log` holds harness output; `check-*.out` holds check output.
 - `settings.json -> run`: `max_attempts` (3), `state_timeout_minutes` (60; after that the harness is killed and the attempt fails), `harness`.
-- No parallel lanes inside the driver: one `kcc-run` is one sequential run. `kcc run` (the CLI) schedules the specs by dependency and runs independent ones in parallel lanes ([[parallel-lanes]]), using `-Until <id>` to stop the shared run after SPECS.
+- No parallel lanes inside the driver: one `kcc-run` is one sequential run. `kcc run` (the CLI) schedules the specs by dependency and runs independent ones in parallel lanes ([[parallel-lanes]]), using `-Until <id>` to stop the shared run after SPECS. The states the table marks `"fanout": true` (fast track: WRITE, PLAN) are per-spec like the rest, so the bare driver does them spec by spec; `kcc run` runs each of them for all specs at the same time first. Every harness dispatch emits `agent-run-started` and `agent-run-ended` (state, agent, spec, attempt, log, exit, seconds) next to its log `state-{id}-{spec}-{attempt}.log`, so overlapping runs show on the dashboard. `internal:roadmap-specs` is the SPECS exit check of fast track: ROADMAP.md lists specs and each has a folder with a stub note.
 - **Harness-neutral.** `kcc-run` assumes no harness. How a harness takes an agent, a model and an effort is the data in
   `kernel/harnesses.json` (override a key with `settings.json -> harness_invoke.<harness>.<key>`), and which model a tier is on
   each harness is `kernel/models.json` (`run.registry` picks another column, for example `ollama` behind the `opencode`

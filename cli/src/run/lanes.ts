@@ -398,6 +398,86 @@ export interface ScheduleOptions {
   /** Runs a kcc-run in a folder; injectable for tests. */
   runDriver?: (dir: string, args: string[]) => Promise<number>;
   log?: (line: string) => void;
+  /** Last state a lane runs (kcc-run --until); 17 (REVIEW) by default, the PLAN state for the planning phase. */
+  until?: number;
+  /** State a fresh lane starts at (kcc-run --from), e.g. the state after PLAN once every plan exists. */
+  from?: number;
+  /** Run only these specs (default: every spec of the roadmap). */
+  only?: string[];
+  /** Planning needs no other spec's output, so `Depends on` is ignored and every spec starts at once (up to maxParallel). */
+  independent?: boolean;
+  /** Set (to the state's name) for a fan-out state: lane state stays in memory (the exit check says what is done, the lane folder what to resume). */
+  fanout?: string;
+}
+
+export interface FanoutState {
+  id: number;
+  name: string;
+  /** The state's exit check (tool and PowerShell-style args with {SPEC}), run per spec to see what is still to do. */
+  check?: { tool: string; args?: string[] };
+}
+
+/**
+ * The per-spec states the table marks `"fanout": true` (WRITE and PLAN in fast track, PLAN in the full table), in table
+ * order, and the state after the last of them. Each one is run for all specs at the same time before the build lanes start.
+ */
+export function fanoutStates(root: string, fasttrack: boolean): { states: FanoutState[]; after?: number } {
+  const kernel = join(root, ".KCC", "kernel");
+  const file = fasttrack && existsSync(join(kernel, "auto-states-fasttrack.json")) ? join(kernel, "auto-states-fasttrack.json") : join(kernel, "auto-states.json");
+  const all = readJson<{ states?: (FanoutState & { scope: string; fanout?: boolean })[] }>(file)?.states ?? [];
+  const states = all.filter((s) => s.scope === "spec" && s.fanout);
+  const last = states.length ? all.indexOf(states[states.length - 1]! as never) : -1;
+  return { states, after: last >= 0 ? all[last + 1]?.id : undefined };
+}
+
+/** `-RunProfile` (PowerShell spelling in the state table) as `--run-profile`, the spelling runTool takes everywhere. */
+function toolArg(a: string, spec: string): string {
+  const v = a.replaceAll("{SPEC}", spec);
+  return /^-[A-Za-z]/.test(v) ? "--" + v.slice(1).replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase() : v;
+}
+
+/**
+ * Specs of the roadmap for which this state is not done: its exit check fails in the workspace, or a lane is left over to
+ * resume. A left-over lane belongs to the state it stopped at; one that is past this state belongs to a later one, except past
+ * the last fan-out state, where only its merge is left.
+ */
+export function specsToRun(root: string, state: FanoutState, last = true): string[] {
+  const roadmap = findRoadmap(root);
+  if (!roadmap) return [];
+  return parseRoadmap(readFileSync(roadmap, "utf8"))
+    .map((r) => r.spec)
+    .filter((spec) => {
+      const leftover = readJson<{ state?: string }>(join(laneDir(root, spec), "coordination", "run", "run.json"));
+      if (leftover) return last || !(Number(leftover.state) > state.id);
+      if (!state.check || state.check.tool.startsWith("internal:")) return true;
+      const r = runTool(root, state.check.tool, [...(state.check.args ?? []).map((a) => toolArg(a, spec)), "--json"], { capture: true });
+      return r.status !== 0;
+    });
+}
+
+export interface FanoutResult {
+  /** 0 when every spec went through every fan-out state (or the table has none), 4 when a lane stopped. */
+  code: number;
+  /** The state after the last fan-out state: where the build lanes start, so nothing is redone or re-approved. */
+  after?: number;
+}
+
+/**
+ * The fan-out states (a spec-writer per spec, then a planner per spec), each for all specs at the same time (up to
+ * maxParallel), every one in its own lane and ignoring `Depends on`: writing or planning one spec needs only its own files,
+ * the architecture and the dialects, never another spec's output. A spec whose exit check already passes is not run
+ * again; a failure retries only its own spec (its lane keeps the attempt count and the loop gate).
+ */
+export async function fanoutSpecs(root: string, o: Pick<ScheduleOptions, "passthrough" | "maxParallel" | "syncSeconds" | "runDriver" | "log">): Promise<FanoutResult> {
+  const { states, after } = fanoutStates(root, o.passthrough.includes("--fasttrack"));
+  for (const s of states) {
+    const todo = specsToRun(root, s, s === states[states.length - 1]);
+    if (!todo.length) continue;
+    (o.log ?? ((l: string) => console.log(l)))(`kcc: state ${s.id} ${s.name} for ${todo.length} spec(s) at the same time (up to ${o.maxParallel})`);
+    const code = await scheduleSpecs(root, { ...o, until: s.id, independent: true, fanout: s.name, only: todo });
+    if (code !== 0) return { code, after };
+  }
+  return { code: 0, after };
 }
 
 /**
@@ -410,11 +490,17 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
   const log = o.log ?? ((l: string) => console.log(l));
   const roadmap = findRoadmap(root);
   if (!roadmap) throw new UsageError("no specs/IDEA-*/ROADMAP.md: the shared states must finish first");
-  const rows = parseRoadmap(readFileSync(roadmap, "utf8"));
-  if (!rows.length) throw new UsageError(`no '## Execution Plan' rows in ${roadmap}`);
+  const all = parseRoadmap(readFileSync(roadmap, "utf8"));
+  if (!all.length) throw new UsageError(`no '## Execution Plan' rows in ${roadmap}`);
+  const what = o.fanout ? o.fanout.toLowerCase() : "spec";
+  const rows = all.filter((r) => !o.only || o.only.includes(r.spec)).map((r) => (o.independent ? { ...r, dependsOn: [] } : r));
   const stateFile = lanesFile(root);
-  const state = readJson<Record<string, LaneState>>(stateFile) ?? {};
-  const save = (): void => writeJson(stateFile, state);
+  const state = (o.fanout ? undefined : readJson<Record<string, LaneState>>(stateFile)) ?? {};
+  // A fan-out state keeps no lane state of its own, but the file's presence is what lets a lane's dashboard refresh the workspace's.
+  if (o.fanout && !existsSync(stateFile)) writeJson(stateFile, {});
+  const save = (): void => {
+    if (!o.fanout) writeJson(stateFile, state);
+  };
   const trust = isTrusted(root);
   const drive = o.runDriver ?? (async (dir: string, args: string[]) => {
     const r = await runToolAsync(dir, "kcc-run", args);
@@ -428,7 +514,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
   }
   const resumable = new Set(rows.map((r) => r.spec).filter((s) => existsSync(join(laneDir(root, s), "coordination", "run", "run.json"))));
   const deps = rows.map((r) => `${r.spec}${r.dependsOn.length ? " <- " + r.dependsOn.join(", ") : ""}`).join(" | ");
-  log(`kcc: specs scheduled by dependency: ${deps}`);
+  log(o.fanout ? `kcc: ${o.fanout}: ${rows.map((r) => r.spec).join(", ")} (up to ${o.maxParallel} at the same time, no dependency order)` : `kcc: specs scheduled by dependency: ${deps}`);
 
   const running = new Map<string, Promise<void>>();
   const start = (spec: string): void => {
@@ -442,9 +528,11 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
     save();
     emit(root, "lane-started", spec, { resumed: resume });
     log(`kcc: ${spec} started${resume ? " (resumed)" : ""}`);
-    const args = resume ? ["--resume", ...o.passthrough] : ["--input", spec, ...o.passthrough];
-    running.set(spec, (async () => {
-      const code = await drive(dir, [...args, "--until", "17", "--repo-root", dir]);
+    const args = resume ? ["--resume", ...o.passthrough] : ["--input", spec, ...o.passthrough, ...(o.from !== undefined ? ["--from", String(o.from)] : [])];
+    const lanePromise = (async () => {
+      // A fan-out lane whose gate was answered with `kcc run --lane` has already run through its state: only the merge is left.
+      const past = o.fanout && resume && Number(readJson<{ state?: string }>(join(dir, "coordination", "run", "run.json"))?.state) > (o.until ?? 17);
+      const code = past ? 0 : await drive(dir, [...args, "--until", String(o.until ?? 17), "--repo-root", dir]);
       const lane = state[spec]!;
       lane.exit = code;
       lane.finished = new Date().toISOString();
@@ -472,8 +560,10 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         }
       }
       save();
-      running.delete(spec);
-    })());
+    })();
+    // Removed here, not inside the lane: a lane that needs no driver finishes before it is registered and would stay "running" for ever.
+    running.set(spec, lanePromise);
+    void lanePromise.finally(() => running.delete(spec));
   };
 
   const tick = async (): Promise<void> => {
@@ -505,10 +595,10 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
   if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
   const stopped = rows.filter((r) => state[r.spec]?.status !== "merged").map((r) => r.spec);
   if (!stopped.length) {
-    mirrorRun(root, state, [], { status: "running", reason: "all specs merged; closing the run" });
+    mirrorRun(root, state, [], { status: "running", reason: o.fanout ? `${o.fanout} done for every spec` : "all specs merged; closing the run" });
     return 0;
   }
-  mirrorRun(root, state, [], { status: "stopped", reason: `specs need attention: ${stopped.join(", ")}` });
+  mirrorRun(root, state, [], { status: "stopped", reason: `${what}s need attention: ${stopped.join(", ")}` });
   for (const s of stopped) {
     const lane = state[s];
     log(lane ? `kcc: ${s} needs attention: ${lane.reason ?? lane.status}. Answer with: kcc run --lane ${s} --answer <choice>, then kcc run --resume` : `kcc: ${s} waits for its dependencies`);

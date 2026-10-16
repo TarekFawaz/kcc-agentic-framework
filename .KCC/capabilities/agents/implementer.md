@@ -57,7 +57,9 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
      locked -> stop and report (another unit owns it).
 3. Branch `spec/SPEC-{ID}` if git + project allow.
 4. Applicable `architecture/guardrails.md` + `architecture/quality-gates.md`
-   gates are requirements.
+   gates are requirements; the plan's `## Gates coverage` says how each is
+   proven for your items (a Test ID you write, or `check:QG-X`: run
+   `quality-gate` on your changes and get that check green).
 5. Load item dialects from `.KCC/kernel/protocols/dialects/`, plus
    `testing-unit` + `testing-integration` always and `testing-performance` /
    `testing-security` when a Test ID has that level. Also load any domain
@@ -98,6 +100,14 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
     **Bug items:** write the regression Test ID first, run it red, fix, run
     it green; set the Bug `Status` `open -> fixing` at start, `fixed` when
     green (only the verifier sets `verified`).
+    **A Bug you may not fix.** When the fix needs a decision that is not yours (a limit of a framework tool, a change to an
+    ADR or a guardrail, a layout change outside the Bug's `## Impacted Files`, a waiver), do not leave it `open` and do not
+    write a longer note on every retry. Set its `Status` to `blocked` and write one `## Ruling needed` section in the Bug
+    file, once: what blocks the fix, the options (each with its cost), and the recommended option. Report it as blocked and
+    stop work on it. `kcc-run` opens a `ruling` human gate at once and does not run you again for that Bug. The human
+    answers `revise` (their ruling), `waive` (Status becomes `wontfix`) or `escalate`; on `revise`/`escalate` the driver sets
+    the Bug back to `open`, records the ruling under `## Ruling` in the Bug file and in your prompt: follow it. The statuses
+    are `open -> fixing -> fixed -> verified`, plus `blocked` and `wontfix`.
 11. All source, tests, fixtures, configs, docs under `src/IDEA-{ID}-{slug}/`
     (even if a dialect allows `src/`); create/update its `README.md`. No
     repo-root or sibling-idea files; no unrelated docs.

@@ -16,7 +16,7 @@ const DOMAINS = [undefined, "novel", "common"] as const;
 const COMPLEXITIES = [undefined, "low", "high", "extra-high"] as const;
 const SIZES: [number, number][] = [[0, 0], [4, 0], [0, 6], [2, 3]];
 
-interface Row { t: Tier; e: Effort; task: Task; domain?: "novel" | "common"; risk: boolean; cx?: "low" | "high" | "extra-high"; items: number; files: number; attempt: number; budget?: number; cap?: Tier }
+interface Row { t: Tier; e: Effort; task: Task; domain?: "novel" | "common"; risk: boolean; cx?: "low" | "high" | "extra-high"; items: number; files: number; attempt: number; budget?: number; cap?: Tier; capEffort?: Effort }
 
 // A deterministic spread over the signal space (a full product is tens of thousands of rows).
 function rows(): Row[] {
@@ -25,17 +25,17 @@ function rows(): Row[] {
   const pick = <T>(a: readonly T[]): T => a[((seed = (seed * 1103515245 + 12345) & 0x7fffffff) >>> 8) % a.length]!;
   for (let i = 0; i < 400; i++) {
     const [items, files] = pick(SIZES);
-    out.push({ t: pick(TIERS), e: pick(EFFORTS), task: pick(TASKS), domain: pick(DOMAINS) as Row["domain"], risk: pick([false, true]), cx: pick(COMPLEXITIES) as Row["cx"], items, files, attempt: pick([1, 2, 3]), budget: pick([undefined, 10, 50]), cap: pick([undefined, "balanced"] as const) });
+    out.push({ t: pick(TIERS), e: pick(EFFORTS), task: pick(TASKS), domain: pick(DOMAINS) as Row["domain"], risk: pick([false, true]), cx: pick(COMPLEXITIES) as Row["cx"], items, files, attempt: pick([1, 2, 3]), budget: pick([undefined, 10, 50]), cap: pick([undefined, "balanced"] as const), capEffort: pick([undefined, undefined, "high"] as const) });
   }
   return out;
 }
-const line = (r: Row): string => [r.t, r.e, r.task, r.domain ?? "-", r.risk ? 1 : 0, r.cx ?? "-", r.items, r.files, r.attempt, r.budget ?? "-", r.cap ?? "-"].join(" ");
+const line = (r: Row): string => [r.t, r.e, r.task, r.domain ?? "-", r.risk ? 1 : 0, r.cx ?? "-", r.items, r.files, r.attempt, r.budget ?? "-", r.cap ?? "-", r.capEffort ?? "-"].join(" ");
 
 describe("router parity: router.ts, kcc-route.ps1, kcc-route.sh", () => {
   const all = rows();
   const input = all.map(line).join(String.fromCharCode(10)) + String.fromCharCode(10);
   const expected = all.map((r) => {
-    const x = route({ defaultTier: r.t, defaultEffort: r.e, task: r.task, domain: r.domain, risk: r.risk, complexity: r.cx, items: r.items, files: r.files, attempt: r.attempt, budgetLeftPct: r.budget, maxTier: r.cap });
+    const x = route({ defaultTier: r.t, defaultEffort: r.e, task: r.task, domain: r.domain, risk: r.risk, complexity: r.cx, items: r.items, files: r.files, attempt: r.attempt, budgetLeftPct: r.budget, maxTier: r.cap, maxEffort: r.capEffort });
     return `${x.tier} ${x.effort}`;
   });
 

@@ -507,7 +507,109 @@ function Format-Violations($obj) {
     }
     return ($parts -join '; ')
 }
+# ---- Bug items: status, the ruling a blocked one waits for, scoped re-verification -----------------------------
+function Get-BugField([string]$file, [string]$col) { # the cell of the bug table row under that column header, lower case
+    $bl = [System.IO.File]::ReadAllLines($file)
+    for ($bi = 0; $bi -lt $bl.Count - 2; $bi++) {
+        if ($bl[$bi] -match '^\|\s*Type\s*\|') {
+            $cells = @($bl[$bi].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() })
+            $c = [array]::IndexOf($cells, $col)
+            if ($c -ge 0) { $vals = @($bl[$bi + 2].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() }); if ($vals.Count -gt $c) { return $vals[$c] } }
+            return ''
+        }
+    }
+    return ''
+}
+function Get-BugKey([string]$file) { return ([System.IO.Path]::GetFileNameWithoutExtension($file) -replace '^(Bug-\d+).*$', '$1') }
+function Set-BugStatus([string]$file, [string]$new) { # rewrites the Status cell of the bug table row, nothing else (line endings kept)
+    $text = [System.IO.File]::ReadAllText($file)
+    $nl = "`n"; if ($text.Contains("`r`n")) { $nl = "`r`n" }
+    $lines = @($text -split "`r?`n")
+    for ($bi = 0; $bi -lt $lines.Count - 2; $bi++) {
+        if ($lines[$bi] -match '^\|\s*Type\s*\|') {
+            $hc = @($lines[$bi].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() })
+            $c = [array]::IndexOf($hc, 'status')
+            if ($c -ge 0) {
+                $cells = @($lines[$bi + 2].Trim().Trim('|') -split '\|')
+                if ($cells.Count -gt $c) { $cells[$c] = ' ' + $new + ' '; $lines[$bi + 2] = '|' + ($cells -join '|') + '|' }
+            }
+            break
+        }
+    }
+    [System.IO.File]::WriteAllText($file, ($lines -join $nl), $Utf8)
+}
+function Get-RulingText([string]$file) { # the '## Ruling needed' section on one line (at most 600 characters)
+    $t = ((Get-Section (Read-Lines $file) '(?i)^##\s+ruling needed') -join ' ') -replace '\s+', ' '
+    $t = $t.Trim(); if ($t.Length -gt 600) { $t = $t.Substring(0, 600) + ' ...' }
+    return $t
+}
+function Get-OpenBugList([string]$entry) { # 'Bug-003 (major, blocked); Bug-004 (major, open)' for every bug that is not fixed, verified or wontfix
+    $bd = Join-Path (Get-SpecDir $entry) 'Backlog'; $out = @()
+    if (-not (Test-Path -LiteralPath $bd)) { return '' }
+    foreach ($bf in @(Get-ChildItem -LiteralPath $bd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $s = Get-BugField $bf.FullName 'status'
+        if (@('fixed', 'verified', 'wontfix') -contains $s) { continue }
+        $sv = $s; if (-not $sv) { $sv = 'no status' }
+        $out += ((Get-BugKey $bf.FullName) + ' (' + (Get-BugField $bf.FullName 'severity') + ', ' + $sv + ')')
+    }
+    return ($out -join '; ')
+}
+function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | TOOLCHAIN_DEFERRED | BLOCKED | ''
+    if (-not (Test-Path -LiteralPath $rf)) { return '' }
+    $rtxt = [System.IO.File]::ReadAllText($rf)
+    $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
+    if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
+    if ($vm.Success) { return ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
+    return ''
+}
+# Scoped re-verification (kernel/protocols/model-routing.md, agents/verifier.md -> Re-verification mode): the first TEST of a spec is a
+# full pass; once a review.md with the verdict CHANGES_NEEDED exists, the next TEST re-verifies only what changed. At most
+# $VerifyFullMax full passes per spec; the counter lives in run.json -> attempts under the key full:SPEC-ID.
+$VerifyFullMax = 2
+$script:VmMode = ''; $script:VmBase = ''
+function Set-VerifyMode([string]$entry) { # sets VmMode (full|scoped) and VmBase (the commit the last review recorded, or '')
+    $script:VmMode = 'full'; $script:VmBase = ''
+    $rf = Join-Path (Get-SpecDir $entry) 'review.md'
+    if ((Get-ReviewVerdictOf $rf) -eq 'CHANGES_NEEDED') {
+        $script:VmMode = 'scoped'
+        $m = [regex]::Match([System.IO.File]::ReadAllText($rf), '(?im)^\s*(?:reviewed[-_ ]?)?commit\s*:\s*"?([0-9a-f]{7,40})')
+        if ($m.Success) { $script:VmBase = $m.Groups[1].Value }
+        else {
+            try { $g = & git -C $RepoRoot log -1 '--format=%H' -- (Rel $rf) 2>$null; if ($LASTEXITCODE -eq 0 -and $g) { $script:VmBase = ([string]($g | Select-Object -First 1)).Trim() } } catch { $script:VmBase = '' }
+        }
+    }
+}
+function Get-ScopedPrompt($ctx) { # the sentence added to the verifier's prompt in a scoped re-verification
+    if ($script:VmBase) { $base = 'the diff since commit ' + $script:VmBase + ' (git diff ' + $script:VmBase + '..HEAD, plus uncommitted changes)' }
+    else { $base = 'the diff since the last review.md was written (no commit is recorded in it: use git log and git status, and the Bug files'' Status)' }
+    return ('RE-VERIFICATION MODE (agents/verifier.md -> Re-verification mode): this is not the first verification of ' + $ctx.SPEC + '; a review.md with the verdict CHANGES_NEEDED exists. Do NOT run a full pass. Re-verify only (a) every Bug item whose Status changed since that review (fixed, wontfix, blocked), and (b) the acceptance criteria and Test IDs whose files changed in ' + $base + '. Always run the mandatory mechanical checks: quality-gate and check-traceability. Copy every other verdict row from the previous review.md unchanged, and state in the new review.md that those rows were carried over from the previous review and not re-run. Verify a fix for real (run its regression test and the commands that exercise it); file a new Bug only for a failure in the re-verified scope or in a changed file. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent''s handover packet.')
+}
+function Open-RulingGate($st, $ctx, [string]$blocked) { # opens the ruling gate for the blocked Bug items; no attempt is used
+    $d = @(); $sd = Join-Path (Get-SpecDir $ctx.ENTRY) 'Backlog'
+    foreach ($k in @($blocked -split ' ' | Where-Object { $_ })) {
+        $bf = Get-ChildItem -LiteralPath $sd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue | Where-Object { (Get-BugKey $_.FullName) -eq $k } | Select-Object -First 1
+        if ($bf) { $d += ('- ' + $k + ' (' + (Rel $bf.FullName) + '): ' + (Get-RulingText $bf.FullName)) }
+    }
+    $q = 'Bug item(s) ' + (($blocked -split ' ' | Where-Object { $_ }) -join ', ') + ' of ' + $ctx.SPEC + ' are blocked: the fix cannot proceed without a human ruling, so the implementer is not run again and no attempt is used. Read each ''## Ruling needed'' section (the options and the recommended one), then answer: revise (retry the fix with your ruling; give it with -Note, without a note the recommended option applies), waive (record the bug as wontfix, a human decision), escalate (reopen it and retry, recorded as an escalation), or abort. A silent run never answers this gate itself.'
+    return (Open-Gate 'ruling' 'ruling' $q $st $ctx ($d -join "`n`n"))
+}
+function Set-RulingOnBugs([string]$ans) { # applies the human's ruling to every blocked Bug item of the gate's spec (revise|escalate -> open, waive -> wontfix) and records it in the bug file
+    $ents = Get-SpecEntries; $i = [int]$R.spec_index
+    if ($i -ge $ents.Count) { return }
+    $sd = Join-Path (Get-SpecDir $ents[$i]) 'Backlog'
+    if (-not (Test-Path -LiteralPath $sd)) { return }
+    $new = 'open'; if ($ans -eq 'waive') { $new = 'wontfix' }
+    foreach ($bf in @(Get-ChildItem -LiteralPath $sd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        if ((Get-BugField $bf.FullName 'status') -ne 'blocked') { continue }
+        Set-BugStatus $bf.FullName $new
+        $line = "`n## Ruling`n`n- " + (Iso) + ' human: `' + $ans + '` -> Status ' + $new + $(if ($Note) { ' - ' + $Note } else { '' }) + "`n"
+        $raw = [System.IO.File]::ReadAllText($bf.FullName)
+        $nlf = $line; if ($raw.Contains("`r`n")) { $nlf = $line -replace "`n", "`r`n" }
+        [System.IO.File]::AppendAllText($bf.FullName, $nlf, $Utf8)
+    }
+}
 function Check-Desc($chk, $ctx) {
+
     if ($null -eq $chk) { return '-' }
     $t = Str $chk.tool
     $s = $t
@@ -548,32 +650,43 @@ function Run-Check($chk, $ctx, [string]$label) {
         return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + '; fix the open bugs and failing acceptance criteria listed in review.md, then re-review') }
     }
     if ($tool -eq 'internal:no-open-bugs') {
-        # Bug items of the spec (Backlog/Bug-*.md) whose Status cell is open or fixing: the FIX state is done when none is left.
-        $open = @()
+        # Bug items of the spec (Backlog/Bug-*.md) by Status cell. open or fixing: the FIX state is done when none is left.
+        # blocked: the fix needs a human ruling (a '## Ruling needed' section); it is its own finding (BUG-006, owner human), is never
+        # retried, and opens the ruling gate (blocked lists the bugs, open the ones an implementer can still fix).
+        $open = @(); $blocked = @(); $bq = @()
         if ($ctx.ENTRY) {
             $bd = Join-Path (Get-SpecDir $ctx.ENTRY) 'Backlog'
             if (Test-Path -LiteralPath $bd) {
                 foreach ($bf in @(Get-ChildItem -LiteralPath $bd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
-                    $bl = [System.IO.File]::ReadAllLines($bf.FullName); $col = -1; $stv = ''
-                    for ($bi = 0; $bi -lt $bl.Count - 2; $bi++) {
-                        if ($bl[$bi] -match '^\|\s*Type\s*\|') {
-                            $cells = @($bl[$bi].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() })
-                            $col = [array]::IndexOf($cells, 'status')
-                            if ($col -ge 0) { $vals = @($bl[$bi + 2].Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim().ToLowerInvariant() }); if ($vals.Count -gt $col) { $stv = $vals[$col] } }
-                            break
-                        }
-                    }
-                    if ($stv -eq 'open' -or $stv -eq 'fixing') { $open += ($bf.BaseName -replace '^(Bug-\d+).*$', '$1') }
+                    $stv = Get-BugField $bf.FullName 'status'
+                    if ($stv -eq 'open' -or $stv -eq 'fixing') { $open += (Get-BugKey $bf.FullName) }
+                    if ($stv -eq 'blocked') { $blocked += (Get-BugKey $bf.FullName); $bq += ((Get-BugKey $bf.FullName) + ' needs a ruling: ' + (Get-RulingText $bf.FullName) + ';') }
                 }
             }
         }
-        if ($open.Count -eq 0) { return @{ rc = 0; viol = '' } }
-        return @{ rc = 1; viol = ('BUG-OPEN (implementer): ' + $ctx.SPEC + ' still has open bug item(s) ' + ($open -join ', ') + '; fix each test-first and set its Status to fixed') }
+        $bs = ($blocked -join ' '); $os = ($open -join ' ')
+        if ($blocked.Count -gt 0 -and $open.Count -eq 0) { return @{ rc = 1; viol = ('BUG-006 (human): ' + $ctx.SPEC + ' has blocked bug item(s) ' + ($blocked -join ', ') + '; no fix can proceed without a human ruling. ' + (($bq -join ' ').TrimEnd(';'))); blocked = $bs; open = $os } }
+        if ($open.Count -gt 0) { return @{ rc = 1; viol = ('BUG-OPEN (implementer): ' + $ctx.SPEC + ' still has open bug item(s) ' + ($open -join ', ') + '; fix each test-first and set its Status to fixed'); blocked = $bs; open = $os } }
+        return @{ rc = 0; viol = '' }
     }
     if ($tool -eq 'internal:file-exists') {
         $rel = Render (Str $chk.path) $ctx
         if (Test-Path -LiteralPath (Join-Path $RepoRoot $rel)) { return @{ rc = 0; viol = '' } }
         return @{ rc = 1; viol = ('FILE-001 (agent): missing ' + $rel) }
+    }
+    if ($tool -eq 'internal:roadmap-specs') {
+        # SPECS (fast track) writes only the split: ROADMAP.md plus a folder with a stub note for every spec it lists.
+        $rd = Join-Path $RepoRoot ('specs\' + $ctx.IDEA + '-Specs')
+        $rm = Join-Path $rd 'ROADMAP.md'
+        if (-not $ctx.IDEA -or -not (Test-Path -LiteralPath $rm)) { return @{ rc = 1; viol = ('SPEC-005 (spec-writer): missing specs/' + $(if ($ctx.IDEA) { $ctx.IDEA } else { 'IDEA' }) + '-Specs/ROADMAP.md') } }
+        $ids = @()
+        foreach ($rl in [System.IO.File]::ReadAllLines($rm)) {
+            if ($rl -match '^\s*\|' -and $rl -notmatch '^\s*\|[\s:|-]+\|?\s*$') { $rmm = [regex]::Match($rl, 'SPEC-\d+'); if ($rmm.Success -and $ids -notcontains $rmm.Value) { $ids += $rmm.Value } }
+        }
+        if ($ids.Count -eq 0) { return @{ rc = 1; viol = 'SPEC-005 (spec-writer): ROADMAP.md lists no SPEC-NNN in its Execution Plan' } }
+        $miss = @($ids | Where-Object { $sid = $_; -not (Get-ChildItem -LiteralPath $rd -Directory -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq $sid -or $_.Name.StartsWith($sid + '-')) -and (Get-ChildItem -LiteralPath $_.FullName -Filter ($sid + '*.md') -File -ErrorAction SilentlyContinue) }) })
+        if ($miss.Count -eq 0) { return @{ rc = 0; viol = '' } }
+        return @{ rc = 1; viol = ('SPEC-005 (spec-writer): ROADMAP.md lists ' + ($miss -join ', ') + ' but there is no folder with a SPEC-NNN-slug.md stub note for it') }
     }
     if ($tool -eq 'internal:files-exist') {
         $paths = @(); if (Has $chk 'paths') { $paths = @(@($chk.paths) | ForEach-Object { Render ([string]$_) $ctx }) }
@@ -759,11 +872,12 @@ function Get-RunModel([string]$kind, [string]$defaultTier) {
 # Every dispatch, in every cycle, asks the router (`.KCC/tools/kcc-route`, the port of cli/src/run/router.ts) which tier,
 # model and effort the state's agent gets: from the agent's profile, the plan's Complexity and files for this wave or spec,
 # the idea's domain, CR-7 words and the attempt. One rulebook (kernel/protocols/model-routing.md), three identical copies.
-function Get-Route([string]$agent, $ctx, [int]$attempt) {
+function Get-Route([string]$agent, $ctx, [int]$attempt, [bool]$caps = $false) {
     if (-not $agent) { return $null }
     $a = @('-Agent', $agent, '-Attempt', [string]$attempt, '-Harness', $script:HarnessName)
     if ($ctx.SPEC) { $a += @('-Spec', $ctx.SPEC) }
     if ($ctx.WAVE) { $a += @('-Wave', $ctx.WAVE) }
+    if ($caps) { $a += @('-MaxTier', 'balanced', '-MaxEffort', 'high') }
     $r = Invoke-Tool 'kcc-route' $a ''
     if ($r.rc -ne 0) { return $null }
     $line = @(($r.text -split "`n") | Where-Object { $_ -match "`t" })
@@ -779,7 +893,9 @@ function Get-AgentMode($st, $ctx, [int]$att) {
     # told which tier, model and effort to spawn the agent on.
     $agent = ''; if (Has $st 'agent_fasttrack') { $agent = [string]$st.agent_fasttrack }
     $model = ''; $why = ''; $effort = ''; $tier = ''; $source = ''
-    $route = Get-Route $agent $ctx ($att + 1)
+    # REVIEW is a quick diff review and a scoped re-verification a re-check: neither runs above balanced tier at high effort (model-routing.md).
+    $caps = ($st.name -eq 'REVIEW') -or ($st.name -eq 'TEST' -and $script:VmMode -eq 'scoped')
+    $route = Get-Route $agent $ctx ($att + 1) $caps
     if ($route) { $tier = $route.tier; $model = $route.model; $effort = $route.effort; $why = $route.why; $source = 'kcc-route' }
     $fast = ($R.fasttrack -eq '1')
     # Direct needs fast track, a harness that selects an agent by flag, and an agent file in that harness's agent folder.
@@ -1005,7 +1121,20 @@ function Apply-Answer([string]$ans) {
                 } else { $pa = 'recheck' }
             }
             'quality-deferred-on-exit-3' { if ($ans -eq 'install') { $pa = 'install' } else { $pa = 'done' } }
-            'loop' { Set-Att $key 0; $pa = 'rerun' }
+            'ruling' {
+                # revise and escalate reopen the blocked bugs and re-run the fix with the ruling as the note; waive records them as wontfix
+                if ($ans -eq 'waive') { $pa = 'recheck' } else {
+                    $pa = 'rerun'; Set-Att $key 0
+                    if (-not $Note) { $R.note = 'the human answered ' + $ans + ' without a note: apply the recommended option of the Ruling needed section of each reopened Bug item, then set its Status to fixed' }
+                    else { $R.note = 'human ruling (' + $ans + '): ' + $Note + '. Follow it for the reopened Bug items, then set their Status to fixed' }
+                }
+                Set-RulingOnBugs $ans; $R.last_violations = ''
+            }
+            'loop' {
+                Set-Att $key 0; $pa = 'rerun'
+                # the pass-cap gate (a third full verifier pass): the human's revise or escalate grants exactly one more full pass
+                if ($R.gate_spec -and (Get-Att ('cap:' + $R.gate_spec)) -ne 0) { Set-Att ('cap:' + $R.gate_spec) 0; Set-Att ('full:' + $R.gate_spec) ($VerifyFullMax - 1) }
+            }
             'interactive' { $pa = 'recheck' }
             default { $pa = 'recheck' }
         }
@@ -1075,7 +1204,7 @@ function Complete-Unit($st, $ctx, [bool]$skipped) {
     Set-Att $key 0
     $R.last_violations = ''
     if ([int]$st.id -eq 1 -or -not $R.idea) { Detect-Idea }
-    if ([string]$st.name -eq 'SPECS' -or ((Has $st 'command') -and ([string]$st.command).StartsWith('/spec-create'))) { Load-Specs }
+    if ([string]$st.name -eq 'SPECS' -or ((Has $st 'command') -and ([string]$st.command).StartsWith('/spec-create') -and ([string]$st.scope -eq 'run'))) { Load-Specs }
     $cpReason = ''
     if (Has $st 'checkpoint') { $cpReason = [string]$st.checkpoint } elseif ([string]$st.name -eq 'REVIEW') { $cpReason = 'spec-reviewed' }
     if ($cpReason) { Invoke-Checkpoint $cpReason ('kcc-run: ' + (Unit-Label $st $ctx) + ' completed; run kcc-run -Resume') }
@@ -1153,8 +1282,27 @@ function Process-Unit($st, $ctx) {
     $hasCmd = Has $st 'command'
     $att = Get-Att $key
     $needFix = (-not $hasCmd) -and $att -gt 0 -and $hasCheck -and ($ApprovalGates -notcontains $gname) -and $gname -eq ''
+    $script:VmMode = ''; $script:VmBase = ''
+    # A bug the implementer cannot fix without a human ruling (Status blocked) opens the ruling gate at once: no dispatch, no attempt used.
+    if ($hasCheck -and $chk.tool -eq 'internal:no-open-bugs' -and $ctx.ENTRY) {
+        $bres = Run-Check $chk $ctx $key
+        if ($bres.blocked -and -not $bres.open) { $R.last_violations = (Sanitize-Prompt (Str $bres.viol)); return (Open-RulingGate $st $ctx ([string]$bres.blocked)) }
+    }
     if (-not $skipDispatch -and ($hasCmd -or $needFix)) {
         $body = ''
+        # TEST: the first verification of a spec is a full pass; later ones re-verify only what changed. At most VerifyFullMax full passes.
+        if ($st.name -eq 'TEST' -and $ctx.ENTRY -and $hasCmd) {
+            Set-VerifyMode $ctx.ENTRY
+            if ($script:VmMode -eq 'full' -and $att -eq 0) {
+                $fp = Get-Att ('full:' + $ctx.SPEC)
+                if ($fp -ge $VerifyFullMax) {
+                    Set-Att ('cap:' + $ctx.SPEC) 1
+                    $ob = Get-OpenBugList $ctx.ENTRY
+                    return (Open-Gate 'loop' 'loop' ('Verification of ' + $ctx.SPEC + ' would be its full pass number ' + ($fp + 1) + '; at most ' + $VerifyFullMax + ' full verifier passes are allowed per spec (CR-3), so no verifier is run. Still open: ' + $ob + '. Revise (one more full pass, with a -Note), escalate, or abort?') $st $ctx ('Open bug items: ' + $ob))
+                }
+                Set-Att ('full:' + $ctx.SPEC) ($fp + 1)
+            }
+        }
         if ($hasCmd) { $body = Render (Get-StateCommand $st) $ctx } else { $body = 'The exit check `' + (Check-Desc $chk $ctx) + '` failed. Route each violation to its fix_owner and fix it.' }
         # Full runs wrap each unit with the butler (CR-8: brief first, remember after); fasttrack keeps it to the run's
         # first and last states, which name it in their command. CLOSE already names it.
@@ -1172,9 +1320,11 @@ function Process-Unit($st, $ctx) {
                 if ($R.fasttrack -eq '1') { $lead = $lead.TrimEnd() + ' Put the skill''s arguments (`--fasttrack`, `--depthlevel N`, and the rest) verbatim in each subagent''s handover packet and tell it to follow its "Fast track and depth" section; do not paraphrase them. ' }
                 if ($am.tier) { $lead = $lead.TrimEnd() + ' Routing (kcc-route): spawn the ' + $am.agent + ' subagent on tier ' + $am.tier + $(if ($am.model) { ', model ' + $am.model } else { '' }) + ', effort ' + $am.effort + ' (' + $am.why + '). Before any other spawn run `.KCC/tools/kcc-route -Agent <name> [-Spec ' + $(if ($ctx.SPEC) { $ctx.SPEC } else { 'SPEC-ID' }) + ']` and use its tier, model and effort. ' }
             }
-            if ($am.tier) { [void](Emit 'model-selected' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = $(if ($ctx.WAVE) { 'wave ' + $ctx.WAVE } elseif ($ctx.SPEC) { 'spec' } else { 'run' }); tier = $am.tier; model = $am.model; effort = $am.effort; reasons = $am.why; mode = $am.mode; source = 'kcc-route' })) }
+            if ($am.tier) { [void](Emit 'model-selected' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = $(if ($ctx.WAVE) { 'wave ' + $ctx.WAVE } elseif ($ctx.SPEC) { 'spec' } else { 'run' }); tier = $am.tier; model = $am.model; effort = $am.effort; reasons = $am.why; mode = $am.mode; pass = $script:VmMode; source = 'kcc-route' })) }
         }
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
+        if ($script:VmMode -eq 'scoped') { $prompt += ' ' + (Get-ScopedPrompt $ctx) }
+        if ($script:VmMode -eq 'full') { $prompt += ' FULL VERIFICATION PASS ' + (Get-Att ('full:' + $ctx.SPEC)) + ' of at most ' + $VerifyFullMax + ' for ' + $ctx.SPEC + ': run every check in this one pass (acceptance criteria, Test IDs, the compose or runtime smoke test, container image scans, every scan the quality gate lists) and file every finding now, because a later pass re-verifies only what changed. Record the HEAD commit you verified as ''commit: <sha>'' in review.md frontmatter. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent''s handover packet.' }
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }
         elseif ((Test-Force $st.id) -and $R.last_violations) { $prompt += ' A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: ' + $R.last_violations }
         if ($R.note) { $prompt += ' Human note: ' + $R.note; $R.note = '' }
@@ -1183,8 +1333,15 @@ function Process-Unit($st, $ctx) {
         Say ('kcc-run: run    ' + $label + ' (attempt ' + ($att + 1) + '/' + $cfgMax + ') -> ' + ($log.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'))
         Save-Run
         Refresh-Dashboard
+        # Every dispatch records a start and an end with its spec and agent, so the dashboard can show runs that overlap (one agent per spec).
+        $arAgent = 'orchestrator'; $arModel = ''; $arEffort = ''
+        if ($am) { if ($am.agent) { $arAgent = [string]$am.agent }; $arModel = [string]$am.model; $arEffort = [string]$am.effort }
+        $arLog = ($log.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/')
+        $arT0 = [DateTime]::UtcNow
+        [void](Emit 'agent-run-started' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; model = $arModel; effort = $arEffort; attempt = ($att + 1); wave = [string]$ctx.WAVE; log = $arLog; started = $arT0.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
         $rc = Invoke-Harness $prompt $log
         $script:HarnessExtra = ''
+        [void](Emit 'agent-run-ended' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; attempt = ($att + 1); wave = [string]$ctx.WAVE; log = $arLog; exit = [int]$rc; seconds = [int]([DateTime]::UtcNow - $arT0).TotalSeconds; ended = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
         if (Test-LimitHit $script:LastHarnessLines $rc) { Suspend-Run $st $ctx $script:LastHarnessLines }
         if ($rc -eq 124) { Say ('kcc-run: harness timed out for ' + $label) }
         $preResult = $null
@@ -1236,6 +1393,8 @@ function Process-Unit($st, $ctx) {
     $R.last_violations = (Sanitize-Prompt (Str $res.viol))
     if ($R.last_violations.Length -gt 1500) { $R.last_violations = $R.last_violations.Substring(0, 1500) + ' ...' }
     if ($res.rc -eq 2) { Stop-Run 'stopped' ('exit check for ' + $label + ' returned a usage/environment error: ' + $R.last_violations) 6 }
+    # Only blocked bugs are left (the pass fixed the others): they need a human ruling, so no retry and no attempt is used.
+    if ($res.blocked -and -not $res.open) { return (Open-RulingGate $st $ctx ([string]$res.blocked)) }
     if ($res.rc -eq 3) {
         $g = $gname; if (-not $g -or $gkind -eq 'approval') { $g = 'quality-deferred-on-exit-3' }
         return (Open-Gate $g 'failure' ('Exit check for ' + $label + ' is DEFERRED (exit 3): a required external tool is missing. This is not a pass.') $st $ctx $R.last_violations)

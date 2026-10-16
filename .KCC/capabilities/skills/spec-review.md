@@ -31,6 +31,8 @@ Quick review of <ARGS> implementation.
 
 `--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: no butler, trace, or token-guard. The review checks are unchanged.
 
+The review is a quick diff review, so the driver routes it at `balanced` tier and `high` effort at most (`model-routing.md`).
+
 ## Steps
 
 1. Locate the spec folder under

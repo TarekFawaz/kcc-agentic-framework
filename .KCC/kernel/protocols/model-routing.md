@@ -48,9 +48,14 @@ No signal, no move. The registry of what each tier is on each harness is `kernel
    `plan`, `docs`, `scaffold` (writing well-known things), effort unchanged.
 4. **Risk.** Never below `balanced`; effort `high`.
 5. **Size.** Large: effort one step up.
-6. **Retry.** Attempt 2 or later: one tier up and effort one step up.
+6. **Retry.** Attempt 2 or later: one tier up and effort one step up, for the agent that is fixing something
+   (implementer, spec-writer ...). A verifier or critic (task `review`) is **never** escalated for a retry: its second run
+   is a re-check of the fixes, not harder work (round 10: a retried verifier ran on Opus at xhigh for 25 minutes).
 7. **Budget.** Under 20% left: never above `balanced` unless risk.
 8. Effort is clamped to `low` .. `xhigh`; `max` is a human choice only.
+9. **Caller ceilings.** `kcc-route -MaxTier / -MaxEffort` (`--max-tier / --max-effort`) cap the result. `kcc-run` caps REVIEW
+   (`/spec-review` is a quick diff review) and a scoped TEST re-verification at `balanced` tier and `high` effort. The first,
+   full TEST pass keeps what rules 1-7 give (a security-sensitive large spec still gets `high` or `xhigh`).
 
 Examples: an implementer (`fast`, `medium`) on a common CRUD wave stays `fast / medium`; the same
 implementer on an auth module (risk) runs `balanced / high`; a spec-writer (`balanced`, `high`) on a

@@ -47,7 +47,7 @@
     { "id": 10, "name": "BUDGET-P", "scope": "spec", "skip_if_flag": "fasttrack",
       "command": "/token-estimate {SPEC}",
       "gate": { "S1": "budget", "S2": "none", "S3": "budget-cap" }, "event": "estimate-issued" },
-    { "id": 11, "name": "PLAN", "scope": "spec", "agent_fasttrack": "planner",
+    { "id": 11, "name": "PLAN", "scope": "spec", "agent_fasttrack": "planner", "fanout": true,
       "command": "/spec-plan {SPEC} {fasttrack} {depthlevel}",
       "check": { "tool": "check-run-conformance", "args": ["-Scope", "plan", "-Spec", "{SPEC}"] },
       "event": "plan-created" },
@@ -88,6 +88,7 @@
     "windows": ["approve", "sequential", "abort"],
     "toolchain": ["install", "human-install", "defer"],
     "quality-deferred-on-exit-3": ["install", "accept-deferred", "abort"],
-    "loop": ["revise", "escalate", "abort"]
+    "loop": ["revise", "escalate", "abort"],
+    "ruling": ["revise", "waive", "escalate", "abort"]
   }
 }

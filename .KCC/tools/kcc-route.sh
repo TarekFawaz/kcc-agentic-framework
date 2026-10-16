@@ -8,14 +8,14 @@
 #
 # Usage: bash .KCC/tools/kcc-route.sh --agent NAME [--task T] [--spec SPEC-ID [--wave N | --item KEY]] [--attempt N]
 #        [--harness H] [--default-tier T --default-effort E --domain D --risk --complexity C --items N --files N
-#        --budget-left PCT --max-tier T] [--scan-text TEXT] [--batch] [--json] [--repo-root PATH]
+#        --budget-left PCT --max-tier T --max-effort E] [--scan-text TEXT] [--batch] [--json] [--repo-root PATH]
 # Output: tier<TAB>model<TAB>effort<TAB>reasons<TAB>items (or --json). --batch reads signal rows from stdin (parity tests):
-#   defaultTier defaultEffort task domain risk complexity items files attempt budget maxTier   ('-' = none)
+#   defaultTier defaultEffort task domain risk complexity items files attempt budget maxTier maxEffort   ('-' = none)
 
 set -euo pipefail
 
 REPO_ROOT=""; AGENT=""; TASK=""; SPEC=""; WAVE=""; ITEM=""; ATTEMPT=1; HARNESS=""
-DEFAULT_TIER=""; DEFAULT_EFFORT=""; DOMAIN=""; RISK=0; COMPLEXITY=""; ITEMS=0; FILES=0; BUDGET=-1; MAXTIER=""
+DEFAULT_TIER=""; DEFAULT_EFFORT=""; DOMAIN=""; RISK=0; COMPLEXITY=""; ITEMS=0; FILES=0; BUDGET=-1; MAXTIER=""; MAXEFFORT=""
 SCAN_TEXT=""; BATCH=0; JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +36,7 @@ while [ $# -gt 0 ]; do
     --files) FILES="${2:-0}"; shift 2 ;;
     --budget-left) BUDGET="${2:--1}"; shift 2 ;;
     --max-tier) MAXTIER="${2:-}"; shift 2 ;;
+    --max-effort) MAXEFFORT="${2:-}"; shift 2 ;;
     --scan-text) SCAN_TEXT="${2:-}"; shift 2 ;;
     --batch) BATCH=1; shift ;;
     --json) JSON=1; shift ;;
@@ -76,7 +77,7 @@ security_hit() {
 # The router: default tier and effort moved by the signals, never more than one tier from the default.
 # route defTier defEffort task domain risk complexity items files attempt budget capTier -> sets R_TIER R_EFFORT R_REASONS
 route() {
-  local deft="$1" defe="$2" task="$3" domain="$4" risk="$5" cx="$6" items="$7" files="$8" attempt="$9" budget="${10}" cap="${11}"
+  local deft="$1" defe="$2" task="$3" domain="$4" risk="$5" cx="$6" items="$7" files="$8" attempt="$9" budget="${10}" cap="${11}" capeff="${12:-}"
   local dt t mint maxt e capi is_risk=0 reasons=""
   tier_to_i "$deft"; dt=$TI; t=$dt
   mint=$((dt - 1)); if [ "$mint" -lt 0 ]; then mint=0; fi
@@ -98,7 +99,8 @@ route() {
   fi
   if [ "$cx" = "extra-high" ]; then if [ "$e" -lt 3 ]; then e=3; fi; reasons="${reasons:+$reasons; }extra-high complexity: xhigh effort"; fi
   if [ "$items" -gt 3 ] || [ "$files" -gt 5 ]; then e=$((e + 1)); if [ "$e" -gt 3 ]; then e=3; fi; reasons="${reasons:+$reasons; }large unit"; fi
-  if [ "$attempt" -ge 2 ]; then
+  # A retry escalates the agent that fixes something; a verifier or critic (task review) is never escalated for a retry.
+  if [ "$attempt" -ge 2 ] && [ "$task" != "review" ]; then
     t=$((t + 1)); if [ "$t" -gt "$maxt" ]; then t=$maxt; fi
     e=$((e + 1)); if [ "$e" -gt 3 ]; then e=3; fi
     reasons="${reasons:+$reasons; }attempt $attempt"
@@ -107,16 +109,17 @@ route() {
   if [ "$t" -lt "$mint" ]; then t=$mint; fi
   if [ "$t" -gt "$maxt" ]; then t=$maxt; fi
   if [ -n "$cap" ]; then tier_to_i "$cap"; capi=$TI; if [ "$t" -gt "$capi" ]; then t=$capi; reasons="${reasons:+$reasons; }capped at $cap for $task"; fi; fi
+  if [ -n "$capeff" ]; then eff_to_i "$capeff"; if [ "$e" -gt "$EI" ]; then e=$EI; reasons="${reasons:+$reasons; }effort capped at $capeff for $task"; fi; fi
   R_TIER="${TIERN[$t]}"; R_EFFORT="${EFFN[$e]}"; R_REASONS="$reasons"
 }
 
 if [ -n "$SCAN_TEXT" ]; then security_hit "$SCAN_TEXT"; echo; exit 0; fi
 
 if [ "$BATCH" -eq 1 ]; then
-  while read -r a b c d e f g h i j k; do
+  while read -r a b c d e f g h i j k l; do
     [ -n "${a:-}" ] || continue
-    for v in a b c d e f g h i j k; do [ "${!v:-}" = "-" ] && printf -v "$v" '%s' ""; done
-    route "$a" "$b" "$c" "$d" "${e:-0}" "$f" "${g:-0}" "${h:-0}" "${i:-1}" "${j:--1}" "$k"
+    for v in a b c d e f g h i j k l; do [ "${!v:-}" = "-" ] && printf -v "$v" '%s' ""; done
+    route "$a" "$b" "$c" "$d" "${e:-0}" "$f" "${g:-0}" "${h:-0}" "${i:-1}" "${j:--1}" "$k" "${l:-}"
     echo "$R_TIER $R_EFFORT"
   done
   exit 0
@@ -268,7 +271,7 @@ fi
 
 CAP="$MAXTIER"
 if [ -z "$CAP" ] && [ "$TASK" = "implement" ]; then CAP="$(fget "$SETTINGS_FLAT" routing.implement_max_tier)"; [ -n "$CAP" ] || CAP="balanced"; fi
-route "$DEFAULT_TIER" "$DEFAULT_EFFORT" "$TASK" "$DOMAIN" "$RISK" "$COMPLEXITY" "$ITEMS" "$FILES" "$ATTEMPT" "$BUDGET" "$CAP"
+route "$DEFAULT_TIER" "$DEFAULT_EFFORT" "$TASK" "$DOMAIN" "$RISK" "$COMPLEXITY" "$ITEMS" "$FILES" "$ATTEMPT" "$BUDGET" "$CAP" "$MAXEFFORT"
 WHY="$R_REASONS"; if [ -n "$REASON_EXTRA" ]; then WHY="${WHY:+$WHY; }$REASON_EXTRA"; fi; [ -n "$WHY" ] || WHY="default"
 
 # --- resolve to this harness ---

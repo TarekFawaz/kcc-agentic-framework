@@ -30,7 +30,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
       token        - the latest trace session records an actual token row.
       idea         - IDEA-001..005: idea file sections, 7 artifacts, ROI confidence.
       specs        - SPEC-001..008, SPEC-LEGACY, SZ-2, SZ-3, SZ-5 (spec-layout v6).
-      plan         - PLAN-001..006, SZ-4 (waves, atomic tests, AC coverage; PLAN-006 warns when no Standards coverage table).
+      plan         - PLAN-001..007, SZ-4 (waves, atomic tests, AC coverage; PLAN-006 warns when no Standards coverage table; PLAN-007 requires a Gates coverage row per cited architecture gate).
       review       - REV-001..005 (verdict, evidence, traceability, open bugs).
       bugs         - BUG-001..005 (bug table fields, enums, regression tests; n/a with a reason is a BUG-005 warning).
       deep         - DEEP-001..003 (every DeepThinking spawn was approved, within the cap and the task list).
@@ -141,6 +141,9 @@ $memoryDir = Join-Path $RepoRoot 'memory'
 # ---------------------------------------------------------------------------
 $MaxItems = 6; $MaxFiles = 5; $MaxTests = 8; $MaxSpecLines = 150
 $MaxBacklogLines = 80; $MaxPlanLines = 250; $MaxBriefLines = 100; $MaxSpecsFast = 5; $MaxDeep = 2
+# Checks the quality-gate tool implements; a plan's '## Gates coverage' row may say 'check:<ID>' (PLAN-007).
+# Keep in sync with check-run-conformance.sh (GATE_CHECKS) and quality-gate.* .
+$GateChecks = 'QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST QG-SBOM QG-IMAGE QG-STATIC'
 $settingsPath = Join-Path (Join-Path $RepoRoot '.KCC') 'settings.json'
 if (Test-Path -LiteralPath $settingsPath) {
     $st = Read-Text $settingsPath
@@ -837,6 +840,110 @@ function Invoke-SpecsChecks {
 # ---------------------------------------------------------------------------
 # PLAN
 # ---------------------------------------------------------------------------
+# PLAN-007 helper: one problem per element (empty when the plan's '## Gates coverage' is complete).
+# Required: a row for every QG-* id on the plan's 'Gates:' line and, when QG-PROD is cited, for every numbered
+# item of the QG-PROD checklist table in quality-gates.md (a row says 'QG-PROD-7'). 'Covered by' holds
+# Test IDs (T-007, T-024..T-029), 'check:<QG-ID>' or 'verifier:<step>', separated by commas.
+function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests) {
+    $out = New-Object System.Collections.ArrayList
+    $cited = New-Object System.Collections.ArrayList
+    foreach ($l in $planLines) {
+        if ($l -match '^\s*([-*]\s+)?[*_]*gates\s*[*_]*\s*:') {
+            foreach ($m in [regex]::Matches($l, 'QG-[A-Z0-9]+(-[A-Z0-9]+)*')) { if (-not $cited.Contains($m.Value)) { [void]$cited.Add($m.Value) } }
+        }
+    }
+    $prod = New-Object System.Collections.ArrayList
+    if ($cited.Contains('QG-PROD')) {
+        $inside = $false
+        foreach ($l in (Read-Lines $qgFile)) {
+            if ($l -match '^#') { $inside = $l.Contains('QG-PROD'); continue }
+            if ($inside) {
+                $m = [regex]::Match($l, '^\s*\|\s*(\d+)\s*\|')
+                if ($m.Success) { $n = [int]$m.Groups[1].Value; if (-not $prod.Contains($n)) { [void]$prod.Add($n) } }
+            }
+        }
+    }
+    if (-not (Test-Heading $planLines 'Gates coverage')) {
+        [void]$out.Add("has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites to Test IDs, check:<QG-ID> or verifier:<step>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run).")
+        return , ([string[]]$out.ToArray())
+    }
+    $tid = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($t in $tests) { if ($t.Id) { [void]$tid.Add($t.Id.Trim()) } }
+    $checks = $GateChecks -split ' '
+    $named = New-Object 'System.Collections.Generic.HashSet[string]'
+    $said = New-Object 'System.Collections.Generic.HashSet[string]'
+    $gi = -1; $ci = -1; $hdr = $false
+    foreach ($l in (Get-Section $planLines 'gates coverage')) {
+        if ($l -notmatch '^\s*\|') { continue }
+        $line = $l.Replace('\|', '/')
+        $cells = $line.Split('|')
+        if (-not $hdr) {
+            for ($c = 0; $c -lt $cells.Count; $c++) {
+                $t = (Get-CellTrim $cells[$c]).ToLower()
+                if ($t -eq 'gate') { $gi = $c } elseif ($t -match '^covered') { $ci = $c }
+            }
+            $hdr = $true
+            continue
+        }
+        if (Test-SeparatorRow $line) { continue }
+        if ($gi -lt 0 -or $ci -lt 0 -or $gi -ge $cells.Count) { continue }
+        $g = $cells[$gi]
+        $cov = ''; if ($ci -lt $cells.Count) { $cov = Get-CellTrim $cells[$ci] }
+        $ids = New-Object System.Collections.ArrayList
+        $pm = [regex]::Match($g, 'QG-PROD[-_ #./:]*([Ii]tem[ ]*)?([0-9]+)')
+        while ($pm.Success) {
+            [void]$ids.Add('QG-PROD-' + [int]$pm.Groups[2].Value)
+            $g = $g.Substring(0, $pm.Index) + ' ' + $g.Substring($pm.Index + $pm.Length)
+            $pm = [regex]::Match($g, 'QG-PROD[-_ #./:]*([Ii]tem[ ]*)?([0-9]+)')
+        }
+        foreach ($m in [regex]::Matches($g, 'QG-[A-Z0-9]+(-[A-Z0-9]+)*')) { [void]$ids.Add($m.Value) }
+        if ($ids.Count -eq 0) { continue }
+        $why = ''
+        if ($cov -eq '') { $why = 'empty Covered by' }
+        else {
+            foreach ($part in ($cov -split '[;,]')) {
+                $p = Get-CellTrim $part
+                if ($p -eq '') { $why = 'empty entry' }
+                elseif ($p.Length -ge 6 -and $p.Substring(0, 6).ToLower() -eq 'check:') {
+                    $tok = Get-CellTrim $p.Substring(6)
+                    if ($checks -cnotcontains $tok) { $why = ('unknown check "{0}" (quality-gate implements: {1})' -f $tok, $GateChecks) }
+                }
+                elseif ($p.Length -ge 9 -and $p.Substring(0, 9).ToLower() -eq 'verifier:') {
+                    if ((Get-CellTrim $p.Substring(9)) -eq '') { $why = 'verifier: names no step' }
+                }
+                else {
+                    foreach ($tk in ($p -split '[ \t]+')) {
+                        if ($tk -eq '') { continue }
+                        $e = $tk.IndexOf('..')
+                        if ($e -gt 0) {
+                            $lo = $tk.Substring(0, $e); $hi = $tk.Substring($e + 2)
+                            if (-not $tid.Contains($lo)) { $why = ('"{0}" is not a Test ID in ## Atomic test cases' -f $lo) }
+                            elseif (-not $tid.Contains($hi)) { $why = ('"{0}" is not a Test ID in ## Atomic test cases' -f $hi) }
+                        }
+                        elseif (-not $tid.Contains($tk)) { $why = ('"{0}" is not a Test ID in ## Atomic test cases (use T-nnn, check:<QG-ID> or verifier:<step>)' -f $tk) }
+                        if ($why) { break }
+                    }
+                }
+                if ($why) { break }
+            }
+        }
+        foreach ($id in $ids) {
+            [void]$named.Add($id)
+            if ($why -and $said.Add($id + "`t" + $why)) { [void]$out.Add(('Gates coverage row {0}: {1}' -f $id, $why)) }
+        }
+    }
+    $miss = New-Object System.Collections.ArrayList
+    foreach ($r in $cited) {
+        if ($r -ceq 'QG-PROD' -and $prod.Count -gt 0) { continue }
+        if (-not $named.Contains($r)) { [void]$miss.Add($r) }
+    }
+    foreach ($n in $prod) { if (-not $named.Contains("QG-PROD-$n")) { [void]$miss.Add("QG-PROD-$n") } }
+    if ($miss.Count -gt 0) {
+        [void]$out.Add(("## Gates coverage has no row for: {0}. Add one per gate the plan cites (and one per numbered QG-PROD checklist item as QG-PROD-<n>)." -f ($miss -join ', ')))
+    }
+    return , ([string[]]$out.ToArray())
+}
+
 function Invoke-PlanChecks {
     $specs = Get-TargetSpecs
     if ($Spec -and $specs.Count -eq 0) {
@@ -868,6 +975,13 @@ function Invoke-PlanChecks {
             Add-Violation 'PLAN-006' 'warning' 'planner' ("{0} has no '## Standards coverage' table: map each cited standard's verifier conformance check to a Test ID or a Verification Step (round 9: the plan said the OpenAPI document is generated at runtime, the API standard requires it checked in)." -f $prel) $prel
         }
         $tests = Get-PlanTests $plan
+        # PLAN-007: every architecture gate the plan cites maps to a Test ID, a quality-gate check, or a verifier step.
+        $qgFile = Join-Path (Join-Path $RepoRoot 'architecture') 'quality-gates.md'
+        if ((-not $sp.Legacy) -and (Test-Path -LiteralPath $qgFile)) {
+            foreach ($gmsg in (Get-GatesCoverageProblems $plines $qgFile $tests)) {
+                Add-Violation 'PLAN-007' 'error' 'planner' ("plan.md {0}" -f $gmsg) $prel
+            }
+        }
         $items = Get-Items $sp
         $files = @{}
         foreach ($it in $items) {
@@ -917,7 +1031,7 @@ function Invoke-PlanChecks {
 function Test-OpenSevereBug([hashtable]$b) {
     $sev = ([string]$b['Severity']).ToLower()
     $st = ([string]$b['Status']).ToLower()
-    return (($sev -eq 'blocker' -or $sev -eq 'major') -and ($st -eq 'open' -or $st -eq 'fixing'))
+    return (($sev -eq 'blocker' -or $sev -eq 'major') -and ($st -eq 'open' -or $st -eq 'fixing' -or $st -eq 'blocked'))
 }
 
 function Invoke-ReviewChecks {
@@ -1054,8 +1168,19 @@ function Invoke-BugsChecks {
             if ($null -ne $b['Severity'] -and @('blocker', 'major', 'minor') -notcontains $sev) {
                 Add-Violation 'BUG-002' 'error' 'human' ("{0} Severity '{1}' is not blocker|major|minor." -f $brel, $b['Severity']) $brel
             }
-            if ($null -ne $b['Status'] -and @('open', 'fixing', 'fixed', 'verified', 'wontfix') -notcontains $st) {
-                Add-Violation 'BUG-002' 'error' 'human' ("{0} Status '{1}' is not open|fixing|fixed|verified|wontfix." -f $brel, $b['Status']) $brel
+            if ($null -ne $b['Status'] -and @('open', 'fixing', 'fixed', 'verified', 'blocked', 'wontfix') -notcontains $st) {
+                Add-Violation 'BUG-002' 'error' 'human' ("{0} Status '{1}' is not open|fixing|fixed|verified|blocked|wontfix." -f $brel, $b['Status']) $brel
+            }
+            if ($st -eq 'blocked') {
+                # blocked = the fix needs a human ruling. It is its own finding (not BUG-OPEN: retrying the fix cannot help); the implementer writes
+                # the '## Ruling needed' section once, and the message quotes it so the human sees the options without opening the file.
+                $rq = ((Get-Section (Read-Lines $bf.File) 'ruling needed') -join ' ') -replace '\s+', ' '
+                $rq = $rq.Trim(); if ($rq.Length -gt 400) { $rq = $rq.Substring(0, 400) }
+                if (-not $rq) {
+                    Add-Violation 'BUG-007' 'error' 'implementer' ("{0} is blocked but has no '## Ruling needed' section naming the options and the recommended one." -f $brel) $brel
+                    $rq = 'no ruling section written'
+                }
+                Add-Violation 'BUG-006' 'error' 'human' ("{0} is blocked and needs a human ruling: {1}" -f $brel, $rq) $brel
             }
             if ($specDone -and (Test-OpenSevereBug $b)) {
                 Add-Violation 'BUG-003' 'error' 'human' ("{0} is an {1} {2} bug but {3} is Done/APPROVED." -f $brel, $st, $sev, $sp.Id) $brel

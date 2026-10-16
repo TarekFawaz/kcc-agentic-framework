@@ -417,6 +417,63 @@ format_violations() { # flat json -> "ID (owner): message; ..." (errors only)
     END { out=""; for (i=0; i<=mx; i++) { if (!(i in seen)) continue; if (V[i, "severity"]=="warning") continue
       s=V[i, "id"] " (" V[i, "fix_owner"] "): " V[i, "message"]; out = out (out=="" ? "" : "; ") s }; print out }' <<< "$1"
 }
+# ---- Bug items: status, the ruling a blocked one waits for, scoped re-verification ------------------------------
+bug_field_of() { # bug file, column name (lower case) -> that cell of the bug table row, lower case
+  tr -d '\r' < "$1" | awk -F'|' -v want="$2" '/^\| *Type *\|/ { for (i = 1; i <= NF; i++) { c = tolower($i); gsub(/^ +| +$/, "", c); if (c == want) col = i } getline; getline; if (col) { v = tolower($col); gsub(/^ +| +$/, "", v); print v } exit }'
+}
+bug_status_of() { bug_field_of "$1" status; } # open|fixing|fixed|verified|blocked|wontfix
+bug_key_of() { basename "$1" .md | sed -E 's/^(Bug-[0-9]+).*/\1/'; }
+set_bug_status() { # bug file, new status: rewrites the Status cell of the bug table row, nothing else
+  local f="$1" new="$2" tmp="$1.tmp"
+  awk -v new="$new" '
+    { cr = ($0 ~ /\r$/); line = $0; if (cr) sub(/\r$/, "", line) }
+    hdr == 0 && line ~ /^\|[ \t]*Type[ \t]*\|/ { n = split(line, c, "|"); for (i = 1; i <= n; i++) { v = tolower(c[i]); gsub(/^[ \t]+|[ \t]+$/, "", v); if (v == "status") col = i } hdr = NR; print $0; next }
+    hdr > 0 && NR == hdr + 2 && col > 0 && !done { n = split(line, c, "|"); c[col] = " " new " "; o = c[1]; for (i = 2; i <= n; i++) o = o "|" c[i]; print o (cr ? "\r" : ""); done = 1; next }
+    { print $0 }' "$f" > "$tmp" && mv -f "$tmp" "$f"
+}
+ruling_text() { # bug file -> the text of its '## Ruling needed' section on one line (at most 600 characters)
+  local t
+  t="$(tr -d '\r' < "$1" | awk '/^##[ \t]/ { if (f) exit; if (tolower($0) ~ /^##[ \t]+ruling needed/) f = 1; next } f && NF { printf "%s ", $0 }' | sed -e 's/  */ /g' -e 's/ $//')"
+  if [[ ${#t} -gt 600 ]]; then t="${t:0:600} ..."; fi
+  printf '%s' "$t"
+}
+open_bug_list() { # spec entry -> "Bug-003 (major, blocked); Bug-004 (major, open)" for every bug that is not fixed, verified or wontfix
+  local bf st out="" d; d="$(spec_dir "$1")/Backlog"
+  [[ -d "$d" ]] || return 0
+  for bf in "$d"/Bug-*.md; do
+    [[ -f "$bf" ]] || continue
+    st="$(bug_status_of "$bf")"
+    case "$st" in fixed|verified|wontfix) continue ;; esac
+    out="${out:+$out; }$(bug_key_of "$bf") ($(bug_field_of "$bf" severity), ${st:-no status})"
+  done
+  printf '%s' "$out"
+}
+review_verdict_of() { # review.md -> APPROVED | CHANGES_NEEDED | TOOLCHAIN_DEFERRED | BLOCKED | empty
+  local rv
+  [[ -f "$1" ]] || return 0
+  rv="$(tr -d '\r' < "$1" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_-]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_')"
+  if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED' "$1" | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_' || true)"; fi
+  printf '%s' "$rv"
+}
+# Scoped re-verification (kernel/protocols/model-routing.md, agents/verifier.md -> Re-verification mode): the first TEST of a spec is a
+# full pass; once a review.md with the verdict CHANGES_NEEDED exists, the next TEST re-verifies only what changed. At most
+# VERIFY_FULL_MAX full passes per spec; the counter lives in run.json -> attempts under the key full:SPEC-ID.
+VERIFY_FULL_MAX=2
+VM_MODE=""; VM_BASE=""
+verify_mode() { # spec entry -> sets VM_MODE (full|scoped) and VM_BASE (the commit the last review recorded, or empty)
+  local rf; VM_MODE=full; VM_BASE=""
+  rf="$(spec_dir "$1")/review.md"
+  if [[ "$(review_verdict_of "$rf")" == "CHANGES_NEEDED" ]]; then
+    VM_MODE=scoped
+    VM_BASE="$(tr -d '\r' < "$rf" | sed -nE 's/^[[:space:]]*(reviewed[-_ ]?)?commit[[:space:]]*:[[:space:]]*"?([0-9a-fA-F]{7,40}).*/\2/p' | head -n 1)"
+    if [[ -z "$VM_BASE" ]]; then VM_BASE="$(cd "$ROOT" && git log -1 --format=%H -- "$(rel "$rf")" 2>/dev/null || true)"; fi
+  fi
+}
+scoped_prompt() { # -> the sentence added to the verifier's prompt in a scoped re-verification
+  local base=""
+  if [[ -n "$VM_BASE" ]]; then base="the diff since commit $VM_BASE (git diff $VM_BASE..HEAD, plus uncommitted changes)"; else base="the diff since the last review.md was written (no commit is recorded in it: use git log and git status, and the Bug files' Status)"; fi
+  printf '%s' "RE-VERIFICATION MODE (agents/verifier.md -> Re-verification mode): this is not the first verification of $C_SPEC; a review.md with the verdict CHANGES_NEEDED exists. Do NOT run a full pass. Re-verify only (a) every Bug item whose Status changed since that review (fixed, wontfix, blocked), and (b) the acceptance criteria and Test IDs whose files changed in $base. Always run the mandatory mechanical checks: quality-gate and check-traceability. Copy every other verdict row from the previous review.md unchanged, and state in the new review.md that those rows were carried over from the previous review and not re-run. Verify a fix for real (run its regression test and the commands that exercise it); file a new Bug only for a failure in the re-verified scope or in a changed file. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent's handover packet."
+}
 check_desc() { # $1 idx, $2 = "then" for the then-check
   local i="$1" tool args s
   if [[ "${2:-}" == "then" ]]; then tool="${S_TT[$i]}"; args="${S_TA[$i]}"; else tool="${S_CT[$i]}"; args="${S_CA[$i]}"; fi
@@ -430,12 +487,12 @@ check_desc() { # $1 idx, $2 = "then" for the then-check
   printf '%s' "$s"
 }
 LAST_HARNESS_RC=-1
-CHK_RC=0; CHK_VIOL=""
+CHK_RC=0; CHK_VIOL=""; CHK_BLOCKED=""; CHK_OPEN=""
 run_check() { # $1 idx, $2 label, $3 = "then"
   local i="$1" label="$2" tool args
   if [[ "${3:-}" == "then2" ]]; then tool="${S_TU[$i]}"; args=""
   elif [[ "${3:-}" == "then" ]]; then tool="${S_TT[$i]}"; args="${S_TA[$i]}"; else tool="${S_CT[$i]}"; args="${S_CA[$i]}"; fi
-  CHK_VIOL=""
+  CHK_VIOL=""; CHK_BLOCKED=""; CHK_OPEN=""
   case "$tool" in
     internal:review-verdict)
       local rf rv=""
@@ -458,20 +515,38 @@ run_check() { # $1 idx, $2 label, $3 = "then"
       else CHK_RC=1; CHK_VIOL="ROI-002 (human): ROI confidence $pct% is below $min%"; fi
       return 0 ;;
     internal:no-open-bugs)
-      # Bug items of the spec (Backlog/Bug-*.md) whose Status cell is open or fixing: the FIX state is done when none is left.
-      local bf bsv bopen=""
+      # Bug items of the spec (Backlog/Bug-*.md) by Status cell. open or fixing: the FIX state is done when none is left.
+      # blocked: the fix needs a human ruling (a '## Ruling needed' section); it is its own finding (BUG-006, owner human), is never
+      # retried, and opens the ruling gate (CHK_BLOCKED lists the bugs, CHK_OPEN the ones an implementer can still fix).
+      local bf bsv bopen="" bblk="" bq=""
+      CHK_BLOCKED=""; CHK_OPEN=""
       if [[ -n "$C_ENTRY" && -d "$(spec_dir "$C_ENTRY")/Backlog" ]]; then
         for bf in "$(spec_dir "$C_ENTRY")"/Backlog/Bug-*.md; do
           [[ -f "$bf" ]] || continue
-          bsv="$(tr -d '\r' < "$bf" | awk -F'|' '/^\| *Type *\|/ { for (i = 1; i <= NF; i++) { c = tolower($i); gsub(/^ +| +$/, "", c); if (c == "status") col = i } getline; getline; if (col) { v = tolower($col); gsub(/^ +| +$/, "", v); print v } exit }')"
-          if [[ "$bsv" == "open" || "$bsv" == "fixing" ]]; then bopen="$bopen $(basename "$bf" .md | sed -E 's/^(Bug-[0-9]+).*/\1/')"; fi
+          bsv="$(bug_status_of "$bf")"
+          if [[ "$bsv" == "open" || "$bsv" == "fixing" ]]; then bopen="$bopen $(bug_key_of "$bf")"; fi
+          if [[ "$bsv" == "blocked" ]]; then bblk="$bblk $(bug_key_of "$bf")"; bq="$bq $(bug_key_of "$bf") needs a ruling: $(ruling_text "$bf");"; fi
         done
       fi
-      if [[ -z "$bopen" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="BUG-OPEN (implementer): $C_SPEC still has open bug item(s)${bopen// /, }; fix each test-first and set its Status to fixed"; fi
+      CHK_BLOCKED="${bblk# }"; CHK_OPEN="${bopen# }"
+      if [[ -n "$bblk" && -z "$bopen" ]]; then CHK_RC=1; CHK_VIOL="BUG-006 (human): $C_SPEC has blocked bug item(s)${bblk// /, }; no fix can proceed without a human ruling.${bq%;}"
+      elif [[ -n "$bopen" ]]; then CHK_RC=1; CHK_VIOL="BUG-OPEN (implementer): $C_SPEC still has open bug item(s)${bopen// /, }; fix each test-first and set its Status to fixed"
+      else CHK_RC=0; fi
       return 0 ;;
     internal:file-exists)
       local p; p="$(render "${S_CP[$i]}")"
       if [[ -e "$ROOT/$p" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-001 (agent): missing $p"; fi
+      return 0 ;;
+    internal:roadmap-specs)
+      # SPECS (fast track) writes only the split: ROADMAP.md plus a folder with a stub note for every spec it lists.
+      local rsd="$ROOT/specs/$C_IDEA-Specs" rsid rsmiss="" rsids=""
+      if [[ -z "$C_IDEA" || ! -f "$rsd/ROADMAP.md" ]]; then CHK_RC=1; CHK_VIOL="SPEC-005 (spec-writer): missing specs/${C_IDEA:-IDEA}-Specs/ROADMAP.md"; return 0; fi
+      rsids="$(tr -d '\r' < "$rsd/ROADMAP.md" | awk '/^[ \t]*\|/ && !/^[ \t]*\|[ \t:|-]+\|?[ \t]*$/ { if (match($0, /SPEC-[0-9]+/)) { id = substr($0, RSTART, RLENGTH); if (!seen[id]++) print id } }')"
+      if [[ -z "$rsids" ]]; then CHK_RC=1; CHK_VIOL="SPEC-005 (spec-writer): ROADMAP.md lists no SPEC-NNN in its Execution Plan"; return 0; fi
+      for rsid in $rsids; do
+        if ! compgen -G "$rsd/$rsid-*/$rsid*.md" >/dev/null && ! compgen -G "$rsd/$rsid/$rsid*.md" >/dev/null; then rsmiss="${rsmiss:+$rsmiss, }$rsid"; fi
+      done
+      if [[ -z "$rsmiss" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="SPEC-005 (spec-writer): ROADMAP.md lists $rsmiss but there is no folder with a SPEC-NNN-slug.md stub note for it"; fi
       return 0 ;;
     internal:agent-report)
       if [[ "$LAST_HARNESS_RC" == "0" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="AGENT-001 (agent): harness exited $LAST_HARNESS_RC; expected: ${S_EXP[$i]}"; fi
@@ -633,9 +708,15 @@ get_route() {
   tab="$(printf '\t')"
   [[ -n "$C_SPEC" ]] && a+=(--spec "$C_SPEC")
   [[ -n "$C_WAVE" ]] && a+=(--wave "$C_WAVE")
+  [[ -n "${ROUTE_EXTRA:-}" ]] && a+=($ROUTE_EXTRA)
   line="$(bash "$TOOLS/kcc-route.sh" "${a[@]}" 2>/dev/null | grep "$tab" | tail -n 1 || true)"
   [[ -n "$line" ]] || return 0
-  IFS="$tab" read -r RT_TIER RT_MODEL RT_EFFORT RT_WHY _ <<< "$line"
+  # split on single tabs by hand: `read` with a tab IFS merges the empty model of a harness with no registry column into its neighbours
+  local rest="$line"
+  RT_TIER="${rest%%"$tab"*}"; rest="${rest#*"$tab"}"
+  RT_MODEL="${rest%%"$tab"*}"; rest="${rest#*"$tab"}"
+  RT_EFFORT="${rest%%"$tab"*}"; rest="${rest#*"$tab"}"
+  RT_WHY="${rest%%"$tab"*}"
 }
 agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODEL AM_EFFORT AM_WHY AM_TIER AM_SOURCE AM_WM AM_WE
   # The state's agent (the table's agent_fasttrack) is routed in every cycle. Under --fasttrack, when the harness can select an
@@ -644,6 +725,9 @@ agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODE
   # told which tier, model and effort to spawn the agent on.
   AM_MODE=""; AM_AGENT=""; AM_MODEL=""; AM_EFFORT=""; AM_WHY=""; AM_WM=""; AM_WE=""; AM_SOURCE=""; AM_TIER=""
   AM_AGENT="${S_AGF[$1]:-}"
+  # REVIEW is a quick diff review and a scoped re-verification a re-check: neither runs above balanced tier at high effort (model-routing.md).
+  ROUTE_EXTRA=""
+  if [[ "${S_NAME[$1]}" == "REVIEW" || ( "${S_NAME[$1]}" == "TEST" && "${VM_MODE:-}" == "scoped" ) ]]; then ROUTE_EXTRA="--max-tier balanced --max-effort high"; fi
   local fast=0; [[ "$R_fasttrack" == "1" ]] && fast=1
   get_route "$AM_AGENT" "$(( $2 + 1 ))"
   if [[ -n "$RT_TIER" ]]; then AM_TIER="$RT_TIER"; AM_MODEL="$RT_MODEL"; AM_EFFORT="$RT_EFFORT"; AM_WHY="$RT_WHY"; AM_SOURCE=kcc-route; fi
@@ -807,6 +891,27 @@ prompt_gate() { # sets OUTCOME paused|answered
     say "  not an allowed answer: $a"
   done
 }
+ruling_gate() { # $1 idx: opens the ruling gate for the blocked Bug items of the last run_check (CHK_BLOCKED); no attempt is used
+  local i="$1" d="" k bf q sd; sd="$(spec_dir "$C_ENTRY")/Backlog"
+  for k in $CHK_BLOCKED; do
+    bf="$(ls "$sd"/$k-*.md "$sd"/$k.md 2>/dev/null | head -n 1 || true)"
+    d="${d}${d:+$'\n\n'}- $k ($(rel "$bf")): $(ruling_text "$bf")"
+  done
+  q="Bug item(s) ${CHK_BLOCKED// /, } of $C_SPEC are blocked: the fix cannot proceed without a human ruling, so the implementer is not run again and no attempt is used. Read each '## Ruling needed' section (the options and the recommended one), then answer: revise (retry the fix with your ruling; give it with --note, without a note the recommended option applies), waive (record the bug as wontfix, a human decision), escalate (reopen it and retry, recorded as an escalation), or abort. A silent run never answers this gate itself."
+  open_gate ruling ruling "$q" "$i" "$d"
+}
+rule_bugs() { # $1 answer: applies the human's ruling to every blocked Bug item of the gate's spec (revise|escalate -> open, waive -> wontfix) and records it in the bug file
+  local ans="$1" ent bf st new d
+  ent="$(spec_entry_at "$R_spec_index")"; [[ -n "$ent" ]] || return 0
+  d="$(spec_dir "$ent")/Backlog"; [[ -d "$d" ]] || return 0
+  if [[ "$ans" == "waive" ]]; then new=wontfix; else new=open; fi
+  for bf in "$d"/Bug-*.md; do
+    [[ -f "$bf" ]] || continue
+    st="$(bug_status_of "$bf")"; [[ "$st" == "blocked" ]] || continue
+    set_bug_status "$bf" "$new"
+    printf '\n## Ruling\n\n- %s human: `%s` -> Status %s%s\n' "$(iso)" "$ans" "$new" "${NOTE:+ - $NOTE}" >> "$bf"
+  done
+}
 prev_cmd_state() { local j; for ((j = $1 - 1; j >= 0; j--)); do if [[ -n "${S_CMD[$j]}" ]]; then echo "$j"; return 0; fi; done; echo "$1"; }
 apply_answer() {
   local ans gname gid idx pa key gf sp orch sess hd
@@ -855,7 +960,18 @@ answered: $(iso)/" "$gf" && rm -f "$gf.bak"
         elif [[ "$ans" == "defer" ]]; then emit toolchain-gate-decision "$R_gate_spec" '{"choice":"defer","verdict":"TOOLCHAIN_DEFERRED","source":"kcc-run"}'; pa=done
         else pa=recheck; fi ;;
       quality-deferred-on-exit-3) if [[ "$ans" == "install" ]]; then pa=install; else pa=done; fi ;;
-      loop) set_att "$key" 0; pa=rerun ;;
+      ruling)
+        # revise and escalate reopen the blocked bugs and re-run the fix with the ruling as the note; waive records them as wontfix
+        if [[ "$ans" == "waive" ]]; then pa=recheck; else
+          pa=rerun; set_att "$key" 0
+          if [[ -z "$NOTE" ]]; then R_note="the human answered $ans without a note: apply the recommended option of the Ruling needed section of each reopened Bug item, then set its Status to fixed"
+          else R_note="human ruling ($ans): $NOTE. Follow it for the reopened Bug items, then set their Status to fixed"; fi
+        fi
+        rule_bugs "$ans"; R_last_violations="" ;;
+      loop)
+        set_att "$key" 0; pa=rerun
+        # the pass-cap gate (a third full verifier pass): the human's revise or escalate grants exactly one more full pass
+        if [[ -n "$R_gate_spec" && "$(get_att "cap:$R_gate_spec")" != "0" ]]; then set_att "cap:$R_gate_spec" 0; set_att "full:$R_gate_spec" $((VERIFY_FULL_MAX - 1)); fi ;;
       *) pa=recheck ;;
     esac
   fi
@@ -977,7 +1093,7 @@ complete_unit() { # $1 idx, $2 skipped (1/0)
   set_att "$key" 0
   R_last_violations=""
   if [[ "${S_ID[$i]}" == "1" || -z "$R_idea" ]]; then detect_idea; fi
-  if [[ "${S_NAME[$i]}" == "SPECS" || "${S_CMD[$i]}" == /spec-create* ]]; then load_specs; fi
+  if [[ "${S_NAME[$i]}" == "SPECS" || ( "${S_CMD[$i]}" == /spec-create* && "${S_SCOPE[$i]}" == "run" ) ]]; then load_specs; fi
   cp="${S_CK[$i]}"; if [[ -z "$cp" && "${S_NAME[$i]}" == "REVIEW" ]]; then cp=spec-reviewed; fi
   if [[ -n "$cp" ]]; then invoke_checkpoint "$cp" "kcc-run: $label completed; run kcc-run -Resume"; fi
   if [[ "$2" == "1" ]]; then say "kcc-run: done   $label (exit check already passes)"; else say "kcc-run: done   $label"; fi
@@ -1042,8 +1158,27 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   if [[ -n "${S_CMD[$i]}" ]]; then has_cmd=1; fi
   att="$(get_att "$key")"
   if [[ $has_cmd -eq 0 && $att -gt 0 && $has_check -eq 1 && -z "$gname" ]]; then need_fix=1; fi
+  VM_MODE=""; VM_BASE=""
+  # A bug the implementer cannot fix without a human ruling (Status blocked) opens the ruling gate at once: no dispatch, no attempt used.
+  if [[ "${S_CT[$i]}" == "internal:no-open-bugs" && -n "$C_ENTRY" ]]; then
+    run_check "$i" "$key"
+    if [[ -n "$CHK_BLOCKED" && -z "$CHK_OPEN" ]]; then R_last_violations="$(sanitize_prompt "$CHK_VIOL")"; ruling_gate "$i"; return 0; fi
+  fi
   if [[ $skip_dispatch -eq 0 && ( $has_cmd -eq 1 || $need_fix -eq 1 ) ]]; then
     local body prompt log where
+    # TEST: the first verification of a spec is a full pass; later ones re-verify only what changed. At most VERIFY_FULL_MAX full passes.
+    if [[ "${S_NAME[$i]}" == "TEST" && -n "$C_ENTRY" && $has_cmd -eq 1 ]]; then
+      verify_mode "$C_ENTRY"
+      if [[ "$VM_MODE" == "full" && $att -eq 0 ]]; then
+        local fp; fp="$(get_att "full:$C_SPEC")"
+        if [[ $fp -ge $VERIFY_FULL_MAX ]]; then
+          set_att "cap:$C_SPEC" 1
+          open_gate loop loop "Verification of $C_SPEC would be its full pass number $((fp + 1)); at most $VERIFY_FULL_MAX full verifier passes are allowed per spec (CR-3), so no verifier is run. Still open: $(open_bug_list "$C_ENTRY"). Revise (one more full pass, with a --note), escalate, or abort?" "$i" "Open bug items: $(open_bug_list "$C_ENTRY")"
+          return 0
+        fi
+        set_att "full:$C_SPEC" $((fp + 1))
+      fi
+    fi
     if [[ $has_cmd -eq 1 ]]; then body="$(render "$(state_cmd "$i")")"; else body="The exit check \`$(check_desc "$i")\` failed. Route each violation to its fix_owner and fix it."; fi
     where=""; if [[ -n "$C_SPEC" ]]; then where=" for $C_SPEC"; fi; if [[ -n "$C_WAVE" ]]; then where="$where wave $C_WAVE"; fi
     # Full runs wrap each unit with the butler (CR-8: brief first, remember after); fasttrack keeps it to the run's
@@ -1063,10 +1198,12 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
         if [[ -n "$AM_TIER" ]]; then lead="${lead% } Routing (kcc-route): spawn the $AM_AGENT subagent on tier $AM_TIER${AM_MODEL:+, model $AM_MODEL}, effort $AM_EFFORT ($AM_WHY). Before any other spawn run \`.KCC/tools/kcc-route --agent <name> [--spec ${C_SPEC:-SPEC-ID}]\` and use its tier, model and effort. "; fi
       fi
       AM_ITEM="run"; if [[ -n "$C_SPEC" ]]; then AM_ITEM="spec"; fi; if [[ -n "$C_WAVE" ]]; then AM_ITEM="wave $C_WAVE"; fi
-      if [[ -n "$AM_TIER" ]]; then emit model-selected "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"$AM_ITEM\",\"tier\":\"$AM_TIER\",\"model\":\"$AM_MODEL\",\"effort\":\"$AM_EFFORT\",\"reasons\":\"$AM_WHY\",\"mode\":\"$AM_MODE\",\"source\":\"kcc-route\"}"
+      if [[ -n "$AM_TIER" ]]; then emit model-selected "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"$AM_ITEM\",\"tier\":\"$AM_TIER\",\"model\":\"$AM_MODEL\",\"effort\":\"$AM_EFFORT\",\"reasons\":\"$AM_WHY\",\"mode\":\"$AM_MODE\",\"pass\":\"$VM_MODE\",\"source\":\"kcc-route\"}"
       elif false; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
     fi
     prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
+    if [[ "$VM_MODE" == "scoped" ]]; then prompt="$prompt $(scoped_prompt)"; fi
+    if [[ "$VM_MODE" == "full" ]]; then prompt="$prompt FULL VERIFICATION PASS $(get_att "full:$C_SPEC") of at most $VERIFY_FULL_MAX for $C_SPEC: run every check in this one pass (acceptance criteria, Test IDs, the compose or runtime smoke test, container image scans, every scan the quality gate lists) and file every finding now, because a later pass re-verifies only what changed. Record the HEAD commit you verified as 'commit: <sha>' in review.md frontmatter. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent's handover packet."; fi
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi
     if [[ $att -eq 0 && -n "$R_last_violations" ]] && test_force "${S_ID[$i]}"; then prompt="$prompt A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: $R_last_violations"; fi
     if [[ -n "$R_note" ]]; then prompt="$prompt Human note: $R_note"; R_note=""; fi
@@ -1076,8 +1213,14 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
     say "kcc-run: run    $label (attempt $((att + 1))/$CFG_MAX) -> $(rel "$log")"
     save_run
     refresh_dashboard
+    # Every dispatch records a start and an end with its spec and agent, so the dashboard can show runs that overlap (one agent per spec).
+    local ar_agent="${AM_AGENT:-orchestrator}" ar_t0 ar_t1
+    ar_t0="$(date +%s)"
+    emit agent-run-started "$C_SPEC" "{\"state\":${S_ID[$i]},\"state_name\":\"${S_NAME[$i]}\",\"agent\":\"$ar_agent\",\"model\":\"${AM_MODEL:-}\",\"effort\":\"${AM_EFFORT:-}\",\"attempt\":$((att + 1)),\"wave\":\"$C_WAVE\",\"log\":\"$(rel "$log")\",\"started\":\"$(iso)\",\"source\":\"kcc-run\"}"
     invoke_harness "$prompt" "$log"
     HARNESS_EXTRA=""
+    ar_t1="$(date +%s)"
+    emit agent-run-ended "$C_SPEC" "{\"state\":${S_ID[$i]},\"state_name\":\"${S_NAME[$i]}\",\"agent\":\"$ar_agent\",\"attempt\":$((att + 1)),\"wave\":\"$C_WAVE\",\"log\":\"$(rel "$log")\",\"exit\":$LAST_HARNESS_RC,\"seconds\":$((ar_t1 - ar_t0)),\"ended\":\"$(iso)\",\"source\":\"kcc-run\"}"
     if limit_hit "$log" "$LAST_HARNESS_RC"; then suspend_run "$i" "$log"; fi
     if [[ "$LAST_HARNESS_RC" == "124" ]]; then say "kcc-run: harness timed out for $label"; fi
     pre_done=0
@@ -1128,6 +1271,8 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   R_last_violations="$(sanitize_prompt "$CHK_VIOL")"
   if [[ ${#R_last_violations} -gt 1500 ]]; then R_last_violations="${R_last_violations:0:1500} ..."; fi
   if [[ $CHK_RC -eq 2 ]]; then stop_run stopped "exit check for $label returned a usage/environment error: $R_last_violations" 6; fi
+  # Only blocked bugs are left (the pass fixed the others): they need a human ruling, so no retry and no attempt is used.
+  if [[ -n "$CHK_BLOCKED" && -z "$CHK_OPEN" ]]; then ruling_gate "$i"; return 0; fi
   if [[ $CHK_RC -eq 3 ]]; then
     local g="$gname"; if [[ -z "$g" || "$gkind" == "approval" ]]; then g=quality-deferred-on-exit-3; fi
     open_gate "$g" failure "Exit check for $label is DEFERRED (exit 3): a required external tool is missing. This is not a pass." "$i" "$R_last_violations"

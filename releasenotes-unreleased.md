@@ -18,6 +18,17 @@ Everything is additive: a run that uses none of the new flags behaves as before.
 
 ## What changed
 
+- **Dashboard: parallel agents and the lifecycle flowchart.** The Overview page now has a Now strip (every agent running, with a stale marker when nothing was written for 10 minutes), per-stage runs / peak parallel / sum of agent time / speed-up / cost columns, a swimlane timeline of agent runs with a concurrency strip and hatched human-gate waits, and an inline-SVG flowchart of the real state machine (shared states once, one chart per spec) with loop-back edges, gates and counts taken from dispatch logs and backchannel events. Builders add `goto`, `maxAttempts`, lane run state, dispatch agent/model/effort and `laneEvents` to the data block.
+
+- **Specs and plans are written in parallel.** Fast track used to ask one spec-writer to write every
+  spec and then plan them all; unattended, with no orchestrator to spawn helpers, no plan was
+  written and the state failed (round 10: 27 minutes for 5 specs). SPECS now writes only the split
+  (ROADMAP.md and a stub note per spec); new per-spec states WRITE (10) and PLAN (11) follow, each marked
+  `"fanout": true` in the state table. `kcc run` runs each of them for all specs at the same time
+  (`--max-parallel`, default 4), one `claude -p --agent` process per spec in its own lane with its own
+  log `state-<n>-<SPEC>-<k>.log`; a failure retries only that spec. The bare `kcc-run` driver does the same
+  states spec by spec. Every dispatch records `agent-run-started` / `agent-run-ended` with spec and agent.
+
 - **Model tiers.** `spec-writer`, `planner`, `architect`, `idea-interrogator`,
   `technical-interrogator`, `ux-ui-designer`, `infrastructure-planner`, and
   `security-analyst` (effort stays `high`) now run on the `balanced` class
@@ -78,6 +89,10 @@ Everything is additive: a run that uses none of the new flags behaves as before.
   a failed TEST or REVIEW goes to a FIX state (`implementer --bugs`); a DEFERRED test row exits 3 instead of failing; a Bug no
   test can express may say `n/a (reason)`; the plan keeps commands out of Test IDs and maps each cited standard's verifier check
   (`## Standards coverage`, PLAN-006).
+- **Every architecture gate maps to something runnable.** The plan's `## Gates coverage` table (`| Gate | Covered by |`) needs a row
+  per `QG-*` gate the plan cites and per numbered QG-PROD checklist item: Test IDs that exist in the atomic table,
+  `check:<QG-ID>` for a check `quality-gate` implements, or `verifier:<step>`. `check-run-conformance` enforces it as
+  PLAN-007 (error, owner planner; round 10: QG-STATIC had no test, the image scan was never run).
 - **A live dashboard.** `kcc dashboard --serve`, and `kcc run` serves it for the run: the page is rebuilt from the files on every
   request and shows a stale or dead state honestly. Lane work (`src/`, specs, results) reaches the workspace while it runs.
 - **`kcc report`.** Measures the run in a folder: time per stage, human waits, agents, cost and output, with a pass/fail

@@ -55,7 +55,7 @@ const states = (out: string) => [...out.matchAll(/^\[(?:skip\] )?(?:\[)?(\d+)\]?
 describe("state tables", () => {
   const root = workspace("tables");
   test("--fasttrack runs its own table: no ROI, CONFIRM, ARCH-GATE, BUDGET or WINDOWS states, in both drivers", () => {
-    const want = ["0 REPO", "1 IDEA", "4 BRIEFS", "5 ASK", "6 ARCH", "9 SPECS", "14 PREFLIGHT", "15 IMPLEMENT", "19 FIX", "16 TEST", "17 REVIEW", "18 CLOSE"];
+    const want = ["0 REPO", "1 IDEA", "4 BRIEFS", "5 ASK", "6 ARCH", "9 SPECS", "10 WRITE", "11 PLAN", "14 PREFLIGHT", "15 IMPLEMENT", "19 FIX", "16 TEST", "17 REVIEW", "18 CLOSE"];
     const a = sh(root, [...FT, "--dry-run"]);
     expect(a.status).toBe(0);
     expect(states(a.stdout)).toEqual(want);
@@ -73,16 +73,18 @@ describe("state tables", () => {
 
 describe("fast track, happy path", () => {
   const root = workspace("happy");
-  test("runs IDEA -> BRIEFS -> ASK -> ARCH -> SPECS -> PREFLIGHT -> IMPLEMENT with one dispatch per state and no human gate", () => {
+  test("runs IDEA -> BRIEFS -> ASK -> ARCH -> SPECS -> WRITE -> PLAN -> PREFLIGHT -> IMPLEMENT with one dispatch per state and no human gate", () => {
     const r = drv(root, [...FT, "--until", "15"]);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/-?-?Until 15 reached/i);
     const c = calls(root).map((l) => /state=(\d+)/.exec(l)![1]);
-    expect(c).toEqual(["1", "4", "5", "6", "9", "15"]); // REPO and PREFLIGHT pass on their checks alone
+    expect(c).toEqual(["1", "4", "5", "6", "9", "10", "11", "15"]); // REPO and PREFLIGHT pass on their checks alone
     const ev = events(root);
-    expect(ev).toEqual(expect.arrayContaining(["fasttrack-approved", "idea-interrogation-completed", "specialist-brief-created", "architecture-pass-complete", "spec-created", "implement-completed"]));
+    expect(ev).toEqual(expect.arrayContaining(["fasttrack-approved", "idea-interrogation-completed", "specialist-brief-created", "architecture-pass-complete", "roadmap-created", "spec-created", "plan-created", "implement-completed"]));
     expect(ev).not.toContain("human-gate-triggered");
-    expect(ev.indexOf("spec-created")).toBeGreaterThan(ev.indexOf("architecture-pass-complete"));
+    expect(ev.indexOf("roadmap-created")).toBeGreaterThan(ev.indexOf("architecture-pass-complete"));
+    expect(ev.indexOf("plan-created")).toBeGreaterThan(ev.indexOf("spec-created"));
+    expect(ev).toEqual(expect.arrayContaining(["agent-run-started", "agent-run-ended"])); // every dispatch records when it began and ended
     expect(existsSync(join(root, "src", "IDEA-001-demo", "app.ts"))).toBe(true);
     expect(runJson(root).status).toBe("stopped");
   });
@@ -91,8 +93,8 @@ describe("fast track, happy path", () => {
     expect(d.status).toBe(0);
     const html = readFileSync(join(root, "dashboard", "index.html"), "utf8");
     const data = JSON.parse(html.match(/<script id="kcc-data" type="application\/json">([\s\S]*?)<\/script>/)![1]!);
-    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 19, 16, 17, 18]);
-    expect(data.runLogs.length).toBe(6);
+    expect(data.states.map((s: any) => s.id)).toEqual([0, 1, 4, 5, 6, 9, 10, 11, 14, 15, 19, 16, 17, 18]);
+    expect(data.runLogs.length).toBe(8);
     expect(data.runLogs.every((l: any) => l.started && l.ended)).toBe(true);
   });
 });
@@ -182,7 +184,7 @@ describe("the FIX state (a failed TEST or REVIEW sends the spec back to the impl
     const t = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", ".KCC", "kernel", "auto-states-fasttrack.json"), "utf8")).states as any[];
     expect(t.find((s) => s.name === "TEST").on_fail_goto).toBe(19);
     expect(t.find((s) => s.name === "REVIEW").on_fail_goto).toBe(19);
-    expect(t.map((s) => s.name).slice(7, 10)).toEqual(["IMPLEMENT", "FIX", "TEST"]);
+    expect(t.map((s) => s.name).slice(9, 12)).toEqual(["IMPLEMENT", "FIX", "TEST"]);
   });
 });
 
@@ -286,7 +288,7 @@ describe("the plan says how each cited standard is verified (PLAN-006)", () => {
   // verifier then filed Bug-004 because the standard requires it checked in.
   test("a plan with no Standards coverage table gets a PLAN-006 warning (not an error); adding the table clears it", () => {
     const root = workspace("standards-coverage");
-    expect(drv(root, [...FT, "--until", "9"]).status).toBe(0);
+    expect(drv(root, [...FT, "--until", "11"]).status).toBe(0);
     const plan = (): string => {
       const dir = readdirSync(join(root, "specs")).find((d) => d.startsWith("IDEA-"))!;
       const spec = readdirSync(join(root, "specs", dir)).find((d) => d.startsWith("SPEC-"))!;

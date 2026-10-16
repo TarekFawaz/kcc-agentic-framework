@@ -32,13 +32,14 @@ Implement spec <ARGS>.
 `--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: skip step 4 (the `fasttrack-approved` backchannel event opens `check-impl-lock`), and the butler and token-guard. The preflight (5b) and all other steps stay.
 
 `--bugs`: the fix pass of a run (the FIX state, after TEST or REVIEW sent the spec back). Scope is every Bug item in the
-spec `Backlog/` whose Status is `open` or `fixing`, plus any exit-check violation quoted in the prompt. Per Bug: write
+spec `Backlog/` whose Status is `open` or `fixing` (never `blocked`: that Bug waits for a human ruling), plus any exit-check violation quoted in the prompt. Per Bug: write
 the regression test named in its table first (red), fix the files under its `## Impacted Files`, make it green, set
 its Status to `fixed`. A violation that names no Bug (a test ID nothing references, a stale assertion) gets the same
 treatment: test first, then the fix. Touch no file the Bug items and violations do not name. Wave scope checks do not
 apply to this pass; the verifier re-tests afterwards. The Regression test cell must name a Test ID that `plan.md ->
 ## Atomic test cases` already lists. A Bug no test can express (a missing document, a gate) says `n/a (<reason>)`;
-never invent a Test ID the plan does not have.
+never invent a Test ID the plan does not have. A Bug you may not fix (it needs a ruling) gets `Status: blocked` and one
+`## Ruling needed` section (blocker, options, recommended option); do not leave it `open` and do not write a note per retry.
 
 ## Steps
 

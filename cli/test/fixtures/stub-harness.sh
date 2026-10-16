@@ -11,8 +11,16 @@ mode="$(cat .kcc-stub/mode 2>/dev/null || echo happy)"
 state="$(printf '%s' "$prompt" | grep -oE 'KCC run state [0-9]+' | grep -oE '[0-9]+$' | head -n 1)"
 spec="$(printf '%s' "$prompt" | grep -oE 'for SPEC-[0-9]+' | grep -oE 'SPEC-[0-9]+' | head -n 1)"
 wave="$(printf '%s' "$prompt" | grep -oE 'wave [0-9]+' | grep -oE '[0-9]+' | head -n 1)"
-printf '%s state=%s spec=%s wave=%s mode=%s\n' "$(date -u +%H:%M:%S)" "${state:-?}" "${spec:-}" "${wave:-}" "$mode" >> .kcc-stub/calls.log
-sleep 1
+# A lane (kcc run) is a copy of the workspace: one calls file per spec, so two lanes never write the same file and the merge has no clash.
+calls=.kcc-stub/calls.log; [ -d .kcc-lane ] && calls=".kcc-stub/calls-${spec:-run}.log"
+printf '%s state=%s spec=%s wave=%s mode=%s\n' "$(date -u +%H:%M:%S)" "${state:-?}" "${spec:-}" "${wave:-}" "$mode" >> "$calls"
+# Every prompt, for tests that read what a state was told (the scoped re-verification wording, the human note).
+prompts=.kcc-stub/prompts.log; [ -d .kcc-lane ] && prompts=".kcc-stub/prompts-${spec:-run}.log"
+printf '%s\n' "$prompt" >> "$prompts"
+# Epoch milliseconds at the start and the end of the dispatch, for tests that compare when two dispatches ran.
+printf '%s start %s %s\n' "$(date +%s%3N)" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
+sleep "$(cat .kcc-stub/sleep 2>/dev/null || echo 1)"
+printf '%s end %s %s\n' "$(date +%s%3N)" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
 IDEA=IDEA-001-demo
 ID="ideation/$IDEA"
 SPECS="specs/$IDEA-Specs"
@@ -149,31 +157,37 @@ Accepted
 EOF
     fi
     ;;
-  9)
-    w "$SPECS/IDEA-001-demo-Specs.md" <<'EOF'
-# IDEA-001 specs
-Source idea: [[../../ideation/IDEA-001-demo/idea-001-demo|IDEA-001]]
-- [[SPEC-001-skeleton/SPEC-001-skeleton|SPEC-001]]
-EOF
-    w "$SPECS/ROADMAP.md" <<'EOF'
-# Roadmap - IDEA-001: Demo
-
-## Execution Plan
-| Order | Spec | Delivery | Depends on | Lane | Est. tokens | Restore point |
-|--|--|--|--|--|--|--|
-| 1 | [[SPEC-001-skeleton/SPEC-001-skeleton|SPEC-001]] | walking skeleton | None | A | n/a | CP after review |
-EOF
-    w "$SPECS/SPEC-001-skeleton/SPEC-001-skeleton.md" <<'EOF'
+  9|10|11)
+    N="$(cat .kcc-stub/specs 2>/dev/null || echo 1)"
+    slug_of() { case "$1" in 1) echo skeleton ;; *) echo "feature-$1" ;; esac; }
+    skipped() { grep -qx "$spec" ".kcc-stub/$1" 2>/dev/null; } # .kcc-stub/nowrite and .kcc-stub/noplan list specs a dispatch must leave unfinished
+    stub_note() { # n -> the stub note the split writes: id, title, status, one-line Delivery, Depends on
+      local n="$1" s; s="SPEC-00$1-$(slug_of "$1")"
+      w "$SPECS/$s/$s.md" <<EOF
 ---
-id: SPEC-001
-title: Walking skeleton
+id: SPEC-00$n
+title: Feature $n
 status: Draft
 ---
-# SPEC-001: Walking skeleton
+# SPEC-00$n: Feature $n
+
+- Delivery: one thin user-visible feature ($n).
+- Depends on: $([ "$n" = 1 ] && echo None || echo SPEC-001)
+EOF
+    }
+    full_note() { # n -> the whole spec: note, arch.md, one Story
+      local n="$1" s; s="SPEC-00$1-$(slug_of "$1")"
+      w "$SPECS/$s/$s.md" <<EOF
+---
+id: SPEC-00$n
+title: Feature $n
+status: Draft
+---
+# SPEC-00$n: Feature $n
 
 | Priority | Category | Status | Wave | Depends on | Blocks | Index |
 |--|--|--|--|--|--|--|
-| P1 | Feature | Draft | 1 | None | None | [[../IDEA-001-demo-Specs|IDEA-001 specs]] |
+| P1 | Feature | Draft | 1 | $([ "$n" = 1 ] && echo None || echo SPEC-001) | None | [[../IDEA-001-demo-Specs|IDEA-001 specs]] |
 
 ## Delivery Brief
 - Who: a user. Gets: one item created and listed end to end. Value: proves the stack. Measured by: AC-1.
@@ -189,39 +203,70 @@ status: Draft
 ## Architecture
 See [[arch]].
 EOF
-    w "$SPECS/SPEC-001-skeleton/arch.md" <<'EOF'
-# SPEC-001 architecture slice
+      w "$SPECS/$s/arch.md" <<EOF
+# SPEC-00$n architecture slice
 Skeleton: API + SQLite, see [[../../../architecture/architecture|Architecture Document]].
 EOF
-    w "$SPECS/SPEC-001-skeleton/Backlog/Story-001-create-item.md" <<'EOF'
+      w "$SPECS/$s/Backlog/Story-001-create-item.md" <<EOF
 # Story-001: Create and list an item
 
 | Type | Parent | Priority | Estimate | Status | Dialect | Depends on | Blocks |
 |--|--|--|--|--|--|--|--|
-| Story | [[../SPEC-001-skeleton|SPEC-001]] | P1 | S | Draft | backend-nodejs | None | None |
+| Story | [[../$s|SPEC-00$n]] | P1 | S | Draft | backend-nodejs | None | None |
 
 ## Acceptance Criteria
 - [ ] AC-1 - Given the app runs, when an item is posted, then it is listed.
 
 ## Impacted Files
-- `src/IDEA-001-demo/app.ts` - the app
+- \`src/IDEA-001-demo/app.ts\` - the app
 
 ## Test Hints
 - unit: posting then listing (AC-1)
 
 INVEST: independent, negotiable, valuable, estimable, small, testable.
 EOF
-    w "$SPECS/SPEC-001-skeleton/plan.md" <<'EOF'
+    }
+    case "$state" in
+      9)
+        w "$SPECS/IDEA-001-demo-Specs.md" <<'EOF'
+# IDEA-001 specs
+Source idea: [[../../ideation/IDEA-001-demo/idea-001-demo|IDEA-001]]
+EOF
+        {
+          printf '# Roadmap - IDEA-001: Demo\n\n## Execution Plan\n'
+          printf '| Order | Spec | Delivery | Depends on | Lane | Est. tokens | Restore point |\n|--|--|--|--|--|--|--|\n'
+          n=1; while [ "$n" -le "$N" ]; do
+            s="SPEC-00$n-$(slug_of "$n")"
+            printf '| %s | [[%s/%s|SPEC-00%s]] | feature %s | %s | A | n/a | CP after review |\n' "$n" "$s" "$s" "$n" "$n" "$([ "$n" = 1 ] && echo None || echo SPEC-001)"
+            n=$((n + 1))
+          done
+        } | w "$SPECS/ROADMAP.md"
+        n=1; while [ "$n" -le "$N" ]; do
+          case "$prompt" in
+            *--split-only*) stub_note "$n" ;;
+            *) full_note "$n" ;; # the full table has no WRITE state: SPECS writes every spec
+          esac
+          n=$((n + 1))
+        done
+        ;;
+      10)
+        skipped nowrite && exit 0
+        n="${spec#SPEC-00}"; full_note "$n"
+        ;;
+      11)
+        skipped noplan && exit 0
+        n="${spec#SPEC-00}"; s="SPEC-00$n-$(slug_of "$n")"
+        w "$SPECS/$s/plan.md" <<EOF
 ---
-spec-id: SPEC-001
-title: "SPEC-001 Implementation Plan"
+spec-id: SPEC-00$n
+title: "SPEC-00$n Implementation Plan"
 version: 1.0.0
 status: ready
 ---
-# SPEC-001 Implementation Plan
+# SPEC-00$n Implementation Plan
 
 ## Ordered Changes
-1. Story-001 - `src/IDEA-001-demo/app.ts`.
+1. Story-001 - \`src/IDEA-001-demo/app.ts\`.
 
 ## Waves
 | Wave | Items | Files | File-disjoint | Notes |
@@ -236,8 +281,15 @@ status: ready
 ## Atomic test cases
 | Test ID | Item | AC | Level | Description |
 |--|--|--|--|--|
-| T-001 | Story-001 | AC-1 | unit | post then list |
+| T-00$n | Story-001 | AC-1 | unit | post then list |
+
+## Gates coverage
+| Gate | Covered by |
+|--|--|
+| QG-QUALITY | check:QG-TEST |
 EOF
+        ;;
+    esac
     ;;
   15)
     [ "$mode" = empty-wave ] && exit 0

@@ -6,7 +6,7 @@ import { readJson, writeJson } from "../fsutil";
 import { isWindows, runTool, runToolAsync } from "../platform";
 import { readSettings } from "../settings";
 import { startDashboardServer, type DashServer } from "../commands/dashboard";
-import { findRoadmap, laneDir, liveSyncLane, scheduleSpecs } from "./lanes";
+import { findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs } from "./lanes";
 import { routeAll } from "./routing";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
@@ -276,12 +276,18 @@ function laneFlags(args: string[]): string[] {
 }
 
 /**
- * The whole lifecycle: the shared states once (REPO .. SPECS), then every spec as soon as the specs it
- * depends on are done (independent specs at the same time, in their own lanes), then CLOSE once.
+ * The whole lifecycle: the shared states once (REPO .. SPECS), then the WRITE and PLAN states, each for every
+ * spec at the same time (a spec-writer, then a planner, per spec, up to --max-parallel, in lanes), then every spec as soon as the specs it depends on are done
+ * (independent specs at the same time, in their own lanes), then CLOSE once. The bare kcc-run driver has no scheduler:
+ * it plans spec by spec, in the table's own order.
  */
 async function lifecycleRun(root: string, args: string[], p: Policy, wait: boolean, maxParallel: number): Promise<number> {
   const flags = laneFlags(args);
-  const runJson = readJson<{ state?: string; status?: string }>(join(root, "coordination", "run", "run.json"));
+  const runJson = readJson<{ state?: string; status?: string; fasttrack?: string; depthlevel?: string; silent?: string }>(join(root, "coordination", "run", "run.json"));
+  // A resumed run keeps the policy it started with: its lanes must use the same state table.
+  if (runJson?.fasttrack === "1" && !flags.includes("--fasttrack")) flags.push("--fasttrack");
+  if (runJson?.silent === "1" && !flags.includes("--silent")) flags.push("--silent", "--assume");
+  if (runJson?.depthlevel && !flags.includes("--depthlevel")) flags.push("--depthlevel", runJson.depthlevel);
   if (runJson?.status === "done") {
     console.log("kcc: the run is DONE; nothing to resume");
     return 0;
@@ -295,13 +301,16 @@ async function lifecycleRun(root: string, args: string[], p: Policy, wait: boole
     console.error("kcc: the shared states finished but no specs/IDEA-*/ROADMAP.md exists");
     return 6;
   }
+  // Writing or planning one spec needs only its own files, the architecture and the dialects, so all specs go at the same time.
+  const fanned = await fanoutSpecs(root, { passthrough: flags, maxParallel });
+  if (fanned.code !== 0) return fanned.code;
   try {
     const routed = routeAll(root);
     if (routed.length) console.log(`kcc: routed ${routed.reduce((n, r) => n + r.routes.length, 0)} backlog items in ${routed.length} plans (model and effort per item, in plan.md -> ## Routing)`);
   } catch {
     /* routing is guidance for the drivers; a plan it cannot read keeps the driver's own rules */
   }
-  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel });
+  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel, from: fanned.after });
   if (b !== 0) return b;
   return superviseDriver(root, ["--resume", "--from", "18", ...flags, "--repo-root", root], p, wait);
 }

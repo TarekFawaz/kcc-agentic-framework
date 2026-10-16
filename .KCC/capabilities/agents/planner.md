@@ -126,6 +126,24 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
     document, a migration, a lockfile) is a Test ID or a named file in an
     item's Impacted Files, not left to runtime generation. Plan and standard
     disagree: follow the standard and say so in Risk Flags.
+11c. **`## Gates coverage` (PLAN-007, error).** In `## Architecture Gate Check`
+    write one `Gates:` line citing every `QG-*` gate of `architecture/quality-gates.md`
+    that applies to this spec (read its `Applies to` column against this spec's
+    epic). Then list `| Gate | Covered by |` with a row for each cited gate and,
+    when `QG-PROD` is cited, one row per numbered item of its checklist
+    (`QG-PROD-1`, `QG-PROD-7`, ...). `Covered by` is one or more of: Test IDs
+    from `## Atomic test cases` (`T-004`, `T-024..T-029`); `check:<QG-ID>` for a
+    check `quality-gate` implements (QG-LOCK, QG-BUILD, QG-LINT, QG-TEST, QG-COV,
+    QG-SECRETS, QG-DEPS, QG-SAST, QG-SBOM, QG-IMAGE, QG-STATIC), which means the
+    implementer runs `quality-gate` on its own changes and must get that check
+    green; `verifier:<step>` for what only a human or the verifier can judge
+    (a visual review). Separate entries with commas. A gate no `quality-gate`
+    check implements (a no-raw-SQL rule, a project gate such as QG-ISOLATION)
+    gets a Test ID of its own in `## Atomic test cases` (for a static rule: a
+    test that greps the source for the forbidden pattern and fails on a hit)
+    and is never left uncovered. A checklist item that claims a scan (an image
+    scan, an SBOM) maps to the check that really runs it, not to prose. Keep
+    the table to one row per gate (SZ-7).
 12. **Write `plan.md`** (`status: ready`, `version: 1.0.0`). Self-check:
     `.KCC/tools/check-run-conformance -Scope plan`; fix planner-owned errors.
     Below confidence threshold (95% default): do not proceed to
@@ -137,7 +155,7 @@ Template: read `.KCC/capabilities/agents/refs/planner-plan-template.md` ->
 *plan.md body* when writing `plan.md`. Sections, exactly named: Dependency
 Check, Architecture Gate Check, Backlog Coverage, Ordered Changes, Waves,
 Dialects Loaded, New Files, Risk Flags, Atomic test cases,
-Standards coverage, Verification Steps, Scope, Confidence.
+Standards coverage, Gates coverage, Verification Steps, Scope, Confidence.
 
 ## Fast track and depth
 

@@ -189,9 +189,27 @@ it, or mark it `Blocked`.
 ````
 
 Status lifecycle: `open -> fixing -> fixed -> verified`, or `wontfix` (human
-decision only). A spec can't reach `Done` while any `blocker` or `major` bug
-is open (`check-run-conformance -Scope bugs`). The regression test is written
-first and must fail before the fix, then pass after it.
+decision only), or `blocked`. A spec can't reach `Done` while any `blocker` or
+`major` bug is `open`, `fixing` or `blocked` (`check-run-conformance -Scope bugs`).
+The regression test is written first and must fail before the fix, then pass
+after it.
+
+`blocked` means the fix needs a human ruling: a limit of a framework tool, a change
+to an ADR or guardrail, a layout change outside the Bug's `## Impacted Files`, a
+waiver. The implementer sets it and writes, once, a section
+
+````markdown
+## Ruling needed
+- Blocker: {what stops the fix, in one or two lines}
+- Options: (A) {option, cost} (B) {option, cost} (C) {waive, risk}
+- Recommended: {A|B|C} - {why}
+````
+
+`kcc-run` then opens a `ruling` gate (answers `revise`, `waive`, `escalate`, `abort`)
+without using a retry. `revise`/`escalate` set the Bug back to `open` and add the
+human's ruling under `## Ruling`; `waive` sets `wontfix`. `check-run-conformance`
+reports a blocked Bug as `BUG-006` (owner human, quoting the section) and one
+without the section as `BUG-007` (owner implementer).
 
 ---
 

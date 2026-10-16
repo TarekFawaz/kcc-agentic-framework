@@ -76,6 +76,12 @@ Plan the implementation for spec <ARGS>.
    - emit `## Atomic test cases` mapping every AC to Test IDs (<= 8 per
      item, SZ-4, else a split request to spec-writer; Bug items start with a
      failing regression Test ID);
+   - write `## Gates coverage` (`| Gate | Covered by |`): a row for every
+     `QG-*` gate the plan's `Gates:` line cites and every numbered `QG-PROD`
+     checklist item (`QG-PROD-7`), each mapped to Test IDs, `check:<QG-ID>`
+     (the implementer runs `quality-gate` and must get that check green) or
+     `verifier:<step>`; a gate no `quality-gate` check implements gets its own
+     Test ID (PLAN-007);
    - self-check with `check-run-conformance -Scope plan`;
    - avoid unnecessary dependencies between stories/enablers.
 7. Display a summary of the plan: backlog items covered, selected dialects

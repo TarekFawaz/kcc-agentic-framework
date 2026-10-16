@@ -108,6 +108,9 @@ MAX_TESTS="$(setting max_tests_per_item 8)"
 MAX_SPEC_LINES="$(setting max_spec_lines 150)"
 MAX_BACKLOG_LINES="$(setting max_backlog_item_lines 80)"
 MAX_PLAN_LINES="$(setting max_plan_lines 250)"
+# Checks the quality-gate tool implements; a plan's `## Gates coverage` row may say `check:<ID>` (PLAN-007).
+# Keep in sync with check-run-conformance.ps1 ($GateChecks) and quality-gate.* .
+GATE_CHECKS="QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST QG-SBOM QG-IMAGE QG-STATIC"
 MAX_BRIEF_LINES="$(setting max_brief_lines 100)"
 MAX_SPECS_FAST="$(setting max_specs_fasttrack 5)"
 MAX_DEEP="$(setting max_per_run 2)"
@@ -765,6 +768,113 @@ EOF
 # ---------------------------------------------------------------------------
 # PLAN
 # ---------------------------------------------------------------------------
+# PLAN-007 helper: prints one problem per line (nothing when the plan's `## Gates coverage` is complete).
+# Required: a row for every QG-* id on the plan's `Gates:` line and, when QG-PROD is cited, for every numbered
+# item of the QG-PROD checklist table in quality-gates.md (a row says `QG-PROD-7`). `Covered by` holds
+# Test IDs (T-007, T-024..T-029), `check:<QG-ID>` or `verifier:<step>`, separated by commas.
+gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
+  local plan="$1" qg="$2" tests="$3" cited prod=""
+  cited="$(tr -d '\r' < "$plan" | grep -iE '^[[:space:]]*([-*][[:space:]]+)?[*_]*gates[[:space:]]*[*_]*[[:space:]]*:' | grep -oE 'QG-[A-Z0-9]+(-[A-Z0-9]+)*' | awk '!s[$0]++' || true)"
+  if printf '%s\n' "$cited" | grep -qx 'QG-PROD'; then
+    prod="$(tr -d '\r' < "$qg" | awk '
+      /^#/ { inside = ($0 ~ /QG-PROD/); next }
+      inside && /^[ \t]*\|/ { c = $0; sub(/^[ \t]*\|[ \t]*/, "", c); if (c ~ /^[0-9]+[ \t]*\|/) { sub(/[ \t]*\|.*/, "", c); print c + 0 } }' | awk '!s[$0]++')"
+  fi
+  if ! has_heading "$plan" "Gates coverage"; then
+    printf '%s\n' "has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites to Test IDs, check:<QG-ID> or verifier:<step>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run)."
+    return 0
+  fi
+  {
+    printf '@@T\n'; printf '%s\n' "$tests" | cut -f1
+    printf '@@R\n'; printf '%s\n' "$cited"
+    printf '@@P\n'; printf '%s\n' "$prod"
+    printf '@@G\n'; section "$plan" 'gates coverage' | tr -d '\r'
+  } | awk -v checks="$GATE_CHECKS" '
+    function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
+    function badpart(p,   n, k, tok, tk, e, lo, hi) {
+      p = trim(p)
+      if (p == "") return "empty entry"
+      if (tolower(substr(p, 1, 6)) == "check:") {
+        tok = trim(substr(p, 7))
+        if ((" " checks " ") !~ (" " tok " ")) return "unknown check \"" tok "\" (quality-gate implements: " checks ")"
+        return ""
+      }
+      if (tolower(substr(p, 1, 9)) == "verifier:") {
+        if (trim(substr(p, 10)) == "") return "verifier: names no step"
+        return ""
+      }
+      n = split(p, tk, /[ \t]+/)
+      for (k = 1; k <= n; k++) {
+        if (tk[k] == "") continue
+        e = index(tk[k], "..")
+        if (e > 1) {
+          lo = substr(tk[k], 1, e - 1); hi = substr(tk[k], e + 2)
+          if (!(lo in tid)) return "\"" lo "\" is not a Test ID in ## Atomic test cases"
+          if (!(hi in tid)) return "\"" hi "\" is not a Test ID in ## Atomic test cases"
+        } else if (!(tk[k] in tid)) return "\"" tk[k] "\" is not a Test ID in ## Atomic test cases (use T-nnn, check:<QG-ID> or verifier:<step>)"
+      }
+      return ""
+    }
+    /^@@T$/ { part = "T"; next }
+    /^@@R$/ { part = "R"; next }
+    /^@@P$/ { part = "P"; next }
+    /^@@G$/ { part = "G"; next }
+    part == "T" { if ($0 != "") tid[trim($0)] = 1; next }
+    part == "R" { if ($0 != "") { req[++nreq] = $0 }; next }
+    part == "P" { if ($0 != "") { preq[++npreq] = $0 }; next }
+    part == "G" {
+      if ($0 !~ /^[ \t]*\|/) next
+      line = $0; gsub(/\\\|/, "/", line)
+      n = split(line, c, "|")
+      if (!hdr) {
+        for (i = 1; i <= n; i++) { t = tolower(trim(c[i])); if (t == "gate") gi = i; else if (t ~ /^covered/) ci = i }
+        hdr = 1; next
+      }
+      if (line ~ /^[ \t]*\|[ \t:|-]*$/) next
+      if (!gi || !ci || gi > n) next
+      g = c[gi]; cov = (ci <= n) ? trim(c[ci]) : ""
+      ids = ""
+      while (match(g, /QG-PROD[-_ #.\/:]*([Ii]tem[ ]*)?[0-9]+/)) {
+        s = substr(g, RSTART, RLENGTH); sub(/^QG-PROD[-_ #.\/:]*([Ii]tem[ ]*)?/, "", s)
+        ids = ids " QG-PROD-" (s + 0)
+        g = substr(g, 1, RSTART - 1) " " substr(g, RSTART + RLENGTH)
+      }
+      while (match(g, /QG-[A-Z0-9]+(-[A-Z0-9]+)*/)) {
+        ids = ids " " substr(g, RSTART, RLENGTH)
+        g = substr(g, 1, RSTART - 1) " " substr(g, RSTART + RLENGTH)
+      }
+      if (ids == "") next
+      why = ""
+      if (cov == "") why = "empty Covered by"
+      else {
+        np = split(cov, parts, /[;,]/)
+        for (k = 1; k <= np && why == ""; k++) why = badpart(parts[k])
+      }
+      m = split(ids, idl, " ")
+      for (k = 1; k <= m; k++) {
+        if (idl[k] == "") continue
+        named[idl[k]] = 1
+        if (why == "") good[idl[k]] = 1
+        else if (!((idl[k] SUBSEP why) in said)) { said[idl[k], why] = 1; bad[++nbad] = idl[k] ": " why }
+      }
+      next
+    }
+    END {
+      for (i = 1; i <= nbad; i++) print "Gates coverage row " bad[i]
+      miss = ""
+      for (i = 1; i <= nreq; i++) {
+        r = req[i]
+        if (r == "QG-PROD" && npreq > 0) continue
+        if (!(r in named)) miss = miss (miss == "" ? "" : ", ") r
+      }
+      for (i = 1; i <= npreq; i++) {
+        r = "QG-PROD-" preq[i]
+        if (!(r in named)) miss = miss (miss == "" ? "" : ", ") r
+      }
+      if (miss != "") print "## Gates coverage has no row for: " miss ". Add one per gate the plan cites (and one per numbered QG-PROD checklist item as QG-PROD-<n>)."
+    }'
+}
+
 check_plan() {
   local specs id name dir file group idea legacy plan prel rank tests it_key it_type it_file ac n waves itemfiles
   specs="$(target_specs)"
@@ -798,6 +908,15 @@ check_plan() {
       violation "PLAN-006" "warning" "planner" "$prel has no '## Standards coverage' table: map each cited standard's verifier conformance check to a Test ID or a Verification Step (round 9: the plan said the OpenAPI document is generated at runtime, the API standard requires it checked in)." "$prel"
     fi
     tests="$(plan_tests "$plan")"
+    # PLAN-007: every architecture gate the plan cites maps to a Test ID, a quality-gate check, or a verifier step.
+    if [ "$legacy" != "1" ] && [ -f "$ARCH_DIR/quality-gates.md" ]; then
+      while IFS= read -r gmsg; do
+        [ -n "$gmsg" ] || continue
+        violation "PLAN-007" "error" "planner" "plan.md $gmsg" "$prel"
+      done <<EOF
+$(gates_coverage_problems "$plan" "$ARCH_DIR/quality-gates.md" "$tests")
+EOF
+    fi
     itemfiles=""
     while IFS="$TAB" read -r it_key it_type it_file; do
       [ -n "$it_key" ] || continue
@@ -854,7 +973,7 @@ open_severe_bug() { # bug-file -> 0 when blocker|major and open|fixing
   sev="$(lower "$(table_field "$1" Severity)")"
   st="$(lower "$(table_field "$1" Status)")"
   case "$sev" in blocker|major) ;; *) return 1 ;; esac
-  case "$st" in open|fixing) return 0 ;; esac
+  case "$st" in open|fixing|blocked) return 0 ;; esac
   return 1
 }
 
@@ -924,7 +1043,7 @@ EOF
 # BUGS
 # ---------------------------------------------------------------------------
 check_bugs() {
-  local items specs id name dir file group idea legacy it_key it_type it_file br spec_done test_ids f v src sev st rt
+  local items specs id name dir file group idea legacy it_key it_type it_file br spec_done test_ids f v src sev st rt rq
   specs="$(target_specs)"
   while IFS="$TAB" read -r id name dir file group idea legacy; do
     [ -n "$id" ] || continue
@@ -951,12 +1070,21 @@ check_bugs() {
         case "$(lower "$sev")" in blocker|major|minor) ;; *) violation "BUG-002" "error" "human" "$br Severity '$sev' is not blocker|major|minor." "$br" ;; esac
       fi
       if [ "$st" != "__NOCOL__" ]; then
-        case "$(lower "$st")" in open|fixing|fixed|verified|wontfix) ;; *) violation "BUG-002" "error" "human" "$br Status '$st' is not open|fixing|fixed|verified|wontfix." "$br" ;; esac
+        case "$(lower "$st")" in open|fixing|fixed|verified|blocked|wontfix) ;; *) violation "BUG-002" "error" "human" "$br Status '$st' is not open|fixing|fixed|verified|blocked|wontfix." "$br" ;; esac
       fi
       if [ "$spec_done" = "1" ] && open_severe_bug "$it_file"; then
         violation "BUG-003" "error" "human" "$br is an $(lower "$st") $(lower "$sev") bug but $id is Done/APPROVED." "$br"
       fi
       case "$(lower "$st")" in
+        blocked)
+          # blocked = the fix needs a human ruling. It is its own finding (not BUG-OPEN: retrying the fix cannot help); the implementer writes
+          # the '## Ruling needed' section once, and the message quotes it so the human sees the options without opening the file.
+          rq="$(section "$it_file" 'ruling needed' | tr -d '\r' | tr '\n' ' ' | sed -e 's/  */ /g' -e 's/^ //' -e 's/ $//' | cut -c1-400)"
+          if [ -z "$rq" ]; then
+            violation "BUG-007" "error" "implementer" "$br is blocked but has no '## Ruling needed' section naming the options and the recommended one." "$br"
+          fi
+          violation "BUG-006" "error" "human" "$br is blocked and needs a human ruling: ${rq:-no ruling section written}" "$br"
+          ;;
         fixing|fixed|verified)
           rt="$(table_field "$it_file" 'Regression test')"
           if [ "$rt" = "__NOCOL__" ]; then rt=""; fi

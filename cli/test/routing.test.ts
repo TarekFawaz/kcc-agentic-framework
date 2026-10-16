@@ -109,6 +109,23 @@ describe("the drivers ask the router (kcc-route) for every dispatch", () => {
     expect(ps(["-Agent", "architect"]).slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
   });
 
+  test("a verifier retry is routed like its first run, and the caller's ceilings cap tier and effort, in both ports", () => {
+    const first = sh(["--agent", "verifier", "--spec", "SPEC-001"]);
+    const retry = sh(["--agent", "verifier", "--spec", "SPEC-001", "--attempt", "2"]);
+    expect(retry.slice(0, 3)).toEqual(first.slice(0, 3));
+    expect(retry[3]).not.toContain("attempt");
+    expect(sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "1", "--attempt", "2"])[3]).toContain("attempt 2"); // fixers still escalate
+    // SPEC-002 has no plan rows and a novel domain: the verifier goes strong; REVIEW and a scoped re-verification are capped by kcc-run
+    const novel = sh(["--agent", "verifier", "--spec", "SPEC-002"]);
+    expect(novel[0]).toBe("strong");
+    const capped = sh(["--agent", "verifier", "--spec", "SPEC-002", "--attempt", "2", "--max-tier", "balanced", "--max-effort", "high"]);
+    expect(capped.slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
+    if (process.platform === "win32") {
+      expect(ps(["-Agent", "verifier", "-Spec", "SPEC-001", "-Attempt", "2"]).slice(0, 3)).toEqual(first.slice(0, 3));
+      expect(ps(["-Agent", "verifier", "-Spec", "SPEC-002", "-Attempt", "2", "-MaxTier", "balanced", "-MaxEffort", "high"]).slice(0, 3)).toEqual(capped.slice(0, 3));
+    }
+  });
+
   test("a retry raises the effort, and another harness gets its own model and a folded effort", () => {
     expect(sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "1", "--attempt", "2"])[2]).toBe("xhigh"); // novel: high, retry: +1
     const codex = sh(["--agent", "implementer", "--spec", "SPEC-001", "--wave", "3", "--harness", "codex"]);

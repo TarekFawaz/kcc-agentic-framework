@@ -75,8 +75,9 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    `common` domain one tier down for spec, plan, docs and scaffold work;
    CR-7 risk or `Complexity: high` never below balanced and effort high; a
    large unit (> 3 items or > 5 files) effort one step up; a retry one tier
-   up and one effort up; under 20% budget left never above balanced unless
-   risk. Name the tier, model id (`kernel/models.json`), effort and reasons
+   up and one effort up (never for a verifier or critic, and REVIEW and a
+   scoped TEST re-verification stay at balanced / high at most); under 20%
+   budget left never above balanced unless risk. Name the tier, model id (`kernel/models.json`), effort and reasons
    in the packet and emit `model-selected`. Pin the id, never the alias
    (`haiku` can be an older generation; the Agent tool accepts the id).
    **The implementer runs on `balanced`.** It used to run on the executor class
