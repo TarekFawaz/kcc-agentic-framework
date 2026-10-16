@@ -430,7 +430,8 @@ function Resolve-DashboardOpen {
     $mode = ([string](Get-Setting @('dashboard', 'auto_open') 'ask')).ToLowerInvariant()
     if ($mode -eq 'yes' -or $mode -eq 'no') { return $mode }
     $ans = $env:KCC_DASHBOARD_ANSWER   # automation hook: answers the prompt without a console
-    $console = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $Json
+    # --silent means nobody answers prompts: a silent run never asks, even on a console (it hung a measured round).
+    $console = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $Json -and -not $Silent
     if (-not $ans -and $console) {
         Write-Host 'kcc-run: open the live dashboard in your browser? It follows this run and reads only local files.'
         $ans = Read-Host '  [y]es now / [n]o / [a]lways / ne[v]er (saved in .KCC/settings.json -> dashboard.auto_open)'

@@ -851,7 +851,8 @@ resolve_dashboard_open() { # prints yes | no | ask
   if [[ $OPEN_DASH -eq 1 ]]; then echo yes; return 0; fi
   mode="$(setting dashboard.auto_open ask | tr 'A-Z' 'a-z')"
   if [[ "$mode" == "yes" || "$mode" == "no" ]]; then echo "$mode"; return 0; fi
-  if [[ -z "$ans" && -t 0 && -t 1 && $JSON -eq 0 ]]; then
+  # --silent means nobody answers prompts: a silent run never asks, even on a terminal.
+  if [[ -z "$ans" && -t 0 && -t 1 && $JSON -eq 0 && $SILENT -eq 0 ]]; then
     echo "kcc-run: open the live dashboard in your browser? It follows this run and reads only local files." >&2
     read -r -p "  [y]es now / [n]o / [a]lways / ne[v]er (saved in .KCC/settings.json -> dashboard.auto_open) " ans || ans=""
   fi

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
+import { payloadFiles } from "../src/payload";
 import { runTool } from "../src/platform";
 
 // The dashboard opens only with the human's permission: a flag, or settings dashboard.auto_open.
@@ -87,5 +88,15 @@ describe("dashboard opens only with permission", () => {
     const r = start([], { KCC_DASHBOARD_ANSWER: "never" });
     expect(r.opened).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf8")).dashboard.auto_open).toBe("no");
+  });
+});
+
+describe("a silent run never prompts", () => {
+  // A console prompt cannot be driven from a test, so pin the guard in both drivers: a measured round once hung
+  // on this question although it was started with --silent.
+  test("both drivers skip the dashboard question when --silent is set", () => {
+    const text = (n: string): string => payloadFiles().get(`tools/${n}`)!.toString("utf8");
+    expect(text("kcc-run.ps1")).toMatch(/\$console = .*-and -not \$Silent/);
+    expect(text("kcc-run.sh")).toMatch(/-t 0 && -t 1 && \$JSON -eq 0 && \$SILENT -eq 0/);
   });
 });
