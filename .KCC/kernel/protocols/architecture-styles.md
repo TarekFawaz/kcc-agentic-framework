@@ -15,8 +15,8 @@ tags:
   - architecture
   - kcc/v04
 created: 2026-06-06
-updated: 2026-06-06
-version: 1.0.0
+updated: 2026-10-15
+version: 1.1.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 homepage: "https://tikasway.dev/kcc"
@@ -98,8 +98,40 @@ the default Clean+DDD (or event-driven) style stands.
    `architecture/architecture.md` and reflected in the C4 diagrams and every
    impacted spec's `arch.md`.
 
+## Style catalogue
+
+The defaults above are where the architect starts, not the only options. Every style below is a
+known, documented pattern; an ADR that adopts one names it, cites why it fits (scale, team, change
+rate, consistency needs), and lists the consequences. An ADR that picks one of these for the reason
+given in "Use when" is **standard-backed** (see [[architecture-governance]] -> *ADR status under
+--silent --assume and fasttrack*).
+
+| Style | Use when | Avoid when | What it implies in KCC |
+|--|--|--|--|
+| Layered (n-tier) | CRUD-heavy apps with thin rules | rich domain rules that leak across layers | one container; layers as folders; simplest plan |
+| Clean / Hexagonal / Onion (ports and adapters) | domain logic must outlive frameworks; many adapters (HTTP, CLI, queue) | trivial tools | domain/application/infrastructure/interface folders; adapters are file-disjoint lanes |
+| DDD (tactical + strategic) | several sub-domains with their own language | one small model | bounded contexts map to modules and, often, to specs |
+| Modular monolith | one deployable with clear module boundaries; small team; transactional consistency | independent scaling or release per module is required | modules own disjoint paths and migration ranges, so specs per module run in parallel lanes |
+| Microservices | independent deploy/scale/ownership per service; mature ops | early product, one team, shared database | one container per service; contract tests; QG-PROD per service |
+| Event-driven (pub/sub) | async workflows, integration, IoT/streaming | strong read-your-write consistency everywhere | brokers in C4; event contracts versioned like APIs |
+| CQRS | read and write models diverge sharply in shape or load | simple CRUD | separate read/write paths; projections need rebuild tests |
+| Event sourcing | full audit history or temporal queries are a requirement | ordinary state storage | event store + snapshots; schema evolution plan in an ADR |
+| Serverless / FaaS | spiky, stateless workloads; pay-per-use | long-running, latency-critical, or stateful work | function per handler; cold-start budget in technical-budgets.md |
+| Pipes and filters / batch ETL | data transformation pipelines | interactive request/response | each filter testable alone; idempotent re-runs |
+| Microkernel / plugin | a core with third-party or optional extensions | no extension points needed | plugin contract ADR; plugins as separate specs |
+| MVC / MVVM (UI) | conventional UI with view state | n/a | component tests per view; state store named in an ADR |
+| SPA, SSR, SSG (web delivery) | SPA for app-like UIs; SSR for SEO/first paint; SSG for content | SPA for SEO-critical content | rendering mode named in the frontend ADR |
+| Micro-frontends | several teams own parts of one UI | one team, one app | shell + remotes; shared design system |
+| Backend for Frontend (BFF) | clients need different API shapes or auth handling | one client | one BFF per client type, its own contract |
+| CLI / library | developer tools, packages | n/a | public API surface and SemVer in an ADR |
+
+Selection rule of thumb: start with the simplest style that meets the non-functional requirements
+in `architecture/nfrs.md`; move to a distributed style (microservices, event-driven, serverless)
+only when an NFR or an organisational constraint demands it, and record that NFR in the ADR.
+
 ## Related
 
+- Standards catalogue: [[standards-catalog]]
 - Architecture governance: [[architecture-governance]]
 - Architecture documentation: [[architecture-documentation]]
 - API standards: [[api-standards]]

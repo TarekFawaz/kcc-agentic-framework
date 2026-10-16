@@ -103,12 +103,12 @@ Tightening trigger: `pending_tighten: on-first-spec-creation`
 
 | Date       | Spec       | Step        | Model class       | Input tokens | Output tokens | Est. cost ($) | Band (+/-30%)   | Status     |
 |--|--|--|--|--|--|--|--|--|
-| YYYY-MM-DD | SPEC-XXX   | interrogate | strong-reasoning  | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
-| YYYY-MM-DD | SPEC-XXX   | create      | strong-reasoning  | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
-| YYYY-MM-DD | SPEC-XXX   | plan        | strong-reasoning  | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
-| YYYY-MM-DD | SPEC-XXX   | implement   | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
+| YYYY-MM-DD | SPEC-XXX   | interrogate | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
+| YYYY-MM-DD | SPEC-XXX   | create      | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
+| YYYY-MM-DD | SPEC-XXX   | plan        | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
+| YYYY-MM-DD | SPEC-XXX   | implement   | fast-implementation| 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
 | YYYY-MM-DD | SPEC-XXX   | test        | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
-| YYYY-MM-DD | SPEC-XXX   | review      | strong-reasoning  | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
+| YYYY-MM-DD | SPEC-XXX   | review      | balanced          | 0            | 0             | 0.00          | 0.00 - 0.00   | current    |
 | YYYY-MM-DD | SPEC-XXX   | implement   | local-strong      | 0            | 0             | n/a (local)   | 0.00 - 0.00   | current    |
 | YYYY-MM-DD | SPEC-XXX   | implement   | local-fast        | 0            | 0             | n/a (local)   | 0.00 - 0.00   | current    |
 

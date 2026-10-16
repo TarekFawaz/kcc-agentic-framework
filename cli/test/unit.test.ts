@@ -4,6 +4,7 @@ import { detectFromText } from "../src/context/detect";
 import { defaultContext, mergeContext } from "../src/context/model";
 import { planTailoring } from "../src/context/rules";
 import { contentHash } from "../src/fsutil";
+import { addMissingKeys } from "../src/settings";
 import { headings, parseSkill, section, slug } from "../src/mcp/content";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -184,5 +185,22 @@ describe("mcp content", () => {
     expect(s.description).toBe("Plan a spec. Usage: /spec-plan SPEC-003");
     expect(s.body).toContain("Plan <ARGS>.");
     expect(s.placeholder).toBe("<ARGS>");
+  });
+});
+
+describe("settings migration", () => {
+  test("adds missing keys at any depth and never changes an existing value", () => {
+    const mine = { quality: { coverage_min_pct: 60 }, run: { harness: "codex" } };
+    const shipped = { $schema: "x", quality: { coverage_min_pct: 80, scanners: { secrets: "gitleaks" } }, run: { harness: "claude", max_attempts: 3 }, defaults: { depthlevel: 5 } };
+    const added = addMissingKeys(mine, shipped);
+    expect(added.sort()).toEqual(["defaults", "quality.scanners", "run.max_attempts"]);
+    expect(mine.quality.coverage_min_pct).toBe(60);
+    expect(mine.run.harness).toBe("codex");
+    expect(mine).not.toHaveProperty("$schema");
+  });
+  test("a second pass adds nothing", () => {
+    const mine = {};
+    addMissingKeys(mine, { a: { b: 1 } });
+    expect(addMissingKeys(mine, { a: { b: 2 } })).toEqual([]);
   });
 });

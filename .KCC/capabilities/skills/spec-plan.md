@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-plan
 description: >
- Create an implementation plan (including an atomic test-case enumeration) with file-disjoint `## Waves` for a v6 spec and its `Backlog/` items. Usage: /spec-plan SPEC-003
+ Create an implementation plan (including an atomic test-case enumeration) with file-disjoint `## Waves` for a v6 spec and its `Backlog/` items. Usage: /spec-plan SPEC-003 [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - planner
@@ -27,6 +27,10 @@ status: active
 
 Plan the implementation for spec <ARGS>.
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: skip step 4 (no estimate; the run's `fasttrack-approved` event is the approval) and the butler. Fill the Complexity column per item: the orchestrator uses it to pick the implementer model. `plan.md` <= `spec_sizing.max_plan_lines`.
+
 ## Steps
 
 1. Locate `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` from the
@@ -45,7 +49,7 @@ Plan the implementation for spec <ARGS>.
    `src/IDEA-{ID}-{slug}/...`, dependencies, dialect, and a passing INVEST
    check. Missing fields must be repaired by spec-writer before
    planning.
-4. Verify `/token-estimate SPEC-{ID}` has one of these approvals recorded
+4. (Skip under `--fasttrack`.) Verify `/token-estimate SPEC-{ID}` has one of these approvals recorded
    in the session trace (`HumanDecisions.md` / `TokenUsage.md`) or
    `ROADMAP.md` Token Plan for the plan stage:
    - explicit human approval; or
@@ -56,6 +60,12 @@ Plan the implementation for spec <ARGS>.
 5. If `plan.md` already contains a ready plan (status `ready`, version
    >= 1.0.0, and an `## Atomic test cases` table), ask whether to
    regenerate or keep the existing plan.
+5a. **Spec-local `arch.md` first** (skip under `--fasttrack`: the skeleton and the global architecture suffice). If the spec's `arch.md` is still the
+   spec-writer's skeleton, delegate it to the **architect** (`architecture-documentation.md`
+   -> *The spec-local `arch.md`*) and emit `arch-slice-created` for the spec when it is
+   written. This is part of PLAN, so it runs for every ready spec at the same time as the
+   others (`parallel-execution.md` -> *L1*) and its time shows under PLAN; never run the
+   slices for all specs one after another in a separate pass.
 6. Delegate to the **planner** agent with the spec ID and backlog scope.
    The planner must:
    - load the selected dialect files from

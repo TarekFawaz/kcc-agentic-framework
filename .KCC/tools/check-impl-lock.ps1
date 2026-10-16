@@ -80,6 +80,19 @@ function Get-WorkspaceRel([string]$p, [string]$baseDir) {
 $script:LockCache = @{}
 $ApprovalKinds = '"kind"\s*:\s*"(estimate-approved|estimate-auto-approved|auto-policy-approved|auto-policy-approved-bounded|auto-policy-approved-unlimited)"'
 
+# `auto --fasttrack` records one run-wide approval (kcc-run emits fasttrack-approved right after
+# auto-policy-parsed). It counts only while it is newer than the latest auto-policy-parsed.
+function Test-FasttrackApproved {
+    $bc = Join-Path (Join-Path $RepoRoot 'coordination') 'backchannel.jsonl'
+    if (-not (Test-Path -LiteralPath $bc)) { return $false }
+    $lines = Read-Lines $bc; $ft = -1; $pp = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '"kind"\s*:\s*"fasttrack-approved"') { $ft = $i }
+        elseif ($lines[$i] -match '"kind"\s*:\s*"auto-policy-parsed"') { $pp = $i }
+    }
+    return ($ft -ge 0 -and $ft -gt $pp)
+}
+
 # Returns '' when open, otherwise the reason it is locked.
 function Get-LockReason([string]$ideaId) {
     if ($script:LockCache.ContainsKey($ideaId)) { return $script:LockCache[$ideaId] }
@@ -104,6 +117,7 @@ function Get-LockReason([string]$ideaId) {
         $script:LockCache[$ideaId] = $r
         return $r
     }
+    if (Test-FasttrackApproved) { $script:LockCache[$ideaId] = ''; return '' }
     $bc = Join-Path (Join-Path $RepoRoot 'coordination') 'backchannel.jsonl'
     $bcLines = @()
     if (Test-Path -LiteralPath $bc) { $bcLines = @(Read-Lines $bc | Where-Object { $_ -match $ApprovalKinds }) }

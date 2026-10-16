@@ -963,6 +963,15 @@ function Invoke-SecretsCheck {
         $report = Join-Path $Art 'gitleaks.json'
         $glCfg = @(); $glRoot = $GitTop; if (-not $glRoot) { $glRoot = $RepoRoot }
         if ($glRoot -and (Test-Path -LiteralPath (Join-Path $glRoot '.gitleaks.toml'))) { $glCfg = @('-c', (Join-Path $glRoot '.gitleaks.toml')) }
+        elseif ($mode -eq 'staged') {
+            # Pre-commit scan: a freshly staged lockfile is megabytes of generated hashes and made every commit wait
+            # minutes. Skip lockfiles here; the full quality gate still scans them.
+            $fastCfg = Join-Path $Art 'gitleaks-fast.toml'
+            $toml = @('[extend]', 'useDefault = true', '[allowlist]', 'description = "KCC fast (pre-commit) scan: lockfiles are generated, skip them"',
+                "paths = ['''(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|poetry\.lock|Pipfile\.lock|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock)$''']") -join "`n"
+            [System.IO.File]::WriteAllText($fastCfg, $toml + "`n")
+            $glCfg = @('-c', $fastCfg)
+        }
         $newCli = ((Invoke-Native 'gitleaks' @('dir', '--help')).Code -eq 0)
         if ($mode -eq 'staged') {
             if ($newCli) { $argv = @('gitleaks', 'git') + $glCfg + @('--staged', '--no-banner', '--redact', '--exit-code', '1', '--report-format', 'json', '--report-path', $report, $GitTop) }

@@ -92,6 +92,15 @@ architect fixes.
 8. **Verdict.** CONFORMANT only if every check holds for the active depth;
    otherwise DRIFT with findings naming artifact, violated rule, exact fix.
 
+## Fast track and depth
+
+Read the run profile first (`coordination/run/run.json` -> `fasttrack`, or `--fasttrack` in the
+packet). Under fast track, validate against the `fasttrack` column of the artifact matrix in
+`architecture-documentation.md`: `architecture.md` with C1, C2, `## Decisions` and `## Toolchain`,
+flowcharts, `quality-gates.md`. ADR files, `c4-component.md`, `dfds/` or `sequences/` are **DRIFT**
+(over-production), not extra credit. One pass, one verdict; never ask for a second cycle for prose
+length, and never ask the human.
+
 ## Output Format
 
 Sections: Verdict, Active depth, Findings (`# | Issue (what is wrong) |

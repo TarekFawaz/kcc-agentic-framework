@@ -265,8 +265,15 @@ adapters read it.
 - `workspace.relationships` - optional richer relationship table.
 - `tracker.config` - adapter-specific. Inspector leaves it empty until a
   real tracker adapter lands.
-- `defaults.model_class_overrides` - map of model-class name to overridden
-  concrete model identifier. Empty by default.
+- `defaults.model_class_overrides` - reserved; not read by any tool yet. To
+  pin an agent's model tier per workspace use `.KCC/model-overrides`
+  (`agent = model-class [effort]`, user-owned, applied by `sync-adapters`).
+- `dashboard.auto_open` - `ask` (default), `yes`, or `no`: whether `kcc-run` opens the
+  dashboard in the browser at the start of a run. Only `yes` or a human answer opens it.
+- `defaults.depthlevel` - default `--depthlevel` (1-5, 5 = full detail);
+  see `.KCC/kernel/protocols/depth-levels.md`.
+- `spec_sizing.max_backlog_item_lines`, `max_plan_lines`, `max_brief_lines` -
+  length ceilings checked by `check-run-conformance` (SZ-6, SZ-7, BRIEF-001).
 - `defaults.auto_policy` - solution-level AutoPolicy defaults. Individual
   `auto` invocations may override on the command line.
 

@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: auto
 description: >
- Human-On-The-Loop lifecycle automation for requests starting with `auto`: idea -> specialist briefs -> architecture -> budget -> specs + roadmap -> plan -> implement -> test -> review, as a closed state machine whose exit checks are scripts, with confidence, ROI, loop, budget, toolchain, quality, and usage-limit gates. Usage: auto <input> [--silent --assume] [--accuracy NN%] [--budget NN CCY] [--parallel] ; auto IDEA-{ID} ; auto SPEC-{ID} ; auto all ; auto resume
+ Human-On-The-Loop lifecycle automation for requests starting with `auto`: idea -> specialist briefs -> architecture -> budget -> specs + roadmap -> plan -> implement -> test -> review, as a closed state machine whose exit checks are scripts, with confidence, ROI, loop, budget, toolchain, quality, and usage-limit gates. Usage: auto <input> [--silent --assume] [--accuracy NN%] [--budget NN CCY] [--parallel] [--fasttrack] [--depthlevel 1-5] ; auto IDEA-{ID} ; auto SPEC-{ID} ; auto all ; auto resume
 argument-placeholder: <ARGS>
 delegates-to:
   - idea-interrogator
@@ -73,12 +73,27 @@ fires or a check fails.
 
 **Flags** (typos accepted): `--silent`/`--slient`, `--assume`,
 `--accuracy NN%`/`--acuuracy` (confidence threshold, default 95),
-`--budget NN [CCY]` (currency defaults to USD), `--parallel`/`--parralel`.
+`--budget NN [CCY]` (currency defaults to USD), `--parallel`/`--parralel`,
+`--fasttrack`/`--fasttarck` (lean build path, see section 2a),
+`--depthlevel N` (1-5, default 5; how much detail agents write, see
+`.KCC/kernel/protocols/depth-levels.md`; `--fasttrack` implies 2).
 
 **Scenario:** S1 = neither `--silent` nor `--assume`. S2 = both, no budget.
 S3 = both, plus a budget. Only one of the two -> print
 `auto: --silent and --assume must be used together` and STOP.
-`--parallel` combines with any scenario.
+`--parallel`, `--fasttrack`, and `--depthlevel` combine with any scenario.
+
+**Events as they happen (chat sessions).** Emit each spec's event the moment that spec's agent
+returns, not in a batch at the end of a state, so the dashboard times are real. Every question to
+the human is a gate: emit `human-gate-triggered` (payload `gate_id` GATE-NNN, `state`) before
+asking and `human-gate-decision` with the same `gate_id` after the answer, so waiting on the
+human shows as human time.
+
+**Dashboard (ask once).** When this run is started in a session (not by `kcc-run`, which
+asks for itself), read `.KCC/settings.json` -> `dashboard.auto_open`. `yes`: run
+`build-dashboard -Open` once at run start. `no`: do nothing. `ask` (default): ask the human
+once - open it now, always, or never - and save always/never to that setting. Never open it
+without that permission, and do not ask again for the same run.
 
 Write the AutoPolicy as one JSON block and emit `auto-policy-parsed`. For S2
 and S3, show protocol -> *Operating scenario 2 (or 3)* -> *Pre-flight warning*.
@@ -87,7 +102,7 @@ If the human answers `no`, run as S1.
 ## 1. Invariants (every state)
 
 - **Run start (CR-8):** `/butler-brief` creates the trace session before the
-  first dispatch. Refresh the dashboard after every gate
+  first dispatch (not under `--fasttrack`). Refresh the dashboard after every gate
   (`.KCC/tools/build-dashboard.ps1|.sh`).
 - **Spawn** every delegate per `coordination/orchestrator.md` -> *Spawn
   protocol*. Each unit is wrapped by butler brief/remember and accounted for
@@ -126,7 +141,7 @@ exit check passes.
 | # | State | Do | Exit check | Gate | Event |
 |--|--|--|--|--|--|
 | 0 | REPO | `repo-bootstrap -Json` (`.KCC/kernel/protocols/repo-bootstrap.md`) | a git repo with >= 1 commit, or a recorded `skip` | No repo -> PAUSE `init-local / connect-remote / skip`, in all scenarios (asked once per workspace) | `repo-bootstrap-decision` |
-| 1 | IDEA | `/idea-interrogator <input>`. S2/S3 add `--silent --assume`: moderate research, depth `standard`, one spec per distinct concern. | `CRC idea` | S1 interrogation is interactive | `idea-interrogation-started` / `-completed` |
+| 1 | IDEA | Spawn the **butler** subagent for `/butler-brief` (`--fasttrack`: memory only) in the same message as `/idea-interrogator <input>`. S2/S3 add `--silent --assume`: moderate research, depth `standard`; likely epics are user-visible slices within the spec budget (`--fasttrack`: `spec_sizing.max_specs_fasttrack`, default 5). | `CRC idea` | S1 interrogation is interactive | `idea-interrogation-started` / `-completed` |
 | 2 | ROI | Read ROI confidence % from `ROI.md` (CR-11) | value recorded | < 60% -> PAUSE `mode: roi-gate`, in all scenarios; `--accuracy` does not change this | `human-gate-decision` if paused |
 | 3 | TECH | `/technical-interrogator` | `TechnicalDecisionBrief.md` exists | S1 asks; S2/S3 assume | `specialist-brief-created` |
 | 4 | SPECIALISTS | In parallel, per protocol -> *Operating scenario 1* -> *Step sequence* item 6: UX (any screen), security (identity, data, exposure, compliance, secrets, privacy), infra (anything deployable; on by default in silent mode) | each triggered brief exists; the UX brief lists >= 3 design-system options | S1 asks; S2/S3 assume | `specialist-brief-created` (per domain) |
@@ -136,13 +151,16 @@ exit check passes.
 | 8 | BUDGET-0 | `/token-estimate IDEA-{ID}`, idea scope (CR-1) | estimate shown | S1 PAUSE `approve / revise / abort`. S2 shown for awareness only. S3: over the cap -> PAUSE `revise / increase / abort` | `estimate-issued` + `estimate-approved` / `auto-policy-approved-unlimited` / `auto-policy-approved-bounded` / `auto-policy-cap-exceeded` |
 | 9 | SPECS | `/spec-create` per selected epic, passing IDEA-ID (CR-5): v6 single-file specs sized to the smallest user-valuable delivery, plus `ROADMAP.md`. `--parallel`: one subagent per epic, then a barrier. Skip any spec folder that already exists. Token-guard fills the ROADMAP Token Plan. | `CRC specs` (sizing SZ-1..5, links, roadmap) | - | `spec-created` (exactly once per spec), `roadmap-created` |
 
-States 10-17 run **per spec** in `ROADMAP.md` order. Specs in the same order
-slot, with no cross-spec dependency, run in parallel lanes (L1).
+States 10-17 run **per spec**, scheduled only by `ROADMAP.md` -> `Depends on`: every
+spec is planned just in time (when every spec it depends on has started building); its IMPLEMENT starts as soon as every
+spec it depends on is APPROVED, even while other specs are still planning (each spec moves
+on its own clock: background subagents in an interactive session), so independent specs build at the same time (L1,
+`parallel-execution.md` -> *L1*) with no flag or gate.
 
 | # | State | Do | Exit check | Gate | Event |
 |--|--|--|--|--|--|
 | 10 | BUDGET-P | `/token-estimate SPEC-{ID}` | estimate shown | S1 PAUSE. S2 -. S3: cumulative over the cap -> PAUSE | `estimate-issued` + decision |
-| 11 | PLAN | `/spec-plan SPEC-{ID}` | `CRC plan` (AC coverage, SZ-4, file-disjoint `## Waves`) | - | `plan-created` |
+| 11 | PLAN | `/spec-plan SPEC-{ID}`: architect writes the spec's `arch.md` slice, then the planner (both inside PLAN, per spec, in parallel across ready specs) | `CRC plan` (AC coverage, SZ-4, file-disjoint `## Waves`) | - | `arch-slice-created`, `plan-created` |
 | 12 | WINDOWS | Show the session plan | decision logged | S1 PAUSE `approve windows / sequential / abort` (pre-approved if `--parallel`). S2/S3 pre-approved | `human-gate-decision` |
 | 13 | BUDGET-I | `/token-estimate SPEC-{ID}` (refined) | estimate shown, then `check-impl-lock -Spec` exits 0 | same as state 10 | `estimate-issued` + decision |
 | 14 | PREFLIGHT | Toolchain preflight (CR-9), `toolchain-preflight`, including the scanners that `quality-gate` needs | tools present, or gate resolved | Missing tools -> PAUSE `install / human-install / defer` in **all** scenarios | `toolchain-preflight-started` / `-result` / `toolchain-gate-decision` |
@@ -152,7 +170,43 @@ slot, with no cross-spec dependency, run in parallel lanes (L1).
 
 | # | State | Do | Exit check | Gate | Event |
 |--|--|--|--|--|--|
-| 18 | CLOSE | Full `CRC all`, butler-remember plus `memory-append` for reusable knowledge, token actuals via `record-token-actuals` then token-guard Mode D. Details: protocol -> *Step Details* item 17 | exit 0; all 7 canonical trace files; at least one actual token row | Self-heal up to 3 cycles, then PAUSE | `conformance-checked`, `actual-recorded`, `session-closed` (last) |
+| 18 | CLOSE | Full `CRC all`, `/butler-remember` by the spawned **butler** subagent (never done inline by the orchestrator) plus `memory-append` for reusable knowledge, token actuals via `record-token-actuals` then token-guard Mode D. Details: protocol -> *Step Details* item 17 | exit 0; all 7 canonical trace files; at least one actual token row | Self-heal up to 3 cycles, then PAUSE | `conformance-checked`, `actual-recorded`, `session-closed` (last) |
+
+## 2a. Fast track (`--fasttrack`)
+
+A running app first, with as little paperwork as the quality gates allow. Fast track is **its own
+state table**, `.KCC/kernel/auto-states-fasttrack.json`; `kcc-run` and this skill follow it instead
+of the table above. The states below are the whole fast-track lifecycle: ROI, CONFIRM, ARCH-GATE,
+BUDGET-* and WINDOWS do not exist in it. Ids match the full table so the dashboard and events line up.
+
+| # | State | Do | Exit check (outcome, not shape) | Event |
+|--|--|--|--|--|
+| 0 | REPO | git bootstrap | repo with a commit | `repo-bootstrap-decision` |
+| 1 | IDEA | one `idea-interrogator` pass: idea file, short `Research.md` with `## Domain` (common / specialised / novel), `QuickRoadmap.md`, `SpecWriterStarter.md` with at most the spec budget of epics, the first a walking skeleton. Open questions are collected under `## Open questions`, never asked | the four files exist, `CRC idea` | `idea-interrogation-completed` |
+| 4 | BRIEFS | technical, infrastructure, ux-ui, security interrogators **at the same time** (four subagents in one message); each writes its brief from the idea and the standards catalogue and lists at most 5 open questions; none asks the human | the four briefs exist | `specialist-brief-created` |
+| 5 | ASK | the only question round: merge the open questions (<= 5 per domain). `--silent --assume`: answer them from the catalogue and the idea into `Assumptions.md` (question, assumed answer, rule, risk); a CR-7 question with no catalogue default stays open and is asked. Otherwise one `AskUserQuestion`, with `human-gate-triggered` / `human-gate-decision` around it, into `HumanAnswers.md`; then update the briefs | `HumanAnswers.md` or `Assumptions.md` | `human-gate-decision` |
+| 6 | ARCH | architect, fast-track profile: `architecture.md` with C1 and C2 embedded, business flowcharts, a `## Decisions` table (library + version range, catalogue citation, `Accepted` / `Accepted (assumed)`) instead of ADR files, `## Toolchain`, `quality-gates.md`. No `adrs/`, `c4-component`, `dfds/`, `sequences/`, no critic loop: one self-check with `CRC architecture -RunProfile fasttrack` | `CRC architecture -RunProfile fasttrack` (ARCH-FT-*: over-production is drift) | `architecture-pass-complete` |
+| 9 | SPECS | `/spec-create` proposes the split (<= `spec_sizing.max_specs_fasttrack`, SPEC-001 a walking skeleton, explicit `Depends on`), asks the human once to approve or change it (silent: applies the budget; a larger approved split is `Spec budget: N (human approved)` in ROADMAP.md), writes the specs, then **plans every spec at once** (one `/spec-plan` subagent per spec in one message) | `CRC specs` + `CRC plan` under the fast-track profile (SPEC-009 budget, SPEC-010 status, a plan per spec) | `spec-created` |
+| 14 | PREFLIGHT | per spec, `toolchain-preflight` with the plan's `## Toolchain` ranges | tools present or gate | `toolchain-preflight-result` |
+| 15 | IMPLEMENT | per spec by dependency (`parallel-execution.md` -> L1): one implementer per wave item in one message, then `check-wave-scope` | code changed per the plan (WAVE-004 fails an empty wave) | `implement-completed` |
+| 16 | TEST | `/spec-test`: the **full** `quality-gate`; exit 3 is a deferral, never a pass | traceability + quality gate | `test-completed` |
+| 17 | REVIEW | `/spec-review`; `CHANGES_NEEDED` returns to 15 | review APPROVED | `review-produced` |
+| 18 | CLOSE | `coordination/run/closed.md`: specs, verdicts, open bugs, how to run, gate table; `/butler-remember --fasttrack` only when `run.butler` is on | the file exists | `session-closed` |
+
+Rules that hold in every fast-track state:
+
+- **Two human stops at most** in an interactive run (ASK, and the spec split); none under
+  `--silent --assume`. The CR-4 confidence gate records the confidence and continues; only a CR-7
+  decision with no catalogue default may stop, and it stops in ASK.
+- **No traces, no token-guard, no `arch.md` slices, no ADR files.** Memory only when
+  `run.butler` is on.
+- **Specs move on their own clock**: a spec builds as soon as the specs it depends on are APPROVED,
+  independent specs side by side; nothing waits for an unrelated spec.
+- **Models**: the orchestrator session runs on `run.orchestrator_model`; agents keep their own
+  tier; `run.escalation_model` for a `high` wave or a retry (`model-escalated`).
+- **Never relaxed**: CR-7 prohibited assumptions, CR-9 toolchain gate, CR-12 stack from the
+  Decisions table, CR-13 no silent spec drop, CR-16 repo bootstrap, exit 3 is not a pass, and the
+  full `quality-gate` scope.
 
 Deploy (`/spec-deploy`) is never part of the run. It happens only on an
 explicit human request after state 17. KCC never pushes to a remote on its
@@ -173,7 +227,7 @@ on the continuation apply to the rest of the run, so
 
 **ALL:** find every `specs/IDEA-*-Specs/SPEC-*/SPEC-*.md` with a status other
 than `Done`. Resume each one at its first failing state (from state 10 on),
-in `ROADMAP.md` order, running independent specs concurrently. Count loops
+by dependency, running independent specs concurrently. Count loops
 per (agent, state, spec).
 
 **Harness switch:** `.KCC/tools/kcc-handover.ps1|.sh -To <harness>` writes a

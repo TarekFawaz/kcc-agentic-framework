@@ -13,7 +13,10 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     coordination/gates/GATE-NNN.md, harness logs in coordination/run/logs/.
     Protocol: .KCC/kernel/protocols/kcc-run.md.
 
-    Exit codes: 0 done (or dry-run / -Only finished), 2 usage or environment
+    -Until <id> stops after that state has finished for every spec and wave (status 'stopped',
+    reason 'until <id>'; a later -Resume continues). Used to hand the per-spec states to `kcc lanes`.
+
+    Exit codes: 0 done (or dry-run / -Only / -Until finished), 2 usage or environment
     error, 4 paused at a human gate, 5 suspended (usage limit; restore point
     written and kcc-limit-watch armed), 6 stopped or aborted.
 
@@ -34,11 +37,16 @@ param(
     [string]$Budget,
     [string]$Currency,
     [switch]$Parallel,
+    [switch]$Fasttrack,
+    [switch]$OpenDashboard,
+    [switch]$NoOpenDashboard,
+    [string]$DepthLevel,
     [string]$Harness,
     [switch]$Resume,
     [string]$Answer,
     [string]$From,
     [string]$Only,
+    [string]$Until,
     [switch]$DryRun,
     [switch]$Json,
     [int]$MaxAttempts = 0,
@@ -68,9 +76,11 @@ function Append-Lf([string]$path, [string]$text) { [System.IO.File]::AppendAllTe
 if ($Silent -xor $Assume) { Fail-Usage '--silent and --assume must be used together' }
 if ($Accuracy) { $Accuracy = $Accuracy.TrimEnd('%'); if ($Accuracy -notmatch '^\d{1,3}$') { Fail-Usage '-Accuracy must be a percentage (e.g. 95)' } }
 if ($Budget -and $Budget -notmatch '^\d+(\.\d+)?$') { Fail-Usage '-Budget must be a number' }
+if ($DepthLevel -and $DepthLevel -notmatch '^[1-5]$') { Fail-Usage '-DepthLevel must be 1-5' }
 if ($Harness -and (@('claude', 'codex', 'opencode', 'generic') -notcontains $Harness)) { Fail-Usage '-Harness must be claude|codex|opencode|generic' }
 if ($From -and $From -notmatch '^\d+$') { Fail-Usage '-From must be a state id' }
 if ($Only -and $Only -notmatch '^\d+$') { Fail-Usage '-Only must be a state id' }
+if ($Until -and $Until -notmatch '^\d+$') { Fail-Usage '-Until must be a state id' }
 if ($MaxAttempts -lt 0) { Fail-Usage '-MaxAttempts must be >= 1' }
 
 if (-not $RepoRoot) {
@@ -89,6 +99,12 @@ $RunDir = Join-Path $Coord 'run'
 $RunFile = Join-Path $RunDir 'run.json'
 $LogDir = Join-Path $RunDir 'logs'
 $GateDir = Join-Path $Coord 'gates'
+# --fasttrack has its own lifecycle table (a running app first, no ROI/CONFIRM/ARCH-GATE/BUDGET/WINDOWS states);
+# a resumed fast-track run keeps it.
+$ftStates = Join-Path $KccDir 'kernel\auto-states-fasttrack.json'
+$useFt = [bool]$Fasttrack
+if (-not $useFt -and (Test-Path -LiteralPath $RunFile)) { try { $useFt = ((Get-Content -LiteralPath $RunFile -Raw) -match '"fasttrack"\s*:\s*"1"') } catch { } }
+if ($useFt -and (Test-Path -LiteralPath $ftStates)) { $StatesPath = $ftStates }
 
 try { $SM = Get-Content -LiteralPath $StatesPath -Raw | ConvertFrom-Json } catch { Fail-Usage "cannot parse $StatesPath" }
 $States = @($SM.states)
@@ -121,14 +137,14 @@ $ApprovalGates = @('confirm', 'budget', 'budget-cap', 'windows')
 
 # ---- run.json ----------------------------------------------------------------------
 $RunKeys = @('schema', 'status', 'reason', 'created', 'updated', 'harness', 'input', 'input_class', 'scenario', 'silent', 'assume',
-    'accuracy', 'budget', 'currency', 'parallel', 'sequential', 'idea', 'ideas_before', 'specs', 'state', 'spec_index', 'wave',
+    'accuracy', 'budget', 'currency', 'parallel', 'fasttrack', 'depthlevel', 'dashboard_opened', 'sequential', 'idea', 'ideas_before', 'specs', 'state', 'spec_index', 'wave',
     'attempts', 'force', 'pending_action', 'gate_id', 'gate_name', 'gate_kind', 'gate_answers', 'gate_state', 'gate_spec',
-    'gate_wave', 'gate_event', 'last_log', 'last_violations', 'note')
+    'gate_wave', 'gate_event', 'last_log', 'last_violations', 'note', 'until')
 function New-Run {
     $tr = [ordered]@{}
     foreach ($k in $RunKeys) { $tr[$k] = '' }
     $tr.schema = 'kcc-run/1'; $tr.status = 'running'; $tr.created = (Iso); $tr.scenario = 'S1'; $tr.silent = '0'; $tr.assume = '0'
-    $tr.accuracy = '95'; $tr.currency = 'USD'; $tr.parallel = '0'; $tr.sequential = '0'; $tr.state = '0'; $tr.spec_index = '0'
+    $tr.accuracy = '95'; $tr.currency = 'USD'; $tr.parallel = '0'; $tr.fasttrack = '0'; $tr.depthlevel = '5'; $tr.sequential = '0'; $tr.state = '0'; $tr.spec_index = '0'
     return $tr
 }
 function Load-Run {
@@ -264,7 +280,7 @@ function Get-Waves([string]$entry) {
     }
     return @($waves)
 }
-function Get-SpecEntries { return @((Str $R.specs) -split ' ' | Where-Object { $_ }) }
+function Get-SpecEntries { return , @((Str $R.specs) -split ' ' | Where-Object { $_ }) }  # the comma keeps a single spec an array (indexing a lone string yields its first character)
 function Get-DerivedTools([string]$entry) {
     $text = ''
     $parts = $entry -split '/', 2
@@ -277,6 +293,18 @@ function Get-DerivedTools([string]$entry) {
         'backend-java' = 'java'; 'backend-dotnet|fullstack-dotnet' = 'dotnet'; 'flutter' = 'dart,flutter'; 'devops-cloud' = 'terraform'; 'devops-k8s-onprem-agnostic' = 'terraform,kubectl,helm'; '\bpnpm\b' = 'pnpm' }
     foreach ($k in $map.Keys) { if ($t -match $k) { foreach ($x in ($map[$k] -split ',')) { if (-not $tools.Contains($x)) { [void]$tools.Add($x) } } } }
     if (-not $tools.Contains('git')) { [void]$tools.Add('git') }
+    # plan.md '## Toolchain' rows '| node | >=20 |' pin a major version: the preflight checks node@>=20.
+    foreach ($l in (Get-Section (Read-Lines (Join-Path (Get-SpecDir $entry) 'plan.md')) '(?i)^##\s+toolchain')) {
+        # Only tools the stack already needs get a version; a row like '| typescript | ^5.5 |' names a
+        # package, not a command, and must not turn into a MISSING tool. The range is the cell's leading
+        # constraint: '>=22 (LTS)' -> '>=22'.
+        $c = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim().Trim('`') })
+        if ($c.Count -lt 2) { continue }
+        $i = $tools.IndexOf($c[0].ToLowerInvariant()); if ($i -lt 0) { continue }
+        $m = [regex]::Match(($c[1] -replace '[\s`]', ''), '^(>=|<=|>|<|=)?\d+((>=|<=|>|<)\d+)?')
+        if (-not $m.Success) { continue }
+        $tools[$i] = $c[0].ToLowerInvariant() + '@' + $m.Value
+    }
     return ($tools -join ',')
 }
 
@@ -289,11 +317,32 @@ function New-Ctx([string]$entry, [string]$wave) {
 function Render([string]$text, $ctx) {
     $sa = ''; if ($R.scenario -ne 'S1') { $sa = '--silent --assume' }
     $par = ''; if ($R.parallel -eq '1') { $par = '--parallel' }
-    $flags = (($sa + ' ' + $par).Trim())
+    $ft = ''; if ($R.fasttrack -eq '1') { $ft = '--fasttrack' }
+    $dl = ''; if ($R.depthlevel -match '^[1-4]$') { $dl = '--depthlevel ' + $R.depthlevel }
+    $flags = (($sa + ' ' + $par + ' ' + $ft + ' ' + $dl).Trim())
     $tools = ''; if ($text.Contains('{TOOLS}') -and $ctx.ENTRY) { $tools = Get-DerivedTools $ctx.ENTRY }
     $o = $text.Replace('{input}', (Str $R.input)).Replace('{IDEA}', $ctx.IDEA).Replace('{SPEC}', $ctx.SPEC).Replace('{WAVE}', $ctx.WAVE)
-    $o = $o.Replace('{ITEM}', '').Replace('{silent_assume}', $sa).Replace('{parallel}', $par).Replace('{flags}', $flags).Replace('{TOOLS}', $tools)
+    $o = $o.Replace('{ITEM}', '').Replace('{silent_assume}', $sa).Replace('{parallel}', $par).Replace('{fasttrack}', $ft).Replace('{depthlevel}', $dl).Replace('{flags}', $flags).Replace('{TOOLS}', $tools)
     return (($o -replace '\s{2,}', ' ').Trim())
+}
+# A state with precheck_requires only counts as already done when that artifact exists.
+# Without it a vacuous exit check (no architecture/ or specs/ folder yet) would skip the work.
+function Test-PrecheckReady($st, $ctx) {
+    if (-not (Has $st 'precheck_requires')) { return $true }
+    $rel = Render ([string]$st.precheck_requires) $ctx
+    return (Test-Path -LiteralPath (Join-Path $RepoRoot ($rel -replace '/', [string][IO.Path]::DirectorySeparatorChar)))
+}
+function Get-StateCommand($st) {
+    if ($R.fasttrack -eq '1' -and (Has $st 'command_fasttrack')) { return [string]$st.command_fasttrack }
+    return [string]$st.command
+}
+function Get-SkipFlag($st) {
+    if (-not (Has $st 'skip_if_flag')) { return '' }
+    foreach ($f in @($st.skip_if_flag)) {
+        if ($f -eq 'parallel' -and $R.parallel -eq '1') { return '--parallel' }
+        if ($f -eq 'fasttrack' -and $R.fasttrack -eq '1') { return '--fasttrack' }
+    }
+    return ''
 }
 function Get-GateName($st) {
     if (-not (Has $st 'gate')) { return '' }
@@ -355,6 +404,57 @@ function Parse-JsonText([string]$text) {
     if ($a -lt 0 -or $b -le $a) { return $null }
     try { return ($text.Substring($a, $b - $a + 1) | ConvertFrom-Json) } catch { return $null }
 }
+# Best-effort dashboard refresh (a child process, so a failure can never stop the run).
+function Refresh-Dashboard {
+    if ($DryRun -or $env:KCC_SKIP_DASHBOARD -eq '1') { return }
+    $b = Join-Path $ToolsDir 'build-dashboard.ps1'
+    if (-not (Test-Path -LiteralPath $b)) { return }
+    try { & $psExe -NoProfile -ExecutionPolicy Bypass -File $b -RepoRoot $RepoRoot *> $null } catch { }
+}
+# ---- dashboard: opened once per run, only with the human's permission -------------------
+# Permission comes from -OpenDashboard / -NoOpenDashboard, else settings dashboard.auto_open
+# (yes | no | ask). `ask` prompts on a console and records always/never; with no console
+# (unattended, silent, or piped) nothing is opened and a hint is printed.
+function Save-DashboardMode([string]$mode) {
+    $sp = Join-Path $KccDir 'settings.json'
+    if (-not (Test-Path -LiteralPath $sp)) { return }
+    $t = [System.IO.File]::ReadAllText($sp)
+    if ($t -match '"auto_open"\s*:\s*"[^"]*"') { $t = [regex]::Replace($t, '("auto_open"\s*:\s*")[^"]*(")', ('${1}' + $mode + '${2}')) }
+    elseif ($t -match '"dashboard"\s*:\s*\{') { $t = [regex]::Replace($t, '("dashboard"\s*:\s*\{)', ('${1} "auto_open": "' + $mode + '",'), 1) }
+    else { $t = [regex]::Replace($t, '\}\s*$', (",`n" + '  "dashboard": { "auto_open": "' + $mode + '" }' + "`n}")) }
+    [System.IO.File]::WriteAllText($sp, $t, (New-Object System.Text.UTF8Encoding($false)))
+}
+function Resolve-DashboardOpen {
+    if ($NoOpenDashboard) { return 'no' }
+    if ($OpenDashboard) { return 'yes' }
+    $mode = ([string](Get-Setting @('dashboard', 'auto_open') 'ask')).ToLowerInvariant()
+    if ($mode -eq 'yes' -or $mode -eq 'no') { return $mode }
+    $ans = $env:KCC_DASHBOARD_ANSWER   # automation hook: answers the prompt without a console
+    $console = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $Json
+    if (-not $ans -and $console) {
+        Write-Host 'kcc-run: open the live dashboard in your browser? It follows this run and reads only local files.'
+        $ans = Read-Host '  [y]es now / [n]o / [a]lways / ne[v]er (saved in .KCC/settings.json -> dashboard.auto_open)'
+    }
+    if (-not $ans) { return 'ask' }
+    switch -regex (([string]$ans).Trim().ToLowerInvariant()) {
+        '^(y|yes|open)$' { return 'yes' }
+        '^(a|always)$' { Save-DashboardMode 'yes'; return 'yes' }
+        '^(v|never)$' { Save-DashboardMode 'no'; return 'no' }
+        default { return 'no' }
+    }
+}
+function Offer-Dashboard([bool]$isNew) {
+    if ($DryRun -or $R.dashboard_opened) { return }
+    $d = Resolve-DashboardOpen
+    if ($d -eq 'no') { $R.dashboard_opened = 'declined'; return }
+    if ($d -eq 'ask') {
+        if ($isNew) { Say 'kcc-run: dashboard not opened (no permission recorded). Open it with: kcc run --open-dashboard, or set .KCC/settings.json -> dashboard.auto_open to "yes".' }
+        return
+    }
+    $b = Join-Path $ToolsDir 'build-dashboard.ps1'
+    if (-not (Test-Path -LiteralPath $b)) { return }
+    try { & $psExe -NoProfile -ExecutionPolicy Bypass -File $b -RepoRoot $RepoRoot -Open *> $null; $R.dashboard_opened = '1'; Say 'kcc-run: dashboard opened (dashboard/index.html); it refreshes as the run progresses' } catch { Say 'kcc-run: could not open the dashboard' }
+}
 function Emit([string]$kind, [string]$spec, $payload, [switch]$Dashboard) {
     if ($DryRun) { return '' }
     $bc = Join-Path $ToolsDir 'backchannel-append.ps1'
@@ -411,6 +511,7 @@ function Check-Desc($chk, $ctx) {
     $s = $t
     if (Has $chk 'args') { $s += ' ' + ((@($chk.args) | ForEach-Object { Render ([string]$_) $ctx }) -join ' ') }
     if (Has $chk 'path') { $s += ' ' + (Render $chk.path $ctx) }
+    if (Has $chk 'paths') { $s += ' ' + ((@($chk.paths) | ForEach-Object { Render ([string]$_) $ctx }) -join ',') + $(if ((Has $chk 'any') -and ([string]$chk.any -match '^(?i)true$')) { ' [any]' } else { '' }) }
     if (Has $chk 'pass_when') { $s += ' [pass_when ' + $chk.pass_when + ']' }
     if (Has $chk 'then') { $s += ' THEN ' + (Check-Desc $chk.then $ctx) }
     return $s
@@ -429,10 +530,33 @@ function Run-Check($chk, $ctx, [string]$label) {
         if ($pct -ge $min) { return @{ rc = 0; viol = ''; value = [string]$pct } }
         return @{ rc = 1; viol = ('ROI-002 (human): ROI confidence ' + $pct + '% is below ' + $min + '%'); value = [string]$pct }
     }
+    if ($tool -eq 'internal:review-verdict') {
+        $rf = ''
+        if ($ctx.ENTRY) { $rf = Join-Path (Get-SpecDir $ctx.ENTRY) 'review.md' }
+        if (-not $rf -or -not (Test-Path -LiteralPath $rf)) { return @{ rc = 1; viol = ('REVIEW-001 (verifier): review.md not found for ' + $ctx.SPEC) } }
+        $rtxt = [System.IO.File]::ReadAllText($rf)
+        $v = ''
+        $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_]+)')
+        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED)\b') }
+        if ($vm.Success) { $v = $vm.Groups[1].Value.ToUpperInvariant() }
+        if ($v -eq 'APPROVED') { return @{ rc = 0; viol = '' } }
+        if ($v -eq 'TOOLCHAIN_DEFERRED') { return @{ rc = 3; viol = 'REVIEW-003 (human): review verdict TOOLCHAIN_DEFERRED (a required scanner is missing); this is not a pass' } }
+        if (-not $v) { $v = 'missing' }
+        return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + '; fix the open bugs and failing acceptance criteria listed in review.md, then re-review') }
+    }
     if ($tool -eq 'internal:file-exists') {
         $rel = Render (Str $chk.path) $ctx
         if (Test-Path -LiteralPath (Join-Path $RepoRoot $rel)) { return @{ rc = 0; viol = '' } }
         return @{ rc = 1; viol = ('FILE-001 (agent): missing ' + $rel) }
+    }
+    if ($tool -eq 'internal:files-exist') {
+        $paths = @(); if (Has $chk 'paths') { $paths = @(@($chk.paths) | ForEach-Object { Render ([string]$_) $ctx }) }
+        if ($paths.Count -eq 0) { return @{ rc = 2; viol = 'FILE-000: internal:files-exist needs a paths list' } }
+        $any = (Has $chk 'any') -and ([string]$chk.any -eq 'True' -or [string]$chk.any -eq 'true')
+        $missing = @($paths | Where-Object { -not (Test-Path -LiteralPath (Join-Path $RepoRoot $_)) })
+        if ($any) { if ($missing.Count -lt $paths.Count) { return @{ rc = 0; viol = '' } }; return @{ rc = 1; viol = ('FILE-002 (agent): none of ' + ($paths -join ', ') + ' exists') } }
+        if ($missing.Count -eq 0) { return @{ rc = 0; viol = '' } }
+        return @{ rc = 1; viol = ('FILE-001 (agent): missing ' + ($missing -join ', ')) }
     }
     if ($tool -eq 'internal:agent-report') {
         if ($script:LastHarnessRc -eq 0) { return @{ rc = 0; viol = '' } }
@@ -471,10 +595,19 @@ function Get-LimitRe([string]$harness) {
     return $limitReBuiltin
 }
 function Test-LimitHit([string[]]$lines, [int]$rc) {
-    $t = (@($lines | Select-Object -Last 60) -join "`n").ToLowerInvariant()
-    if ($t -match (Get-LimitRe $script:HarnessName)) { return $true }
-    if ($rc -ne 0 -and $t -match '(^|[^0-9])429([^0-9]|$)') { return $true }
-    return $false
+    if ($rc -ne 0) {
+        $t = (@($lines | Select-Object -Last 60) -join "`n").ToLowerInvariant()
+        if ($t -match (Get-LimitRe $script:HarnessName)) { return $true }
+        return ($t -match '(^|[^0-9])429([^0-9]|$)')
+    }
+    # Exit 0: the session finished its turn, so prose such as "rate-limit values are assumptions" is not
+    # a limit. Only the harness's own limit notice on the final lines counts.
+    $f = Join-Path $RepoRoot '.KCC/kernel/limit-patterns.json'
+    $re = ''
+    if (Test-Path -LiteralPath $f) { try { $p = (Get-Content -LiteralPath $f -Raw | ConvertFrom-Json).PSObject.Properties[('limit_regex.' + $script:HarnessName)]; if ($p) { $re = [string]$p.Value } } catch { } }
+    if (-not $re) { return $false }
+    $last = (@($lines | Where-Object { $_ -and $_.Trim() } | Select-Object -Last 3) -join "`n").ToLowerInvariant()
+    return ($last -match $re)
 }
 function Get-ResetEpoch([string[]]$lines) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -512,11 +645,94 @@ function Sanitize-Prompt([string]$p) {
     $s = $s.Replace('"', "'").Replace('`', "'").Replace('$', '').Replace('%', ' pct').Replace('!', '.').Replace('\', '/')
     return (($s -replace '\s{2,}', ' ').Trim())
 }
+# ---- fasttrack worker states run AS the agent (`claude --agent`): no orchestrator session above them ----
+# The orchestrator wrapper session cost more than the worker it spawned. The agent keeps its own model,
+# effort, and tools. Complexity high (the planner marks security-sensitive items high) or a retry after a
+# failed check runs the implementer on `run.escalation_model` (default claude-sonnet-5-5) instead (the orchestrator complexity rule).
+$script:HarnessExtra = ''
+function Get-WaveComplexity([string]$entry, [string]$wave) {
+    $rank = @{ 'low' = 1; 'medium' = 2; 'high' = 3; 'extra-high' = 4 }
+    $best = ''
+    $pf = Join-Path (Get-SpecDir $entry) 'plan.md'
+    if (-not (Test-Path -LiteralPath $pf)) { return '' }
+    $hdr = $null
+    $plines = Read-Lines $pf
+    foreach ($l in $plines) {
+        if ($l -notmatch '^\s*\|') { if ($hdr) { break } else { continue } }
+        $cells = @(($l.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+        if (-not $hdr) { $low = @($cells | ForEach-Object { $_.ToLowerInvariant() }); if (($low -contains 'complexity') -and ($low -contains 'wave')) { $hdr = $low }; continue }
+        if ($l -match '^\s*\|[\s:|\-]+\|?\s*$') { continue }
+        $wi = [array]::IndexOf($hdr, 'wave'); $ci = [array]::IndexOf($hdr, 'complexity')
+        if ($cells.Count -gt [Math]::Max($wi, $ci) -and $cells[$wi] -eq $wave) {
+            $c = $cells[$ci].ToLowerInvariant()
+            if ($rank.ContainsKey($c) -and ($best -eq '' -or $rank[$c] -gt $rank[$best])) { $best = $c }
+        }
+    }
+    return $best
+}
+# Full model IDs, never the bare aliases: `haiku` still resolves to Haiku 4.5 on some Claude Code builds, and 4.5 has no
+# auto mode. An older settings.json that still says haiku/sonnet/opus is mapped to the pinned 5.5 IDs here.
+function Resolve-ClaudeModel([string]$m) {
+    switch -Regex ($m.ToLowerInvariant()) {
+        '^haiku$'  { return 'claude-haiku-5-5' }
+        '^sonnet$' { return 'claude-sonnet-5-5' }
+        '^opus$'   { return 'claude-opus-5-5' }
+        default    { return $m }
+    }
+}
+function Get-AgentMode($st, $ctx, [int]$att) {
+    # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
+    # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
+    # AS the agent (claude --agent) with no orchestrator above them unless run.fasttrack_direct is false (default true).
+    if ($R.fasttrack -ne '1' -or $script:HarnessName -ne 'claude') { return $null }
+    $agent = ''; if (Has $st 'agent_fasttrack') { $agent = [string]$st.agent_fasttrack }
+    $model = ''; $why = ''; $effort = ''
+    $em = Resolve-ClaudeModel (([string](Get-Setting @('run', 'escalation_model') 'claude-sonnet-5-5')) -replace '[^A-Za-z0-9._-]', '')
+    # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
+    # Complexity wave, or a retry moves the executor one tier up and raises the effort.
+    $domain = Get-IdeaDomain $ctx.IDEA
+    if ($agent -eq 'implementer') {
+        $cx = ''; if ($ctx.ENTRY -and $ctx.WAVE) { $cx = Get-WaveComplexity $ctx.ENTRY $ctx.WAVE }
+        if ($cx -eq 'high' -or $cx -eq 'extra-high') { $model = $em; $effort = 'high'; $why = 'complexity ' + $cx }
+        elseif ($att -gt 0) { $model = $em; $effort = 'high'; $why = 'retry after a failed exit check' }
+        elseif ($domain -eq 'novel') { $model = $em; $effort = 'high'; $why = 'novel domain' }
+    } elseif ($agent -and $domain -eq 'novel' -and $att -eq 0) { $effort = 'high'; $why = 'novel domain' }
+    elseif ($agent -and $att -gt 0) { $effort = 'high'; $why = 'retry after a failed exit check' }
+    $direct = (([string](Get-Setting @('run', 'fasttrack_direct') 'true')).ToLowerInvariant() -ne 'false') -and $agent -and (Test-Path -LiteralPath (Join-Path $RepoRoot ('.claude/agents/' + $agent + '.md')))
+    $wm = Resolve-ClaudeModel (([string](Get-Setting @('run', 'orchestrator_model') 'claude-haiku-5-5')) -replace '[^A-Za-z0-9._-]', '')
+    $we = ([string](Get-Setting @('run', 'orchestrator_effort') 'low')) -replace '[^a-z]', ''
+    $mode = 'wrapper'; if ($direct) { $mode = 'direct' }
+    return @{ mode = $mode; agent = $agent; model = $model; effort = $effort; why = $why; wrapperModel = $wm; wrapperEffort = $we }
+}
+function Get-IdeaDomain([string]$idea) {
+    # Research.md -> '## Domain' (common | specialised | novel), written by the idea-interrogator.
+    if (-not $idea) { return '' }
+    $f = Join-Path $RepoRoot ('ideation\' + $idea + '\Research.md')
+    if (-not (Test-Path -LiteralPath $f)) { return '' }
+    $t = [System.IO.File]::ReadAllText($f)
+    $m = [regex]::Match($t, '(?is)##\s+Domain[^\n]*\n+\s*[-*]?\s*`?(common|specialised|specialized|novel)')
+    if (-not $m.Success) { $m = [regex]::Match($t, '(?i)##\s+Domain\s*:\s*`?(common|specialised|specialized|novel)') }
+    if (-not $m.Success) { return '' }
+    $v = $m.Groups[1].Value.ToLowerInvariant(); if ($v -eq 'specialized') { $v = 'specialised' }
+    return $v
+}
+function Get-HarnessExtra($am) {
+    if (-not $am) { return '' }
+    if ($am.mode -eq 'direct') { $x = '--agent ' + $am.agent; if ($am.model) { $x += ' --model ' + $am.model }; if ($am.effort) { $x += ' --effort ' + $am.effort }; return $x }
+    $x = ''; if ($am.wrapperModel) { $x = '--model ' + $am.wrapperModel }; if ($am.wrapperEffort) { $x += ' --effort ' + $am.wrapperEffort }
+    return $x.Trim()
+}
+function Convert-AgentBody([string]$body) {
+    $m = [regex]::Match($body, '^/([a-z][a-z0-9-]*)\s*(.*)$')
+    if (-not $m.Success) { return $body }
+    return ('Do the work of the skill described in .claude/skills/' + $m.Groups[1].Value + '/SKILL.md (read it first) with these arguments: ' + $m.Groups[2].Value)
+}
 function Get-HarnessCommand([string]$prompt) {
     $tpl = Str (Get-Setting @('continuity', 'start', $script:HarnessName) '')
     if (-not $tpl) { return $null }
-    $perm = (Str (Get-Setting @('continuity', 'permission_mode') 'acceptEdits')) -replace '[^A-Za-z]', ''
-    if (-not $perm) { $perm = 'acceptEdits' }
+    if ($script:HarnessExtra -and $script:HarnessName -eq 'claude') { $tpl = [regex]::Replace($tpl, '(\s-p)(\s)', ('$1 ' + $script:HarnessExtra + '$2'), 1) }
+    $perm = (Str (Get-Setting @('continuity', 'permission_mode') 'auto')) -replace '[^A-Za-z]', ''
+    if (-not $perm) { $perm = 'auto' }
     return $tpl.Replace('{resume_prompt}', (Sanitize-Prompt $prompt)).Replace('{permission_mode}', $perm).Replace('{session_id}', '')
 }
 function Invoke-Harness([string]$prompt, [string]$logFile) {
@@ -755,6 +971,7 @@ function Complete-Unit($st, $ctx, [bool]$skipped) {
     if (Has $st 'checkpoint') { $cpReason = [string]$st.checkpoint } elseif ([string]$st.name -eq 'REVIEW') { $cpReason = 'spec-reviewed' }
     if ($cpReason) { Invoke-Checkpoint $cpReason ('kcc-run: ' + (Unit-Label $st $ctx) + ' completed; run kcc-run -Resume') }
     Say ('kcc-run: done   ' + (Unit-Label $st $ctx) + $(if ($skipped) { ' (exit check already passes)' } else { '' }))
+    Refresh-Dashboard
 }
 function Detect-Idea {
     if ($R.idea) { return }
@@ -776,7 +993,8 @@ function Process-Unit($st, $ctx) {
     $label = Unit-Label $st $ctx
     $pa = Str $R.pending_action; $R.pending_action = ''
     if ((Has $st 'only_in') -and (@($st.only_in) -notcontains $R.scenario)) { return 'next' }
-    if ((Has $st 'skip_if_flag') -and $st.skip_if_flag -eq 'parallel' -and $R.parallel -eq '1') { Say ("kcc-run: skip   $label (--parallel pre-approves)"); return 'next' }
+    $skipFlag = Get-SkipFlag $st
+    if ($skipFlag) { Say ("kcc-run: skip   $label ($skipFlag)"); return 'next' }
     if ($pa -eq 'abort') { Stop-Run 'aborted' 'human chose abort' 6 }
     if ($pa -eq 'done') { Complete-Unit $st $ctx $false; return 'next' }
     if ($pa -like 'goto:*') {
@@ -807,7 +1025,7 @@ function Process-Unit($st, $ctx) {
             $pre = Run-Check $chk $ctx $key
             if ($pre.rc -eq 0) { Complete-Unit $st $ctx $true; return 'next' }
         }
-        $cmdText = Render ([string]$st.command) $ctx
+        $cmdText = Render (Get-StateCommand $st) $ctx
         $q = 'Scenario S1: state ' + $st.id + ' ' + $st.name + ' is an interactive interrogation. Run it yourself in your harness: `' + $cmdText + '`. When it has finished, answer `done` (the exit check then runs) or `abort`.'
         Say ('kcc-run: interactive ' + $label + ' - run in your harness: ' + $cmdText)
         $ex = 'Command: `' + $cmdText + '`'
@@ -817,7 +1035,7 @@ function Process-Unit($st, $ctx) {
     if ($interactive -and $pa -eq 'recheck' -and $hasCheck -and $chk.tool -eq 'internal:agent-report') { Complete-Unit $st $ctx $false; return 'next' }
 
     $preResult = $null
-    if (-not $skipDispatch -and $hasCheck -and -not $force -and (Get-Att $key) -eq 0 -and $st.scope -ne 'wave' -and $chk.tool -ne 'internal:agent-report' -and ($R.idea -or [int]$st.id -eq 0) -and -not ($gkind -eq 'approval' -and $gname)) {
+    if (-not $skipDispatch -and $hasCheck -and -not $force -and (Get-Att $key) -eq 0 -and $st.scope -ne 'wave' -and $chk.tool -ne 'internal:agent-report' -and ($R.idea -or [int]$st.id -eq 0) -and -not ($gkind -eq 'approval' -and $gname) -and (Test-PrecheckReady $st $ctx)) {
         $preResult = Run-Check $chk $ctx $key
         if ($preResult.rc -eq 0) { Complete-Unit $st $ctx $true; return 'next' }
     }
@@ -828,15 +1046,35 @@ function Process-Unit($st, $ctx) {
     $needFix = (-not $hasCmd) -and $att -gt 0 -and $hasCheck -and ($ApprovalGates -notcontains $gname) -and $gname -eq ''
     if (-not $skipDispatch -and ($hasCmd -or $needFix)) {
         $body = ''
-        if ($hasCmd) { $body = Render ([string]$st.command) $ctx } else { $body = 'The exit check `' + (Check-Desc $chk $ctx) + '` failed. Route each violation to its fix_owner and fix it.' }
-        $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + '. Follow coordination/orchestrator.md Spawn protocol and the state''s contract. Do only this state, then stop. ' + $body
+        if ($hasCmd) { $body = Render (Get-StateCommand $st) $ctx } else { $body = 'The exit check `' + (Check-Desc $chk $ctx) + '` failed. Route each violation to its fix_owner and fix it.' }
+        # Full runs wrap each unit with the butler (CR-8: brief first, remember after); fasttrack keeps it to the run's
+        # first and last states, which name it in their command. CLOSE already names it.
+        $butlerLine = ''
+        if ($R.fasttrack -ne '1' -and $st.name -ne 'CLOSE' -and ([string](Get-Setting @('run', 'butler') 'on')).ToLowerInvariant() -ne 'off') { $butlerLine = 'Wrap the work with the butler as the spawn protocol requires: spawn it to brief you first (butler-brief) and to remember afterwards (butler-remember). ' }
+        $lead = '. Follow coordination/orchestrator.md Spawn protocol and the state''s contract. ' + $butlerLine + 'Do only this state, then stop. This is a non-interactive session that ends when you reply: run every subagent in the foreground (never run_in_background) and wait for all of them, including parallel ones, before you finish. '
+        $script:HarnessExtra = ''
+        $am = Get-AgentMode $st $ctx $att
+        if ($am) {
+            $script:HarnessExtra = Get-HarnessExtra $am
+            if ($am.mode -eq 'direct') {
+                $body = Convert-AgentBody $body
+                $lead = '. You are the ' + $am.agent + ' agent running this state directly, with no orchestrator above you: do the work yourself and spawn no other agent. Do only this state, then stop. '
+            } else {
+                $lead = $lead.TrimEnd() + ' Put the skill''s arguments (`--fasttrack`, `--depthlevel N`, and the rest) verbatim in each subagent''s handover packet and tell it to follow its "Fast track and depth" section; do not paraphrase them. '
+                if ($am.model) { $lead = $lead.TrimEnd() + ' Spawn the ' + $am.agent + ' subagent on model ' + $am.model + ' (' + $am.why + '). ' }
+            }
+            if ($am.model) { [void](Emit 'model-escalated' $ctx.SPEC ([ordered]@{ agent = $am.agent; item = ('wave ' + $ctx.WAVE); from = 'executor'; to = $am.model; reason = $am.why; source = 'kcc-run' })) }
+        }
+        $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }
         if ($R.note) { $prompt += ' Human note: ' + $R.note; $R.note = '' }
         if ($st.scope -eq 'wave' -and $att -eq 0) { Invoke-Checkpoint 'manual' ('kcc-run: baseline before ' + $label) }
         $log = Join-Path $LogDir ('state-' + $st.id + '-' + (Safe-Name $(if ($ctx.SPEC) { $ctx.SPEC + $(if ($ctx.WAVE) { '-w' + $ctx.WAVE } else { '' }) } else { 'run' })) + '-' + ($att + 1) + '.log')
         Say ('kcc-run: run    ' + $label + ' (attempt ' + ($att + 1) + '/' + $cfgMax + ') -> ' + ($log.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'))
         Save-Run
+        Refresh-Dashboard
         $rc = Invoke-Harness $prompt $log
+        $script:HarnessExtra = ''
         if (Test-LimitHit $script:LastHarnessLines $rc) { Suspend-Run $st $ctx $script:LastHarnessLines }
         if ($rc -eq 124) { Say ('kcc-run: harness timed out for ' + $label) }
         $preResult = $null
@@ -875,7 +1113,15 @@ function Process-Unit($st, $ctx) {
     # ---- exit check --------------------------------------------------------------------------------
     if (-not $hasCheck) { Complete-Unit $st $ctx $false; return 'next' }
     $res = $preResult
+    # A check that names {IDEA} (files-exist, -Spec paths) needs the idea the dispatch just created.
+    if ($null -eq $res -and -not $R.idea) { Detect-Idea; if ($R.idea) { $ctx = New-Ctx $ctx.ENTRY $ctx.WAVE } }
     if ($null -eq $res) { $res = Run-Check $chk $ctx ($key + '-' + ((Get-Att $key) + 1)) }
+    # A passing check proves nothing when the state's artifact was never written (a conformance scope with
+    # nothing in it passes): precheck_requires is also the state's required output.
+    if ($res.rc -eq 0 -and (Has $st 'precheck_requires') -and -not $R.idea) { Detect-Idea; $ctx = New-Ctx $ctx.ENTRY $ctx.WAVE }
+    if ($res.rc -eq 0 -and -not (Test-PrecheckReady $st $ctx)) {
+        $res = @{ rc = 1; viol = ('REQ-001: state ' + $st.id + ' ' + $st.name + ' finished but did not produce ' + (Render ([string]$st.precheck_requires) $ctx)) }
+    }
     if ($res.rc -eq 0) { Complete-Unit $st $ctx $false; return 'next' }
     $R.last_violations = (Sanitize-Prompt (Str $res.viol))
     if ($R.last_violations.Length -gt 1500) { $R.last_violations = $R.last_violations.Substring(0, 1500) + ' ...' }
@@ -992,12 +1238,18 @@ function Show-Plan {
 function Plan-Line($st, $ctx) {
     $lbl = Unit-Label $st $ctx
     if ((Has $st 'only_in') -and (@($st.only_in) -notcontains $R.scenario)) { return ('[skip] ' + $lbl + ' (only_in ' + (@($st.only_in) -join ',') + ')') }
-    if ((Has $st 'skip_if_flag') -and $R.parallel -eq '1') { return ('[skip] ' + $lbl + ' (--parallel)') }
+    $skipFlag = Get-SkipFlag $st
+    if ($skipFlag) { return ('[skip] ' + $lbl + ' (' + $skipFlag + ')') }
     $parts = @('[' + $st.id + '] ' + $lbl)
     if (Has $st 'command') {
-        $c = Render ([string]$st.command) $ctx
+        $c = Render (Get-StateCommand $st) $ctx
         if ((Has $st 'interactive_in') -and (@($st.interactive_in) -contains $R.scenario)) { $parts += ('  interactive (human runs): ' + $c) }
-        else { $parts += ('  harness: ' + (Get-HarnessCommand ('KCC run state ' + $st.id + ' ' + $st.name + '. ... ' + $c))) }
+        else {
+            $am = Get-AgentMode $st $ctx 0
+            $script:HarnessExtra = Get-HarnessExtra $am
+            $parts += ('  harness: ' + (Get-HarnessCommand ('KCC run state ' + $st.id + ' ' + $st.name + '. ... ' + $c)))
+            $script:HarnessExtra = ''
+        }
     }
     if (Has $st 'check') { $parts += ('  check: ' + (Check-Desc $st.check $ctx)) }
     $g = Get-GateName $st; if ($g) { $parts += ('  gate: ' + $g + ' (' + ((Get-Answers $g) -join '/') + ')') }
@@ -1018,7 +1270,7 @@ if ($InputText -and -not $Resume) {
     $startNew = $true
 } elseif (-not $runExists) {
     if ($Resume) { Fail-Usage 'nothing to resume: coordination/run/run.json not found' }
-    if (-not $InputText) { Fail-Usage 'usage: kcc-run -Input "<idea|path|IDEA-ID|SPEC-ID|all>" [-Silent -Assume] [-Accuracy NN] [-Budget NN -Currency USD] [-Parallel] [-Harness h] [-Resume] [-Answer x] [-From N] [-Only N] [-DryRun] [-Json] [-MaxAttempts N]' }
+    if (-not $InputText) { Fail-Usage 'usage: kcc-run -Input "<idea|path|IDEA-ID|SPEC-ID|all>" [-Silent -Assume] [-Accuracy NN] [-Budget NN -Currency USD] [-Parallel] [-Fasttrack] [-DepthLevel 1-5] [-Harness h] [-Resume] [-Answer x] [-From N] [-Only N] [-DryRun] [-Json] [-MaxAttempts N]' }
 }
 
 if ($startNew) {
@@ -1075,11 +1327,22 @@ if ($Budget) { $R.budget = $Budget; if ($R.scenario -eq 'S2') { $R.scenario = 'S
 if ($Currency) { $R.currency = $Currency.ToUpperInvariant() }
 if ($Accuracy) { $R.accuracy = $Accuracy }
 if ($Parallel) { $R.parallel = '1' }
+if ($Fasttrack) { $R.fasttrack = '1' }
+# -Until is kept in run.json so a resume (by a human or by kcc-limit-watch after a usage limit) still stops there.
+if ($Until) { $R.until = $Until } elseif ((Str $R.until) -match '^\d+$') { $Until = [string]$R.until }
+if ($DepthLevel) { $R.depthlevel = $DepthLevel }
+elseif ($startNew) {
+    $dl0 = [string](Get-Setting @('defaults', 'depthlevel') 5)
+    if ($dl0 -notmatch '^[1-5]$') { $dl0 = '5' }
+    if ($R.fasttrack -eq '1' -and $dl0 -eq '5') { $dl0 = '2' }
+    $R.depthlevel = $dl0
+}
 if ($Harness) { $R.harness = $Harness }
 if (-not $R.harness) { $R.harness = Str (Get-Setting @('run', 'harness') 'claude') }
 $script:HarnessName = $R.harness
 if (@('claude', 'codex', 'opencode', 'generic') -notcontains $script:HarnessName) { Fail-Usage ('unknown harness in settings/run.json: ' + $script:HarnessName) }
 if ($From) { if ((Get-Idx ([int]$From)) -lt 0) { Fail-Usage "unknown state $From" }; $R.state = $From; $R.wave = ''; $R.pending_action = ''; $R.gate_id = ''; $R.attempts = ''; $R.force = [string]$From; if ((Get-Idx ([int]$From)) -ge $SpecFirst -and (Get-Idx ([int]$From)) -le $SpecLast) { $R.spec_index = '0' }; if ($R.status -ne 'done') { $R.status = 'running' } }
+if ($Until -and (Get-Idx ([int]$Until)) -lt 0) { Fail-Usage "unknown state $Until" }
 if ($Only) {
     if ((Get-Idx ([int]$Only)) -lt 0) { Fail-Usage "unknown state $Only" }
     if ($R.gate_id -and -not $Answer) { Fail-Usage ('gate ' + $R.gate_id + ' is pending; answer it first') }
@@ -1090,8 +1353,11 @@ if ($DryRun) { Show-Plan }
 if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 if ($startNew) {
     Save-Run
-    [void](Emit 'auto-policy-parsed' '' ([ordered]@{ scenario = $R.scenario; silent = ($R.silent -eq '1'); assume = ($R.assume -eq '1'); accuracy_threshold_pct = [int]$R.accuracy; budget_cap_amount = $(if ($R.budget) { [double]$R.budget } else { $null }); budget_cap_currency = $R.currency; parallel = ($R.parallel -eq '1'); input_class = $R.input_class; harness = $script:HarnessName; source = 'kcc-run' }))
+    [void](Emit 'auto-policy-parsed' '' ([ordered]@{ scenario = $R.scenario; silent = ($R.silent -eq '1'); assume = ($R.assume -eq '1'); accuracy_threshold_pct = [int]$R.accuracy; budget_cap_amount = $(if ($R.budget) { [double]$R.budget } else { $null }); budget_cap_currency = $R.currency; parallel = ($R.parallel -eq '1'); fasttrack = ($R.fasttrack -eq '1'); depthlevel = [int]$R.depthlevel; input_class = $R.input_class; harness = $script:HarnessName; source = 'kcc-run' }))
+    if ($R.fasttrack -eq '1') { [void](Emit 'fasttrack-approved' '' ([ordered]@{ depthlevel = [int]$R.depthlevel; scope = 'budget-gates-skipped'; source = 'kcc-run' })) }
     Say ('kcc-run: new run - scenario ' + $R.scenario + ', input class ' + $R.input_class + ', starting at state ' + $R.state)
+    Offer-Dashboard $true
+    Save-Run
 } else {
     if ($R.status -eq 'done' -and -not $From -and -not $Only) { Say 'kcc-run: run is DONE; nothing to resume'; Finish 'done' 0 }
     if ($R.status -eq 'aborted' -and -not $From) { Say ('kcc-run: run was ABORTED (' + $R.reason + '); start a new run with -Input'); Finish 'aborted' 6 }
@@ -1150,7 +1416,18 @@ while ($true) {
             if (-not $moved -and $u.st.scope -ne 'run' -and [int]$R.spec_index + 1 -lt (Get-SpecEntries).Count) { $R.spec_index = [string]([int]$R.spec_index + 1); $R.wave = ''; $moved = $true }
             if (-not $moved) { $R.state = '-99' }
         }
-        else { Advance }
+        else {
+            Advance
+            if ($Until -and [int]$u.st.id -eq [int]$Until) {
+                $ui = Get-Idx ([int]$Until); $ni = Get-Idx ([int]$R.state)
+                if ([int]$R.state -lt 0 -or $ni -gt $ui) {
+                    $R.status = 'stopped'; $R.reason = 'until ' + $Until; $R.until = ''
+                    Save-Run
+                    Say ('kcc-run: -Until ' + $Until + ' reached; run stopped (resume with -Resume)')
+                    Finish 'until-done' 0
+                }
+            }
+        }
         Save-Run
         continue
     }

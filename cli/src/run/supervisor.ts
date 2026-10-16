@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UsageError, workspace } from "../args";
 import { readJson, writeJson } from "../fsutil";
 import { isWindows, runTool } from "../platform";
 import { readSettings } from "../settings";
+import { findRoadmap, laneDir, scheduleSpecs } from "./lanes";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
 const RESUME_PROMPT = "Read coordination/checkpoints/latest.md and continue the KCC run from next_action.";
@@ -118,7 +120,7 @@ function resumeCommand(root: string, p: Policy, original: string[], lines: strin
   if (BYPASS.test(tpl)) throw new UsageError(`the resume template for '${p.harness}' uses a permission-bypass flag; KCC will not run it. Edit continuity in .KCC/settings.json.`);
   return tpl
     .replaceAll("{session_id}", sid ?? "")
-    .replaceAll("{permission_mode}", c.permission_mode ?? "acceptEdits")
+    .replaceAll("{permission_mode}", c.permission_mode ?? "auto")
     .replaceAll("{resume_prompt}", RESUME_PROMPT)
     .replaceAll("{command}", quote(original[0] ?? p.harness));
 }
@@ -154,12 +156,16 @@ export async function run(argv: string[]): Promise<number> {
   let maxResumes: string | undefined;
   let wrap = false;
   let wait = true;
+  let lane: string | undefined;
+  let maxParallel = 4;
   for (let i = 0; i < own.length; i++) {
     const a = own[i] ?? "";
     if (a === "--wrap") wrap = true;
     else if (a === "--no-wait") wait = false;
     else if (a === "--dir") dir = own[++i];
     else if (a === "--max-resumes") maxResumes = own[++i];
+    else if (a === "--lane") lane = (own[++i] ?? "").toUpperCase();
+    else if (a === "--max-parallel") maxParallel = Number(own[++i]);
     else if (a === "--harness") {
       harness = own[++i];
       if (harness) rest.push("--harness", harness);
@@ -168,15 +174,65 @@ export async function run(argv: string[]): Promise<number> {
   const root = workspace(dir);
   const p = policy(root, harness, maxResumes);
   if (!Number.isInteger(p.maxResumes) || p.maxResumes < 0) throw new UsageError("--max-resumes expects a whole number");
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) throw new UsageError("--max-parallel expects a whole number >= 1");
 
   if (wrap) {
     if (!wrapped.length) throw new UsageError("usage: kcc run --wrap [--harness <name>] -- <harness command...>");
     return superviseWrapped(root, wrapped, p, wait);
   }
-  if (!rest.includes("--repo-root")) rest.push("--repo-root", root);
+  // `--lane SPEC-X` targets one spec's lane, e.g. to answer the gate it stopped at.
+  if (lane) {
+    const dir = laneDir(root, lane);
+    if (!existsSync(join(dir, "coordination", "run", "run.json"))) throw new UsageError(`no lane for ${lane} (expected ${dir})`);
+    return superviseDriver(dir, [...rest, "--repo-root", dir], p, wait);
+  }
   // A dry run or a status query never waits.
   const passive = rest.includes("--dry-run") || rest.includes("--help") || rest.includes("-h");
-  return superviseDriver(root, rest, p, wait && !passive);
+  const manual = ["--only", "--from", "--until", "--answer", "--dry-run", "--help", "-h"].some((f) => rest.includes(f));
+  const input = rest[rest.indexOf("--input") + 1] ?? "";
+  const lifecycle = !manual && ((rest.includes("--input") && !/^SPEC-\d+$/i.test(input)) || rest.includes("--resume"));
+  if (!lifecycle) {
+    if (!rest.includes("--repo-root")) rest.push("--repo-root", root);
+    return superviseDriver(root, rest, p, wait && !passive);
+  }
+  return lifecycleRun(root, rest, p, wait, maxParallel);
+}
+
+/** kcc-run flags that every lane and the closing run inherit. */
+function laneFlags(args: string[]): string[] {
+  const out: string[] = [];
+  const valued = new Set(["--depthlevel", "--accuracy", "--budget", "--currency", "--harness", "--max-attempts"]);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (valued.has(a)) out.push(a, args[++i] ?? "");
+    else if (["--silent", "--assume", "--fasttrack", "--parallel"].includes(a)) out.push(a);
+  }
+  return out;
+}
+
+/**
+ * The whole lifecycle: the shared states once (REPO .. SPECS), then every spec as soon as the specs it
+ * depends on are done (independent specs at the same time, in their own lanes), then CLOSE once.
+ */
+async function lifecycleRun(root: string, args: string[], p: Policy, wait: boolean, maxParallel: number): Promise<number> {
+  const flags = laneFlags(args);
+  const runJson = readJson<{ state?: string; status?: string }>(join(root, "coordination", "run", "run.json"));
+  if (runJson?.status === "done") {
+    console.log("kcc: the run is DONE; nothing to resume");
+    return 0;
+  }
+  const lanesStarted = existsSync(join(root, "coordination", "lanes.json"));
+  if (!lanesStarted && Number(runJson?.state ?? 0) <= 9) {
+    const a = await superviseDriver(root, [...args.filter((x) => x !== "--repo-root"), "--until", "9", "--repo-root", root], p, wait);
+    if (a !== 0) return a;
+  }
+  if (!findRoadmap(root)) {
+    console.error("kcc: the shared states finished but no specs/IDEA-*/ROADMAP.md exists");
+    return 6;
+  }
+  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel });
+  if (b !== 0) return b;
+  return superviseDriver(root, ["--resume", "--from", "18", ...flags, "--repo-root", root], p, wait);
 }
 
 export function limits(argv: string[]): number {

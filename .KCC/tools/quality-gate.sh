@@ -29,6 +29,7 @@ FAST=0
 REQUIRE=0
 EMIT=0
 SCOPE="all"
+SCOPE_GIVEN=0
 
 usage() {
   cat >&2 <<'EOF'
@@ -42,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     --repo-root|-RepoRoot) [[ $# -ge 2 ]] || { usage; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
     --spec|-Spec) [[ $# -ge 2 ]] || { usage; exit 2; }; SPEC="$2"; shift 2 ;;
     --path|-Path) [[ $# -ge 2 ]] || { usage; exit 2; }; WS_PATH="$2"; shift 2 ;;
-    --scope|-Scope) [[ $# -ge 2 ]] || { usage; exit 2; }; SCOPE="$2"; shift 2 ;;
+    --scope|-Scope) [[ $# -ge 2 ]] || { usage; exit 2; }; SCOPE="$2"; SCOPE_GIVEN=1; shift 2 ;;
     --json|-Json) JSON=1; shift ;;
     --fast|-Fast) FAST=1; shift ;;
     --require|-Require) REQUIRE=1; shift ;;
@@ -749,7 +750,19 @@ check_secrets() {
   if have gitleaks; then
     local report="$ART/gitleaks.json" newcli=0 nrep ntop nws
     local -a glcfg=(); local glroot="${GIT_TOP:-$REPO_ROOT}"
-    if [[ -n "$glroot" && -f "$glroot/.gitleaks.toml" ]]; then glcfg=(-c "$(native_path "$glroot/.gitleaks.toml")"); fi
+    if [[ -n "$glroot" && -f "$glroot/.gitleaks.toml" ]]; then glcfg=(-c "$(native_path "$glroot/.gitleaks.toml")")
+    elif [[ $mode == staged ]]; then
+      # Pre-commit scan: a freshly staged lockfile is megabytes of generated hashes and made every commit wait
+      # minutes. Skip lockfiles here; the full quality gate still scans them.
+      cat > "$ART/gitleaks-fast.toml" <<'GLTOML'
+[extend]
+useDefault = true
+[allowlist]
+description = "KCC fast (pre-commit) scan: lockfiles are generated, skip them"
+paths = ['''(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|poetry\.lock|Pipfile\.lock|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock)$''']
+GLTOML
+      glcfg=(-c "$(native_path "$ART/gitleaks-fast.toml")")
+    fi
     nrep="$(native_path "$report")"; nws="$(native_path "$WS")"
     gitleaks dir --help >/dev/null 2>&1 && newcli=1
     if [[ $mode == staged ]]; then

@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: technical-interrogator
 description: >
- Interrogate the human about technical decisions, architecture depth, and candidate dialects before spec creation, then produce a TechnicalDecisionBrief for the architect. Usage: /technical-interrogator <idea-folder or spec request>
+ Interrogate the human about technical decisions, architecture depth, and candidate dialects before spec creation, then produce a TechnicalDecisionBrief for the architect. Usage: /technical-interrogator <idea-folder or spec request> [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - technical-interrogator
@@ -29,6 +29,10 @@ status: active
 # Technical Interrogator
 
 Interrogate technical decisions for: <ARGS>
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: quick mode. Ask 3-5 questions that block architecture or stack choice, assume the rest (never security-class items), and write a short `TechnicalDecisionBrief.md`. Architecture depth defaults to `lite`.
 
 ## Steps
 

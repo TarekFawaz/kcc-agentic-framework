@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: idea-interrogator
 description: >
- Interrogate a raw idea and produce an Obsidian-friendly idea folder with `idea-{ID}-{slug}.md`, linked artifacts, architecture depth, and a spec-writer handoff. Usage: /idea-interrogator <idea>
+ Interrogate a raw idea and produce an Obsidian-friendly idea folder with `idea-{ID}-{slug}.md`, linked artifacts, architecture depth, and a spec-writer handoff. Usage: /idea-interrogator <idea> [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - idea-interrogator
@@ -49,6 +49,10 @@ stop for prohibited assumptions (legal, security, privacy, compliance, data
 sensitivity, authentication/authorization, destructive actions, external
 spend, production-impacting decisions) or any confidence below the configured
 threshold (95% default).
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack` (set by `auto --fasttrack`): lite mode. Ask at most 5 blocking questions. Write only the idea file (keep `## Reasoning` and `## Phases`), a short `Research.md`, `QuickRoadmap.md`, and `SpecWriterStarter.md`. Skip Questionnaire, HumanAnswers, ROI, Conclusion, the upfront budget and effort estimate. No butler, trace, token-guard, or token estimate.
 
 ## Steps
 

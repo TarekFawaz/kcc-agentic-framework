@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -83,3 +83,34 @@ export function runTool(root: string, name: string, args: string[], opts: ToolOp
   if (r.error) return { status: 2, stdout: "", stderr: `kcc: could not start ${name}: ${r.error.message}` };
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
+
+/** Like runTool, but does not block, so several tools (one per lane) can run at the same time. */
+export function runToolAsync(root: string, name: string, args: string[], opts: ToolOptions = {}): Promise<ToolRun> {
+  const tools = join(root, ".KCC", "tools");
+  const env = { ...process.env, ...opts.env };
+  let cmd: string;
+  let argv: string[];
+  if (isWindows) {
+    const ps = powershellExe();
+    const script = join(tools, `${name}.ps1`);
+    if (!ps) return Promise.resolve({ status: 2, stdout: "", stderr: "kcc: PowerShell was not found on this machine" });
+    if (!existsSync(script)) return Promise.resolve({ status: 2, stdout: "", stderr: `kcc: ${script} not found (run 'kcc init' or 'kcc upgrade')` });
+    cmd = ps;
+    argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...toPowerShellArgs(args)];
+  } else {
+    const script = join(tools, `${name}.sh`);
+    if (!existsSync(script)) return Promise.resolve({ status: 2, stdout: "", stderr: `kcc: ${script} not found (run 'kcc init' or 'kcc upgrade')` });
+    cmd = "bash";
+    argv = [script, ...toBashArgs(args)];
+  }
+  return new Promise((done) => {
+    const child = spawn(cmd, argv, { cwd: root, env, stdio: ["ignore", opts.capture === false ? "inherit" : "pipe", opts.capture === false ? "inherit" : "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (c: Buffer) => { stdout += c.toString("utf8"); });
+    child.stderr?.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
+    child.on("error", (e) => done({ status: 2, stdout, stderr: `kcc: could not start ${name}: ${e.message}` }));
+    child.on("close", (code) => done({ status: code ?? 1, stdout, stderr }));
+  });
+}
+

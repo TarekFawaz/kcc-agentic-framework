@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-test
 description: >
- Verify a v6 spec implementation against spec ACs, backlog item ACs (under `Backlog/`), the planner's atomic test cases, `check-traceability`, and `quality-gate`. Usage: /spec-test SPEC-003
+ Verify a v6 spec implementation against spec ACs, backlog item ACs (under `Backlog/`), the planner's atomic test cases, `check-traceability`, and `quality-gate`. Usage: /spec-test SPEC-003 [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - verifier
@@ -26,6 +26,10 @@ status: active
 # Spec Test
 
 Verify implementation of spec <ARGS>.
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: no butler, trace, or token-guard. `quality-gate` runs its full scope, as in a full run (production gates are never lighter); traceability, the ACs, and QG-PROD are checked in full.
 
 ## Steps
 

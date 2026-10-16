@@ -13,6 +13,8 @@ interface PatternFile {
 
 export interface LimitPatterns {
   regex: RegExp;
+  /** Only the harness's own limit notice: the one check applied when the harness exited 0. */
+  harnessRegex?: RegExp;
   /** JSON keys that mark a rate-limit event in a harness's structured output. */
   structuredKeys: string[];
 }
@@ -22,8 +24,10 @@ export function loadPatterns(root: string, harness: string): LimitPatterns {
   const parts = [file["limit_regex.default"], file[`limit_regex.${harness}`]].filter((p): p is string => typeof p === "string" && p !== "");
   const source = parts.length ? parts.join("|") : DEFAULT_LIMIT_REGEX;
   const keys = file["structured_keys"];
+  const own = file[`limit_regex.${harness}`];
   return {
     regex: new RegExp(source, "i"),
+    harnessRegex: typeof own === "string" && own ? new RegExp(own, "i") : undefined,
     structuredKeys: Array.isArray(keys) ? keys.map(String) : ["usage_limit_reached", "rate_limit_error", "rate_limits", "rate_limit", "resets_at", "reset_at", "retry_after", "usage_limit"],
   };
 }
@@ -144,8 +148,15 @@ export function detectLimit(lines: string[], exitCode: number, patterns: LimitPa
   }
   if (!hit.hit) {
     const text = tail.slice(-60).join("\n");
-    if (patterns.regex.test(text)) hit = { hit: true, source: "pattern" };
-    else if (exitCode !== 0 && /(^|[^0-9])429([^0-9]|$)/.test(text)) hit = { hit: true, source: "status" };
+    if (exitCode !== 0) {
+      if (patterns.regex.test(text)) hit = { hit: true, source: "pattern" };
+      else if (/(^|[^0-9])429([^0-9]|$)/.test(text)) hit = { hit: true, source: "status" };
+    } else {
+      // A session that exited 0 finished its turn: prose such as "rate-limit values are assumptions" is not
+      // a limit. Only the harness's own notice on the final lines counts.
+      const last = tail.filter((l) => l.trim()).slice(-3).join("\n");
+      if (patterns.harnessRegex?.test(last)) hit = { hit: true, source: "pattern" };
+    }
   }
   if (hit.hit) {
     for (let i = tail.length - 1; i >= 0 && hit.resetsAt === undefined; i--) hit.resetsAt = parseReset(tail[i] ?? "", now);

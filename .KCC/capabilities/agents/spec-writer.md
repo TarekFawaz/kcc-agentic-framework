@@ -2,7 +2,7 @@
 # Functional fields
 name: spec-writer
 role: spec author
-model-class: strong-reasoning
+model-class: balanced
 confidence-gate: required
 effort: high
 description: >
@@ -32,7 +32,7 @@ aliases:
 tags:
   - framework/agent
   - lifecycle/create
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-24
 updated: 2026-09-21
 version: 5.0.0
@@ -119,6 +119,10 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
 14. **Self-check.** Run `.KCC/tools/check-run-conformance -Scope specs`;
     fix every `fix_owner: spec-writer` error before returning.
 15. **Confidence** below threshold: stop before planning or fan-out.
+
+## Fast track and depth
+
+Length caps (`.KCC/settings.json` -> `spec_sizing`): spec <= `max_spec_lines` (SZ-5), each Backlog item <= `max_backlog_item_lines` (SZ-6). At a lower `depthlevel` aim lower (`.KCC/kernel/protocols/depth-levels.md`) but keep every required section and AC. Under `fasttrack`: stay within the spec budget the human approved (default `spec_sizing.max_specs_fasttrack`, 5); SPEC-001 is a walking skeleton that runs end to end, each later spec a user-visible feature on top of it (never a horizontal layer such as "all the UI"); no Token Plan, no butler or token-guard; ROADMAP stays and `arch.md` is a short skeleton. For a deployable, service, or API spec add acceptance criteria for production readiness (QG-PROD: health or readiness check, structured logs without secrets, configuration from the environment, timeouts and graceful shutdown, a rollback path); `n/a` needs a one-line reason.
 
 ## Constraints
 

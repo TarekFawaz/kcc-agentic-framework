@@ -13,21 +13,24 @@
 # Usage:
 #   kcc-run.sh --input "<idea|path|IDEA-ID|SPEC-ID|all>" [--silent --assume]
 #              [--accuracy NN] [--budget NN --currency USD] [--parallel]
+#              [--fasttrack] [--depthlevel 1-5] [--open-dashboard | --no-open-dashboard]
 #              [--harness claude|codex|opencode|generic] [--resume]
-#              [--answer <choice>] [--from <stateId>] [--only <stateId>]
+#              [--answer <choice>] [--from <stateId>] [--only <stateId>] [--until <stateId>]
 #              [--dry-run] [--json] [--max-attempts N] [--repo-root PATH]
 #              [--remote-url URL] [--note "text"]
 #
-# Exit: 0 done / dry-run / --only finished, 2 usage or environment error,
+# --until <id> stops after that state has finished for every spec and wave (status stopped,
+# reason "until <id>"; --resume continues). Used to hand the per-spec states to `kcc lanes`.
+# Exit: 0 done / dry-run / --only / --until finished, 2 usage or environment error,
 #       4 paused at a human gate, 5 suspended (usage limit), 6 stopped/aborted.
 # Requires bash 3.2+, awk, sed, grep. No python/jq.
 set -euo pipefail
 
 VERSION="1.0.0"
-IN_TEXT=""; SILENT=0; ASSUME=0; ACC=""; BUDGET=""; CURRENCY=""; PARALLEL=0; HARNESS_ARG=""
-RESUME=0; ANSWER=""; FROM=""; ONLY=""; DRY=0; JSON=0; MAXATT=0; REPO_ROOT=""; REMOTE_URL=""; NOTE=""
+IN_TEXT=""; SILENT=0; ASSUME=0; ACC=""; BUDGET=""; CURRENCY=""; PARALLEL=0; FASTTRACK=0; OPEN_DASH=0; NO_OPEN_DASH=0; DEPTH=""; HARNESS_ARG=""
+RESUME=0; ANSWER=""; FROM=""; ONLY=""; UNTIL=""; DRY=0; JSON=0; MAXATT=0; REPO_ROOT=""; REMOTE_URL=""; NOTE=""
 
-usage() { sed -n '14,23p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '14,25p' "$0" | sed 's/^# \{0,1\}//'; }
 fail_usage() { echo "kcc-run: $1" >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,11 +41,16 @@ while [[ $# -gt 0 ]]; do
     --budget|-Budget) BUDGET="${2:-}"; shift 2 ;;
     --currency|-Currency) CURRENCY="${2:-}"; shift 2 ;;
     --parallel|--parralel|-Parallel) PARALLEL=1; shift ;;
+    --fasttrack|--fasttarck|-Fasttrack) FASTTRACK=1; shift ;;
+    --open-dashboard|-OpenDashboard) OPEN_DASH=1; shift ;;
+    --no-open-dashboard|-NoOpenDashboard) NO_OPEN_DASH=1; shift ;;
+    --depthlevel|-DepthLevel) DEPTH="${2:-}"; shift 2 ;;
     --harness|-Harness) HARNESS_ARG="${2:-}"; shift 2 ;;
     --resume|-Resume) RESUME=1; shift ;;
     --answer|-Answer) ANSWER="${2:-}"; shift 2 ;;
     --from|-From) FROM="${2:-}"; shift 2 ;;
     --only|-Only) ONLY="${2:-}"; shift 2 ;;
+    --until|-Until) UNTIL="${2:-}"; shift 2 ;;
     --dry-run|-DryRun) DRY=1; shift ;;
     --json|-Json) JSON=1; shift ;;
     --max-attempts|-MaxAttempts) MAXATT="${2:-}"; shift 2 ;;
@@ -59,8 +67,10 @@ ACC="${ACC%\%}"
 if [[ -n "$ACC" && ! "$ACC" =~ ^[0-9]{1,3}$ ]]; then fail_usage "--accuracy must be a percentage (e.g. 95)"; fi
 if [[ -n "$BUDGET" && ! "$BUDGET" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then fail_usage "--budget must be a number"; fi
 case "$HARNESS_ARG" in ""|claude|codex|opencode|generic) ;; *) fail_usage "--harness must be claude|codex|opencode|generic" ;; esac
+if [[ -n "$DEPTH" && ! "$DEPTH" =~ ^[1-5]$ ]]; then fail_usage "--depthlevel must be 1-5"; fi
 if [[ -n "$FROM" && ! "$FROM" =~ ^[0-9]+$ ]]; then fail_usage "--from must be a state id"; fi
 if [[ -n "$ONLY" && ! "$ONLY" =~ ^[0-9]+$ ]]; then fail_usage "--only must be a state id"; fi
+if [[ -n "$UNTIL" && ! "$UNTIL" =~ ^[0-9]+$ ]]; then fail_usage "--until must be a state id"; fi
 if [[ ! "$MAXATT" =~ ^[0-9]+$ ]]; then fail_usage "--max-attempts must be >= 1"; fi
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -72,6 +82,11 @@ TOOLS="$ROOT/.KCC/tools"
 STATES_JSON="$ROOT/.KCC/kernel/auto-states.json"
 [[ -f "$STATES_JSON" ]] || fail_usage "state table not found: $STATES_JSON"
 COORD="$ROOT/coordination"; RUN_DIR="$COORD/run"; RUN_FILE="$RUN_DIR/run.json"; LOG_DIR="$RUN_DIR/logs"; GATE_DIR="$COORD/gates"
+# --fasttrack has its own lifecycle table (a running app first, no ROI/CONFIRM/ARCH-GATE/BUDGET/WINDOWS states);
+# a resumed fast-track run keeps it.
+FT_TABLE=$FASTTRACK
+if [[ $FT_TABLE -eq 0 && -f "$RUN_FILE" ]] && grep -qE '"fasttrack"[[:space:]]*:[[:space:]]*"1"' "$RUN_FILE"; then FT_TABLE=1; fi
+if [[ $FT_TABLE -eq 1 && -f "$ROOT/.KCC/kernel/auto-states-fasttrack.json" ]]; then STATES_JSON="$ROOT/.KCC/kernel/auto-states-fasttrack.json"; fi
 
 say() { if [[ "$JSON" -eq 1 ]]; then printf '%s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
 iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -131,11 +146,12 @@ $1 ~ /^states\.[0-9]+\./ {
   if(r ~ /\.#$/) next
   if(r=="id") ID[i]=v; else if(r=="name") NM[i]=v; else if(r=="scope") SC[i]=v; else if(r=="command") CM[i]=v
   else if(r=="check.tool") CT[i]=v; else if(r ~ /^check\.args\./) app(CA,i,v,"\037"); else if(r=="check.path") CP[i]=v
+  else if(r ~ /^check\.paths\./) app(CPS,i,v,"\037"); else if(r=="check.any") CANY[i]=v
   else if(r=="check.pass_when") PW[i]=v; else if(r=="check.min_pct") MN[i]=v; else if(r=="check.expect") EX[i]=v
-  else if(r=="check.then.tool") TT[i]=v; else if(r ~ /^check\.then\.args\./) app(TA,i,v,"\037")
+  else if(r=="agent_fasttrack") AGF[i]=v; else if(r=="check.then.tool") TT[i]=v; else if(r=="check.then.then.tool") TU[i]=v; else if(r ~ /^check\.then\.args\./) app(TA,i,v,"\037")
   else if(r ~ /^gate\./){ g=r; sub(/^gate\./,"",g); if(g=="S1") G1[i]=v; else if(g=="S2") G2[i]=v; else if(g=="S3") G3[i]=v; else if(g=="all") GA[i]=v }
   else if(r ~ /^interactive_in\./) app(IN,i,v," "); else if(r ~ /^only_in\./) app(ON,i,v," ")
-  else if(r=="skip_if_flag") SK[i]=v; else if(r=="event") EV[i]=v; else if(r=="on_fail_goto") GO[i]=v; else if(r=="checkpoint") CK[i]=v
+  else if(r=="skip_if_flag" || r ~ /^skip_if_flag\./) app(SK,i,v," "); else if(r=="command_fasttrack") CF[i]=v; else if(r=="precheck_requires") PR[i]=v; else if(r=="event") EV[i]=v; else if(r=="on_fail_goto") GO[i]=v; else if(r=="checkpoint") CK[i]=v
   next }
 $1 ~ /^gates\.[^.]+\.[0-9]+$/ { g=$1; sub(/^gates\./,"",g); sub(/\.[0-9]+$/,"",g); if(!(g in GI)){ GI[g]=ng; GN[ng]=g; ng++ }; app(GV,GI[g],$2,"/"); next }
 BEGIN { ng=0; mx=-1 }
@@ -143,8 +159,8 @@ $1=="max_attempts" { print "SM_MAX=" q($2) }
 END{
   print "S_COUNT=" (mx+1); print "G_COUNT=" ng+0
   for(i=0;i<=mx;i++){
-    printf "S_ID[%d]=%s; S_NAME[%d]=%s; S_SCOPE[%d]=%s; S_CMD[%d]=%s; S_CT[%d]=%s; S_CA[%d]=%s; S_CP[%d]=%s; S_PW[%d]=%s; S_MIN[%d]=%s; S_EXP[%d]=%s\n", i,q(ID[i]),i,q(NM[i]),i,q(SC[i]),i,q(CM[i]),i,q(CT[i]),i,q(CA[i]),i,q(CP[i]),i,q(PW[i]),i,q(MN[i]),i,q(EX[i])
-    printf "S_TT[%d]=%s; S_TA[%d]=%s; S_G1[%d]=%s; S_G2[%d]=%s; S_G3[%d]=%s; S_GA[%d]=%s; S_INT[%d]=%s; S_ONLY[%d]=%s; S_SKIP[%d]=%s; S_EV[%d]=%s; S_GOTO[%d]=%s; S_CK[%d]=%s\n", i,q(TT[i]),i,q(TA[i]),i,q(G1[i]),i,q(G2[i]),i,q(G3[i]),i,q(GA[i]),i,q(IN[i]),i,q(ON[i]),i,q(SK[i]),i,q(EV[i]),i,q(GO[i]),i,q(CK[i])
+    printf "S_ID[%d]=%s; S_NAME[%d]=%s; S_SCOPE[%d]=%s; S_CMD[%d]=%s; S_CT[%d]=%s; S_CA[%d]=%s; S_CP[%d]=%s; S_PW[%d]=%s; S_MIN[%d]=%s; S_EXP[%d]=%s; S_CPS[%d]=%s; S_CANY[%d]=%s\n", i,q(ID[i]),i,q(NM[i]),i,q(SC[i]),i,q(CM[i]),i,q(CT[i]),i,q(CA[i]),i,q(CP[i]),i,q(PW[i]),i,q(MN[i]),i,q(EX[i]),i,q(CPS[i]),i,q(CANY[i])
+    printf "S_TT[%d]=%s; S_TA[%d]=%s; S_G1[%d]=%s; S_G2[%d]=%s; S_G3[%d]=%s; S_GA[%d]=%s; S_INT[%d]=%s; S_ONLY[%d]=%s; S_SKIP[%d]=%s; S_EV[%d]=%s; S_GOTO[%d]=%s; S_CK[%d]=%s; S_CF[%d]=%s; S_PR[%d]=%s; S_TU[%d]=%s; S_AGF[%d]=%s\n", i,q(TT[i]),i,q(TA[i]),i,q(G1[i]),i,q(G2[i]),i,q(G3[i]),i,q(GA[i]),i,q(IN[i]),i,q(ON[i]),i,q(SK[i]),i,q(EV[i]),i,q(GO[i]),i,q(CK[i]),i,q(CF[i]),i,q(PR[i]),i,q(TU[i]),i,q(AGF[i])
   }
   for(j=0;j<ng;j++) printf "GATE_N[%d]=%s; GATE_A[%d]=%s\n", j, q(GN[j]), j, q(GV[j])
 }' <<< "$STATES_FLAT")"
@@ -167,11 +183,11 @@ if [[ "$MAXATT" -gt 0 ]]; then CFG_MAX="$MAXATT"; fi
 CFG_TIMEOUT="$(setting run.state_timeout_minutes 60)"; [[ "$CFG_TIMEOUT" =~ ^[0-9]+$ && "$CFG_TIMEOUT" -ge 1 ]] || CFG_TIMEOUT=60
 
 # ---- run.json -------------------------------------------------------------------------------
-RUN_KEYS="schema status reason created updated harness input input_class scenario silent assume accuracy budget currency parallel sequential idea ideas_before specs state spec_index wave attempts force pending_action gate_id gate_name gate_kind gate_answers gate_state gate_spec gate_wave gate_event last_log last_violations note"
+RUN_KEYS="schema status reason created updated harness input input_class scenario silent assume accuracy budget currency parallel fasttrack depthlevel dashboard_opened sequential idea ideas_before specs state spec_index wave attempts force pending_action gate_id gate_name gate_kind gate_answers gate_state gate_spec gate_wave gate_event last_log last_violations note until"
 new_run() {
   local k; for k in $RUN_KEYS; do eval "R_$k=''"; done
   R_schema="kcc-run/1"; R_status="running"; R_created="$(iso)"; R_scenario="S1"; R_silent=0; R_assume=0
-  R_accuracy=95; R_currency="USD"; R_parallel=0; R_sequential=0; R_state=0; R_spec_index=0
+  R_accuracy=95; R_currency="USD"; R_parallel=0; R_fasttrack=0; R_depthlevel=5; R_sequential=0; R_state=0; R_spec_index=0
 }
 load_run() {
   new_run
@@ -270,6 +286,22 @@ derived_tools() {
   if printf '%s' "$txt" | grep -q 'devops-k8s-onprem-agnostic'; then addt terraform,kubectl,helm; fi
   if printf '%s' "$txt" | grep -Eq '(^|[^a-z])pnpm([^a-z]|$)'; then addt pnpm; fi
   addt git
+  # plan.md '## Toolchain' rows '| node | >=20 |' pin a major version: the preflight checks node@>=20.
+  local pf tool cons spec
+  pf="$(spec_dir "$e")/plan.md"
+  if [[ -f "$pf" ]]; then
+    while IFS=$'\t' read -r tool cons; do
+      [[ -n "$tool" ]] || continue
+      spec="$tool@$cons"
+      # Only tools the stack already needs get a version ('| typescript | ^5.5 |' is a package, not a command).
+      case ",$out," in
+        *",$tool,"*) out="$(printf ',%s,' "$out" | sed "s|,$tool,|,$spec,|; s|^,||; s|,\$||")" ;;
+      esac
+    done < <(awk '/^##[ \t]/{ins = tolower($0) ~ /^##[ \t]+toolchain/; next} ins && /^\|/ {
+        n = split($0, c, "|"); t = c[2]; v = c[3]; gsub(/[ \t`]/, "", t); gsub(/[ \t`]/, "", v)
+        t = tolower(t); if (t !~ /^[a-z][a-z0-9._-]*$/) next
+        if (match(v, /^(>=|<=|>|<|=)?[0-9]+((>=|<=|>|<)[0-9]+)?/)) print t "\t" substr(v, RSTART, RLENGTH) }' "$pf" | tr -d '\r')
+  fi
   printf '%s' "$out"
 }
 
@@ -277,15 +309,31 @@ derived_tools() {
 C_IDEA=""; C_SPEC=""; C_ENTRY=""; C_WAVE=""
 new_ctx() { C_ENTRY="$1"; C_WAVE="$2"; C_IDEA="$R_idea"; C_SPEC=""; if [[ -n "$1" ]]; then C_IDEA="${1%%/*}"; C_SPEC="$(spec_id "${1#*/}")"; fi; }
 render() {
-  local t="$1" sa="" par="" tools=""
+  local t="$1" sa="" par="" ft="" dl="" tools=""
   if [[ "$R_scenario" != "S1" ]]; then sa="--silent --assume"; fi
   if [[ "$R_parallel" == "1" ]]; then par="--parallel"; fi
+  if [[ "$R_fasttrack" == "1" ]]; then ft="--fasttrack"; fi
+  if [[ "$R_depthlevel" =~ ^[1-4]$ ]]; then dl="--depthlevel $R_depthlevel"; fi
   if [[ "$t" == *"{TOOLS}"* ]]; then if [[ -n "$C_ENTRY" ]]; then tools="$(derived_tools "$C_ENTRY")"; else tools=git; fi; fi
   t="${t//\{input\}/"$R_input"}"; t="${t//\{IDEA\}/"$C_IDEA"}"; t="${t//\{SPEC\}/"$C_SPEC"}"; t="${t//\{WAVE\}/"$C_WAVE"}"; t="${t//\{ITEM\}/}"
-  t="${t//\{silent_assume\}/"$sa"}"; t="${t//\{parallel\}/"$par"}"; t="${t//\{flags\}/"$sa $par"}"; t="${t//\{TOOLS\}/"$tools"}"
+  t="${t//\{silent_assume\}/"$sa"}"; t="${t//\{parallel\}/"$par"}"; t="${t//\{fasttrack\}/"$ft"}"; t="${t//\{depthlevel\}/"$dl"}"; t="${t//\{flags\}/"$sa $par $ft $dl"}"; t="${t//\{TOOLS\}/"$tools"}"
   while [[ "$t" == *"  "* ]]; do t="${t//  / }"; done
   t="${t# }"; t="${t% }"
   printf '%s' "$t"
+}
+precheck_ready() { # $1 = idx; a state with precheck_requires counts as done only when that artifact exists
+  [[ -n "${S_PR[$1]}" ]] || return 0
+  [[ -e "$ROOT/$(render "${S_PR[$1]}")" ]]
+}
+state_cmd() { # $1 = idx -> command text (fasttrack variant when set)
+  if [[ "$R_fasttrack" == "1" && -n "${S_CF[$1]}" ]]; then printf '%s' "${S_CF[$1]}"; else printf '%s' "${S_CMD[$1]}"; fi
+}
+skip_flag() { # $1 = idx -> the flag that skips this state, or empty
+  local f; for f in ${S_SKIP[$1]}; do
+    if [[ "$f" == "parallel" && "$R_parallel" == "1" ]]; then echo "--parallel"; return 0; fi
+    if [[ "$f" == "fasttrack" && "$R_fasttrack" == "1" ]]; then echo "--fasttrack"; return 0; fi
+  done
+  return 0
 }
 gate_name() { # $1 = idx
   local n=""
@@ -368,17 +416,30 @@ check_desc() { # $1 idx, $2 = "then" for the then-check
   s="$tool"
   if [[ -n "$args" ]]; then s="$s $(render "$(printf '%s' "$args" | tr '\037' ' ')")"; fi
   if [[ "${2:-}" != "then" && -n "${S_CP[$i]}" ]]; then s="$s $(render "${S_CP[$i]}")"; fi
+  if [[ "${2:-}" != "then" && -n "${S_CPS[$i]:-}" ]]; then s="$s $(render "$(printf '%s' "${S_CPS[$i]}" | tr '\037' ',')")"; [[ "${S_CANY[$i]:-}" == "true" ]] && s="$s [any]"; fi
   if [[ "${2:-}" != "then" && -n "${S_PW[$i]}" ]]; then s="$s [pass_when ${S_PW[$i]}]"; fi
   if [[ "${2:-}" != "then" && -n "${S_TT[$i]}" ]]; then s="$s THEN $(check_desc "$i" then)"; fi
+  if [[ "${2:-}" == "then" && -n "${S_TU[$i]:-}" ]]; then s="$s THEN ${S_TU[$i]}"; fi
   printf '%s' "$s"
 }
 LAST_HARNESS_RC=-1
 CHK_RC=0; CHK_VIOL=""
 run_check() { # $1 idx, $2 label, $3 = "then"
   local i="$1" label="$2" tool args
-  if [[ "${3:-}" == "then" ]]; then tool="${S_TT[$i]}"; args="${S_TA[$i]}"; else tool="${S_CT[$i]}"; args="${S_CA[$i]}"; fi
+  if [[ "${3:-}" == "then2" ]]; then tool="${S_TU[$i]}"; args=""
+  elif [[ "${3:-}" == "then" ]]; then tool="${S_TT[$i]}"; args="${S_TA[$i]}"; else tool="${S_CT[$i]}"; args="${S_CA[$i]}"; fi
   CHK_VIOL=""
   case "$tool" in
+    internal:review-verdict)
+      local rf rv=""
+      rf="$(spec_dir "$C_ENTRY")/review.md"
+      if [[ -z "$C_ENTRY" || ! -f "$rf" ]]; then CHK_RC=1; CHK_VIOL="REVIEW-001 (verifier): review.md not found for $C_SPEC"; return 0; fi
+      rv="$(tr -d '\r' < "$rf" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z')"
+      if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED' "$rf" | head -n 1 | tr 'a-z' 'A-Z' || true)"; fi
+      if [[ "$rv" == "APPROVED" ]]; then CHK_RC=0
+      elif [[ "$rv" == "TOOLCHAIN_DEFERRED" ]]; then CHK_RC=3; CHK_VIOL="REVIEW-003 (human): review verdict TOOLCHAIN_DEFERRED (a required scanner is missing); this is not a pass"
+      else CHK_RC=1; CHK_VIOL="REVIEW-002 (implementer): $C_SPEC review verdict is ${rv:-missing}; fix the open bugs and failing acceptance criteria listed in review.md, then re-review"; fi
+      return 0 ;;
     internal:roi-confidence)
       local f="$ROOT/ideation/$C_IDEA/ROI.md" min="${S_MIN[$i]:-60}" pct=""
       if [[ -n "$C_IDEA" && -f "$f" ]]; then
@@ -396,6 +457,17 @@ run_check() { # $1 idx, $2 label, $3 = "then"
     internal:agent-report)
       if [[ "$LAST_HARNESS_RC" == "0" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="AGENT-001 (agent): harness exited $LAST_HARNESS_RC; expected: ${S_EXP[$i]}"; fi
       return 0 ;;
+    internal:files-exist)
+      local fp fpp fcnt=0 fok=0 fmiss="" fall=""
+      while IFS= read -r fp; do
+        [[ -n "$fp" ]] || continue
+        fcnt=$((fcnt + 1)); fpp="$(render "$fp")"; fall="${fall:+$fall, }$fpp"
+        if [[ -e "$ROOT/$fpp" ]]; then fok=$((fok + 1)); else fmiss="${fmiss:+$fmiss, }$fpp"; fi
+      done < <(printf '%s' "${S_CPS[$i]:-}" | tr '\037' '\n')
+      if [[ $fcnt -eq 0 ]]; then CHK_RC=2; CHK_VIOL="FILE-000: internal:files-exist needs a paths list"
+      elif [[ "${S_CANY[$i]:-}" == "true" ]]; then if [[ $fok -gt 0 ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-002 (agent): none of $fall exists"; fi
+      elif [[ -z "$fmiss" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-001 (agent): missing $fmiss"; fi
+      return 0 ;;
   esac
   local targs=() x has_json=0
   if [[ -n "$args" ]]; then
@@ -409,7 +481,7 @@ run_check() { # $1 idx, $2 label, $3 = "then"
   CHK_RC=$TOOL_RC
   local flat=""
   if grep -q '{' "$out" 2>/dev/null; then flat="$(sed -n '/{/,$p' "$out" | json_flat 2>/dev/null || true)"; fi
-  if [[ -n "${S_PW[$i]}" && "${3:-}" != "then" && $CHK_RC -ne 2 ]]; then
+  if [[ -n "${S_PW[$i]}" && -z "${3:-}" && $CHK_RC -ne 2 ]]; then
     if pass_when "${S_PW[$i]}" "$flat"; then CHK_RC=0; elif [[ $CHK_RC -eq 0 ]]; then CHK_RC=1; fi
   fi
   CHK_VIOL="$(format_violations "$flat")"
@@ -417,7 +489,10 @@ run_check() { # $1 idx, $2 label, $3 = "then"
     CHK_VIOL="$tool exited $CHK_RC (output: $(rel "$out"))"
     if [[ "$tool" == "repo-bootstrap" && -n "$flat" ]]; then CHK_VIOL="RB-GATE (human): git $(flat_get "$flat" git), commits $(flat_get "$flat" commits), decision $(flat_get "$flat" decision)"; fi
   fi
-  if [[ $CHK_RC -eq 0 && "${3:-}" != "then" && -n "${S_TT[$i]}" ]]; then run_check "$i" "$label" then; fi
+  if [[ $CHK_RC -eq 0 ]]; then
+    if [[ -z "${3:-}" && -n "${S_TT[$i]}" ]]; then run_check "$i" "$label" then
+    elif [[ "${3:-}" == "then" && -n "${S_TU[$i]}" ]]; then run_check "$i" "$label" then2; fi
+  fi
   return 0
 }
 
@@ -435,10 +510,20 @@ limit_re() { # $1 harness
   else printf '%s' "$LIMIT_RE_BUILTIN"; fi
 }
 limit_hit() { # $1 log, $2 rc
-  local t; t="$(tail -n 60 "$1" 2>/dev/null | tr 'A-Z' 'a-z' || true)"
-  if printf '%s' "$t" | grep -Eq "$(limit_re "$HARNESS")"; then return 0; fi
-  if [[ "$2" != "0" ]] && printf '%s' "$t" | grep -Eq '(^|[^0-9])429([^0-9]|$)'; then return 0; fi
-  return 1
+  local t h f
+  if [[ "$2" != "0" ]]; then
+    t="$(tail -n 60 "$1" 2>/dev/null | tr 'A-Z' 'a-z' || true)"
+    if printf '%s' "$t" | grep -Eq "$(limit_re "$HARNESS")"; then return 0; fi
+    if printf '%s' "$t" | grep -Eq '(^|[^0-9])429([^0-9]|$)'; then return 0; fi
+    return 1
+  fi
+  # Exit 0: the session finished its turn, so prose such as "rate-limit values are assumptions" is not
+  # a limit. Only the harness's own limit notice on the final lines counts.
+  f="$ROOT/.KCC/kernel/limit-patterns.json"; h=""
+  if [[ -f "$f" ]]; then h="$(tr -d '\r' < "$f" | sed -n 's/^ *"limit_regex\.'"$HARNESS"'": *"\(.*\)",\{0,1\} *$/\1/p' | head -n 1)"; fi
+  [[ -n "$h" ]] || return 1
+  t="$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 3 | tr 'A-Z' 'a-z' || true)"
+  printf '%s' "$t" | grep -Eq "$h"
 }
 reset_epoch() { # $1 log -> epoch or empty
   local r
@@ -462,11 +547,75 @@ reset_epoch() { # $1 log -> epoch or empty
 }
 test_bypass() { local l; l="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"; case "$l" in *dangerously-skip*|*dangerously-bypass*|*bypasspermissions*|*--yolo*) return 0 ;; esac; if printf '%s' "$l" | grep -Eq 'permission-mode[[:space:]]+bypass'; then return 0; fi; return 1; }
 sanitize_prompt() { printf '%s' "$1" | tr '\r\n\t' '   ' | sed -e "s/\"/'/g" -e "s/\`/'/g" -e 's/\$//g' -e 's/%/ pct/g' -e 's/!/./g' -e 's#\\#/#g' | tr -s ' ' | sed 's/^ //; s/ $//'; }
+# ---- fasttrack worker states run AS the agent (`claude --agent`): no orchestrator session above them ----
+HARNESS_EXTRA=""
+wave_complexity() { # entry wave -> low|medium|high|extra-high or empty (highest in the wave)
+  local pf; pf="$(spec_dir "$1")/plan.md"
+  [[ -f "$pf" ]] || return 0
+  tr -d '\r' < "$pf" | awk -v wave="$2" '
+    function rank(c) { return c == "extra-high" ? 4 : c == "high" ? 3 : c == "medium" ? 2 : c == "low" ? 1 : 0 }
+    /^[ \t]*\|/ {
+      line = $0; sub(/^[ \t]*\|/, "", line); sub(/\|[ \t]*$/, "", line); m = split(line, C, "|")
+      if (!hdr) { for (i = 1; i <= m; i++) { h = tolower(C[i]); gsub(/^[ \t]+|[ \t]+$/, "", h); if (h == "wave") wi = i; if (h == "complexity") ci = i } if (wi && ci) hdr = 1; else { wi = 0; ci = 0 } next }
+      if (line ~ /^[ \t:|-]+$/) next
+      w = C[wi]; gsub(/^[ \t]+|[ \t]+$/, "", w); c = tolower(C[ci]); gsub(/^[ \t]+|[ \t]+$/, "", c)
+      if (w == wave && rank(c) > rank(best)) best = c
+      next }
+    { if (hdr) exit }
+    END { print best }'
+}
+resolve_claude_model() { # bare aliases -> pinned 5.5 IDs (`haiku` can still mean Haiku 4.5, which has no auto mode)
+  case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+    haiku) echo "claude-haiku-5-5" ;;
+    sonnet) echo "claude-sonnet-5-5" ;;
+    opus) echo "claude-opus-5-5" ;;
+    *) echo "$1" ;;
+  esac
+}
+agent_mode() { # idx att -> sets AM_MODE (wrapper|direct|empty) AM_AGENT AM_MODEL AM_WHY AM_WM AM_WE
+  # Under --fasttrack every dispatch still goes through an orchestrator session that spawns the agents as subagents
+  # (spawn protocol), but a cheap one (Haiku, low effort by default). That wrapper is the fallback: worker states run
+  # AS the agent (claude --agent) with no orchestrator above them unless run.fasttrack_direct is false (default true).
+  AM_MODE=""; AM_AGENT=""; AM_MODEL=""; AM_EFFORT=""; AM_WHY=""; AM_WM=""; AM_WE=""
+  [[ "$R_fasttrack" == "1" && "$HARNESS" == "claude" ]] || return 0
+  AM_AGENT="${S_AGF[$1]:-}"
+  local em domain; em="$(resolve_claude_model "$(setting run.escalation_model claude-sonnet-5-5 | tr -cd 'A-Za-z0-9._-')")"
+  # Model routing (protocols/model-routing.md), the subset the driver can read: a novel domain, a high
+  # Complexity wave, or a retry moves the executor one tier up and raises the effort.
+  domain="$(idea_domain "$C_IDEA")"
+  if [[ "$AM_AGENT" == "implementer" ]]; then
+    local cx=""; if [[ -n "$C_ENTRY" && -n "$C_WAVE" ]]; then cx="$(wave_complexity "$C_ENTRY" "$C_WAVE")"; fi
+    if [[ "$cx" == "high" || "$cx" == "extra-high" ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="complexity $cx"
+    elif [[ "$2" -gt 0 ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="retry after a failed exit check"
+    elif [[ "$domain" == "novel" ]]; then AM_MODEL="$em"; AM_EFFORT=high; AM_WHY="novel domain"; fi
+  elif [[ -n "$AM_AGENT" && "$domain" == "novel" && "$2" -eq 0 ]]; then AM_EFFORT=high; AM_WHY="novel domain"
+  elif [[ -n "$AM_AGENT" && "$2" -gt 0 ]]; then AM_EFFORT=high; AM_WHY="retry after a failed exit check"; fi
+  AM_WM="$(resolve_claude_model "$(setting run.orchestrator_model claude-haiku-5-5 | tr -cd 'A-Za-z0-9._-')")"; AM_WE="$(setting run.orchestrator_effort low | tr -cd 'a-z')"
+  AM_MODE=wrapper
+  if [[ "$(setting run.fasttrack_direct true | tr 'A-Z' 'a-z')" != "false" && -n "$AM_AGENT" && -f "$ROOT/.claude/agents/$AM_AGENT.md" ]]; then AM_MODE=direct; fi
+}
+idea_domain() { # Research.md -> '## Domain' (common | specialised | novel)
+  local f="$ROOT/ideation/${1:-}/Research.md" v=""
+  [[ -n "${1:-}" && -f "$f" ]] || { printf ''; return 0; }
+  v="$(tr -d '\r' < "$f" | awk 'BEGIN{IGNORECASE=1} /^##[[:space:]]+Domain/ { if (match($0, /:[[:space:]]*`?(common|specialised|specialized|novel)/)) { print tolower(substr($0, RSTART+1, RLENGTH-1)); exit } f=1; next } f && /[A-Za-z]/ { print tolower($0); exit }' | grep -oE 'common|specialised|specialized|novel' | head -n 1)"
+  [[ "$v" == "specialized" ]] && v=specialised
+  printf '%s' "$v"
+}
+harness_extra() { # after agent_mode
+  if [[ "$AM_MODE" == "direct" ]]; then printf -- '--agent %s%s%s' "$AM_AGENT" "${AM_MODEL:+ --model $AM_MODEL}" "${AM_EFFORT:+ --effort $AM_EFFORT}"
+  elif [[ "$AM_MODE" == "wrapper" ]]; then printf '%s%s' "${AM_WM:+--model $AM_WM}" "${AM_WE:+ --effort $AM_WE}"; fi
+}
+convert_agent_body() { # "/skill args" -> instruction that names the skill file
+  if [[ "$1" =~ ^/([a-z][a-z0-9-]*)[[:space:]]*(.*)$ ]]; then
+    printf 'Do the work of the skill described in .claude/skills/%s/SKILL.md (read it first) with these arguments: %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else printf '%s' "$1"; fi
+}
 harness_cmd() {
   local tpl perm p
   tpl="$(setting "continuity.start.$HARNESS" "")"
   if [[ -z "$tpl" ]]; then return 0; fi
-  perm="$(setting continuity.permission_mode acceptEdits | sed 's/[^A-Za-z]//g')"; [[ -n "$perm" ]] || perm=acceptEdits
+  if [[ -n "$HARNESS_EXTRA" && "$HARNESS" == "claude" ]]; then tpl="$(printf '%s' "$tpl" | sed -E "s/( -p)( )/\\1 $HARNESS_EXTRA\\2/")"; fi
+  perm="$(setting continuity.permission_mode auto | sed 's/[^A-Za-z]//g')"; [[ -n "$perm" ]] || perm=auto
   p="$(sanitize_prompt "$1")"
   tpl="${tpl//\{resume_prompt\}/"$p"}"; tpl="${tpl//\{permission_mode\}/"$perm"}"; tpl="${tpl//\{session_id\}/}"
   printf '%s' "$tpl"
@@ -681,6 +830,55 @@ load_specs() {
   local list; list="$(specs_from_roadmap "$R_idea" | tr '\n' ' ' | sed 's/ *$//')"
   if [[ -n "$list" ]]; then R_specs="$list"; fi
 }
+# ---- dashboard: opened once per run, only with the human's permission -----------------------
+# Permission: --open-dashboard / --no-open-dashboard, else settings dashboard.auto_open (yes | no | ask).
+# `ask` prompts on a terminal and records always/never; with no terminal nothing is opened and a hint is printed.
+save_dashboard_mode() { # yes|no -> settings.json
+  local sp="$ROOT/.KCC/settings.json" t
+  [[ -f "$sp" ]] || return 0
+  t="$(cat "$sp")"
+  if printf '%s' "$t" | grep -q '"auto_open"[[:space:]]*:'; then
+    printf '%s\n' "$t" | sed -E "s/(\"auto_open\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")/\1$1\2/" > "$sp.tmp" && mv -f "$sp.tmp" "$sp"
+  elif printf '%s' "$t" | grep -q '"dashboard"[[:space:]]*:[[:space:]]*{'; then
+    printf '%s\n' "$t" | sed -E "s/(\"dashboard\"[[:space:]]*:[[:space:]]*\{)/\1 \"auto_open\": \"$1\",/" > "$sp.tmp" && mv -f "$sp.tmp" "$sp"
+  else
+    printf '%s\n' "$t" | awk -v m="$1" '{ lines[NR] = $0 } END { for (i = NR; i > 0; i--) if (lines[i] ~ /\}[[:space:]]*$/) { last = i; break }; for (i = 1; i <= NR; i++) { if (i == last) { sub(/\}[[:space:]]*$/, "", lines[i]); print lines[i] ","; print "  \"dashboard\": { \"auto_open\": \"" m "\" }"; print "}" } else print lines[i] } }' > "$sp.tmp" && mv -f "$sp.tmp" "$sp"
+  fi
+}
+resolve_dashboard_open() { # prints yes | no | ask
+  local mode ans="${KCC_DASHBOARD_ANSWER:-}"
+  if [[ $NO_OPEN_DASH -eq 1 ]]; then echo no; return 0; fi
+  if [[ $OPEN_DASH -eq 1 ]]; then echo yes; return 0; fi
+  mode="$(setting dashboard.auto_open ask | tr 'A-Z' 'a-z')"
+  if [[ "$mode" == "yes" || "$mode" == "no" ]]; then echo "$mode"; return 0; fi
+  if [[ -z "$ans" && -t 0 && -t 1 && $JSON -eq 0 ]]; then
+    echo "kcc-run: open the live dashboard in your browser? It follows this run and reads only local files." >&2
+    read -r -p "  [y]es now / [n]o / [a]lways / ne[v]er (saved in .KCC/settings.json -> dashboard.auto_open) " ans || ans=""
+  fi
+  [[ -n "$ans" ]] || { echo ask; return 0; }
+  case "$(printf '%s' "$ans" | tr 'A-Z' 'a-z')" in
+    y|yes|open) echo yes ;;
+    a|always) save_dashboard_mode yes; echo yes ;;
+    v|never) save_dashboard_mode no; echo no ;;
+    *) echo no ;;
+  esac
+}
+offer_dashboard() { # $1 = 1 for a new run
+  local d
+  if [[ "$DRY" -eq 1 || -n "$R_dashboard_opened" ]]; then return 0; fi
+  d="$(resolve_dashboard_open)"
+  if [[ "$d" == "no" ]]; then R_dashboard_opened=declined; return 0; fi
+  if [[ "$d" == "ask" ]]; then
+    if [[ "$1" == "1" ]]; then say 'kcc-run: dashboard not opened (no permission recorded). Open it with: kcc run --open-dashboard, or set .KCC/settings.json -> dashboard.auto_open to "yes".'; fi
+    return 0
+  fi
+  [[ -f "$TOOLS/build-dashboard.sh" ]] || return 0
+  if bash "$TOOLS/build-dashboard.sh" --repo-root "$ROOT" --open >/dev/null 2>&1; then R_dashboard_opened=1; say 'kcc-run: dashboard opened (dashboard/index.html); it refreshes as the run progresses'; else say 'kcc-run: could not open the dashboard'; fi
+}
+refresh_dashboard() { # best-effort, never stops the run
+  [[ "$DRY" -eq 1 || "${KCC_SKIP_DASHBOARD:-}" == "1" || ! -f "$TOOLS/build-dashboard.sh" ]] && return 0
+  bash "$TOOLS/build-dashboard.sh" --repo-root "$ROOT" >/dev/null 2>&1 || true
+}
 complete_unit() { # $1 idx, $2 skipped (1/0)
   local i="$1" key kind sp cp label skipped=false
   key="$(unit_key "$i")"; label="$(unit_label "$i")"
@@ -695,6 +893,7 @@ complete_unit() { # $1 idx, $2 skipped (1/0)
   cp="${S_CK[$i]}"; if [[ -z "$cp" && "${S_NAME[$i]}" == "REVIEW" ]]; then cp=spec-reviewed; fi
   if [[ -n "$cp" ]]; then invoke_checkpoint "$cp" "kcc-run: $label completed; run kcc-run -Resume"; fi
   if [[ "$2" == "1" ]]; then say "kcc-run: done   $label (exit check already passes)"; else say "kcc-run: done   $label"; fi
+  refresh_dashboard
 }
 process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   local i="$1" key label pa gname gkind has_check interactive force skip_dispatch pre_done=0 pre_rc=0 pre_viol=""
@@ -702,7 +901,8 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   pa="$R_pending_action"; R_pending_action=""
   OUTCOME=next
   if [[ -n "${S_ONLY[$i]}" ]] && ! in_list "$R_scenario" "${S_ONLY[$i]}"; then return 0; fi
-  if [[ "${S_SKIP[$i]}" == "parallel" && "$R_parallel" == "1" ]]; then say "kcc-run: skip   $label (--parallel pre-approves)"; return 0; fi
+  sf="$(skip_flag "$i")"
+  if [[ -n "$sf" ]]; then say "kcc-run: skip   $label ($sf)"; return 0; fi
   if [[ "$pa" == "abort" ]]; then stop_run aborted "human chose abort" 6; fi
   if [[ "$pa" == "done" ]]; then complete_unit "$i" 0; return 0; fi
   if [[ "$pa" == goto:* ]]; then
@@ -732,7 +932,7 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
       if [[ $CHK_RC -eq 0 ]]; then complete_unit "$i" 1; return 0; fi
     fi
     local cmdtext q ex
-    cmdtext="$(render "${S_CMD[$i]}")"
+    cmdtext="$(render "$(state_cmd "$i")")"
     q="Scenario S1: state ${S_ID[$i]} ${S_NAME[$i]} is an interactive interrogation. Run it yourself in your harness: \`$cmdtext\`. When it has finished, answer \`done\` (the exit check then runs) or \`abort\`."
     say "kcc-run: interactive $label - run in your harness: $cmdtext"
     ex="Command: \`$cmdtext\`"
@@ -743,7 +943,7 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   if [[ $interactive -eq 1 && "$pa" == "recheck" && "${S_CT[$i]}" == "internal:agent-report" ]]; then complete_unit "$i" 0; return 0; fi
 
   if [[ $skip_dispatch -eq 0 && $has_check -eq 1 && $force -eq 0 && "$(get_att "$key")" == "0" && "${S_SCOPE[$i]}" != "wave" && "${S_CT[$i]}" != "internal:agent-report" ]] \
-     && [[ -n "$R_idea" || "${S_ID[$i]}" == "0" ]] && ! [[ "$gkind" == "approval" && -n "$gname" ]]; then
+     && [[ -n "$R_idea" || "${S_ID[$i]}" == "0" ]] && ! [[ "$gkind" == "approval" && -n "$gname" ]] && precheck_ready "$i"; then
     run_check "$i" "$key"
     if [[ $CHK_RC -eq 0 ]]; then complete_unit "$i" 1; return 0; fi
     pre_done=1; pre_rc=$CHK_RC; pre_viol="$CHK_VIOL"
@@ -756,9 +956,27 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   if [[ $has_cmd -eq 0 && $att -gt 0 && $has_check -eq 1 && -z "$gname" ]]; then need_fix=1; fi
   if [[ $skip_dispatch -eq 0 && ( $has_cmd -eq 1 || $need_fix -eq 1 ) ]]; then
     local body prompt log where
-    if [[ $has_cmd -eq 1 ]]; then body="$(render "${S_CMD[$i]}")"; else body="The exit check \`$(check_desc "$i")\` failed. Route each violation to its fix_owner and fix it."; fi
+    if [[ $has_cmd -eq 1 ]]; then body="$(render "$(state_cmd "$i")")"; else body="The exit check \`$(check_desc "$i")\` failed. Route each violation to its fix_owner and fix it."; fi
     where=""; if [[ -n "$C_SPEC" ]]; then where=" for $C_SPEC"; fi; if [[ -n "$C_WAVE" ]]; then where="$where wave $C_WAVE"; fi
-    prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where. Follow coordination/orchestrator.md Spawn protocol and the state's contract. Do only this state, then stop. $body"
+    # Full runs wrap each unit with the butler (CR-8: brief first, remember after); fasttrack keeps it to the run's
+    # first and last states, which name it in their command. CLOSE already names it.
+    local butler_line=""
+    if [[ "$R_fasttrack" != "1" && "${S_NAME[$i]}" != "CLOSE" && "$(setting run.butler on | tr 'A-Z' 'a-z')" != "off" ]]; then butler_line="Wrap the work with the butler as the spawn protocol requires: spawn it to brief you first (butler-brief) and to remember afterwards (butler-remember). "; fi
+    local lead=". Follow coordination/orchestrator.md Spawn protocol and the state's contract. ${butler_line}Do only this state, then stop. This is a non-interactive session that ends when you reply: run every subagent in the foreground (never run_in_background) and wait for all of them, including parallel ones, before you finish. "
+    HARNESS_EXTRA=""
+    agent_mode "$i" "$att"
+    if [[ -n "$AM_MODE" ]]; then
+      HARNESS_EXTRA="$(harness_extra)"
+      if [[ "$AM_MODE" == "direct" ]]; then
+        body="$(convert_agent_body "$body")"
+        lead=". You are the $AM_AGENT agent running this state directly, with no orchestrator above you: do the work yourself and spawn no other agent. Do only this state, then stop. "
+      else
+        lead="${lead% } Put the skill's arguments (\`--fasttrack\`, \`--depthlevel N\`, and the rest) verbatim in each subagent's handover packet and tell it to follow its \"Fast track and depth\" section; do not paraphrase them. "
+        if [[ -n "$AM_MODEL" ]]; then lead="${lead% } Spawn the $AM_AGENT subagent on model $AM_MODEL ($AM_WHY). "; fi
+      fi
+      if [[ -n "$AM_MODEL" ]]; then emit model-escalated "$C_SPEC" "{\"agent\":\"$AM_AGENT\",\"item\":\"wave $C_WAVE\",\"from\":\"executor\",\"to\":\"$AM_MODEL\",\"reason\":\"$AM_WHY\",\"source\":\"kcc-run\"}"; fi
+    fi
+    prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi
     if [[ -n "$R_note" ]]; then prompt="$prompt Human note: $R_note"; R_note=""; fi
     if [[ "${S_SCOPE[$i]}" == "wave" && $att -eq 0 ]]; then invoke_checkpoint manual "kcc-run: baseline before $label"; fi
@@ -766,7 +984,9 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
     log="$LOG_DIR/state-${S_ID[$i]}-$(safe_name "$tag")-$((att + 1)).log"
     say "kcc-run: run    $label (attempt $((att + 1))/$CFG_MAX) -> $(rel "$log")"
     save_run
+    refresh_dashboard
     invoke_harness "$prompt" "$log"
+    HARNESS_EXTRA=""
     if limit_hit "$log" "$LAST_HARNESS_RC"; then suspend_run "$i" "$log"; fi
     if [[ "$LAST_HARNESS_RC" == "124" ]]; then say "kcc-run: harness timed out for $label"; fi
     pre_done=0
@@ -804,7 +1024,15 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
 
   # ---- exit check ----
   if [[ $has_check -eq 0 ]]; then complete_unit "$i" 0; return 0; fi
+  # A check that names {IDEA} (files-exist, -Spec paths) needs the idea the dispatch just created.
+  if [[ $pre_done -eq 0 && -z "$R_idea" ]]; then detect_idea; new_ctx "$C_ENTRY" "$C_WAVE"; fi
   if [[ $pre_done -eq 1 ]]; then CHK_RC=$pre_rc; CHK_VIOL="$pre_viol"; else run_check "$i" "$key-$(( $(get_att "$key") + 1 ))"; fi
+  # A passing check proves nothing when the state's artifact was never written (a conformance scope with
+  # nothing in it passes): precheck_requires is also the state's required output.
+  if [[ $CHK_RC -eq 0 && -n "${S_PR[$i]}" && -z "$R_idea" ]]; then detect_idea; new_ctx "$C_ENTRY" "$C_WAVE"; fi
+  if [[ $CHK_RC -eq 0 ]] && ! precheck_ready "$i"; then
+    CHK_RC=1; CHK_VIOL="REQ-001: state ${S_ID[$i]} ${S_NAME[$i]} finished but did not produce $(render "${S_PR[$i]}")"
+  fi
   if [[ $CHK_RC -eq 0 ]]; then complete_unit "$i" 0; return 0; fi
   R_last_violations="$(sanitize_prompt "$CHK_VIOL")"
   if [[ ${#R_last_violations} -gt 1500 ]]; then R_last_violations="${R_last_violations:0:1500} ..."; fi
@@ -888,12 +1116,18 @@ plan_line() { # $1 idx
   local i="$1" lbl c g
   lbl="$(unit_label "$i")"
   if [[ -n "${S_ONLY[$i]}" ]] && ! in_list "$R_scenario" "${S_ONLY[$i]}"; then echo "[skip] $lbl (only_in ${S_ONLY[$i]})"; return 0; fi
-  if [[ -n "${S_SKIP[$i]}" && "$R_parallel" == "1" ]]; then echo "[skip] $lbl (--parallel)"; return 0; fi
+  sf="$(skip_flag "$i")"
+  if [[ -n "$sf" ]]; then echo "[skip] $lbl ($sf)"; return 0; fi
   echo "[${S_ID[$i]}] $lbl"
   if [[ -n "${S_CMD[$i]}" ]]; then
-    c="$(render "${S_CMD[$i]}")"
+    c="$(render "$(state_cmd "$i")")"
     if [[ -n "${S_INT[$i]}" ]] && in_list "$R_scenario" "${S_INT[$i]}"; then echo "  interactive (human runs): $c"
-    else echo "  harness: $(harness_cmd "KCC run state ${S_ID[$i]} ${S_NAME[$i]}. ... $c")"; fi
+    else
+      agent_mode "$i" 0
+      HARNESS_EXTRA="$(harness_extra)"
+      echo "  harness: $(harness_cmd "KCC run state ${S_ID[$i]} ${S_NAME[$i]}. ... $c")"
+      HARNESS_EXTRA=""
+    fi
   fi
   if [[ -n "${S_CT[$i]}" ]]; then echo "  check: $(check_desc "$i")"; fi
   g="$(gate_name "$i")"; if [[ -n "$g" ]]; then echo "  gate: $g ($(gate_answers "$g"))"; fi
@@ -1006,6 +1240,15 @@ if [[ -n "$BUDGET" ]]; then R_budget="$BUDGET"; if [[ "$R_scenario" == "S2" ]]; 
 if [[ -n "$CURRENCY" ]]; then R_currency="$(printf '%s' "$CURRENCY" | tr 'a-z' 'A-Z')"; fi
 if [[ -n "$ACC" ]]; then R_accuracy="$ACC"; fi
 if [[ $PARALLEL -eq 1 ]]; then R_parallel=1; fi
+if [[ $FASTTRACK -eq 1 ]]; then R_fasttrack=1; fi
+# --until is kept in run.json so a resume (by a human or by kcc-limit-watch after a usage limit) still stops there.
+if [[ -n "$UNTIL" ]]; then R_until="$UNTIL"; elif [[ "${R_until:-}" =~ ^[0-9]+$ ]]; then UNTIL="$R_until"; fi
+if [[ -n "$DEPTH" ]]; then R_depthlevel="$DEPTH"
+elif [[ $START_NEW -eq 1 ]]; then
+  dl0="$(setting defaults.depthlevel 5)"; [[ "$dl0" =~ ^[1-5]$ ]] || dl0=5
+  if [[ "$R_fasttrack" == "1" && "$dl0" == "5" ]]; then dl0=2; fi
+  R_depthlevel="$dl0"
+fi
 if [[ -n "$HARNESS_ARG" ]]; then R_harness="$HARNESS_ARG"; fi
 if [[ -z "$R_harness" ]]; then R_harness="$(setting run.harness claude)"; fi
 HARNESS="$R_harness"
@@ -1016,6 +1259,7 @@ if [[ -n "$FROM" ]]; then
   if [[ $fidx -ge $SPEC_FIRST && $fidx -le $SPEC_LAST ]]; then R_spec_index=0; fi
   if [[ "$R_status" != "done" ]]; then R_status=running; fi
 fi
+if [[ -n "$UNTIL" && "$(get_idx "$UNTIL")" -lt 0 ]]; then fail_usage "unknown state $UNTIL"; fi
 if [[ -n "$ONLY" ]]; then
   if [[ "$(get_idx "$ONLY")" -lt 0 ]]; then fail_usage "unknown state $ONLY"; fi
   if [[ -n "$R_gate_id" && -z "$ANSWER" ]]; then fail_usage "gate $R_gate_id is pending; answer it first"; fi
@@ -1027,8 +1271,11 @@ mkdir -p "$LOG_DIR"
 if [[ $START_NEW -eq 1 ]]; then
   save_run
   bj="null"; if [[ -n "$R_budget" ]]; then bj="$R_budget"; fi
-  emit auto-policy-parsed "" "{\"scenario\":\"$R_scenario\",\"silent\":$([[ $R_silent == 1 ]] && echo true || echo false),\"assume\":$([[ $R_assume == 1 ]] && echo true || echo false),\"accuracy_threshold_pct\":$R_accuracy,\"budget_cap_amount\":$bj,\"budget_cap_currency\":\"$R_currency\",\"parallel\":$([[ $R_parallel == 1 ]] && echo true || echo false),\"input_class\":\"$R_input_class\",\"harness\":\"$HARNESS\",\"source\":\"kcc-run\"}"
+  emit auto-policy-parsed "" "{\"scenario\":\"$R_scenario\",\"silent\":$([[ $R_silent == 1 ]] && echo true || echo false),\"assume\":$([[ $R_assume == 1 ]] && echo true || echo false),\"accuracy_threshold_pct\":$R_accuracy,\"budget_cap_amount\":$bj,\"budget_cap_currency\":\"$R_currency\",\"parallel\":$([[ $R_parallel == 1 ]] && echo true || echo false),\"fasttrack\":$([[ $R_fasttrack == 1 ]] && echo true || echo false),\"depthlevel\":$R_depthlevel,\"input_class\":\"$R_input_class\",\"harness\":\"$HARNESS\",\"source\":\"kcc-run\"}"
+  if [[ "$R_fasttrack" == "1" ]]; then emit fasttrack-approved "" "{\"depthlevel\":$R_depthlevel,\"scope\":\"budget-gates-skipped\",\"source\":\"kcc-run\"}"; fi
   say "kcc-run: new run - scenario $R_scenario, input class $R_input_class, starting at state $R_state"
+  offer_dashboard 1
+  save_run
 else
   if [[ "$R_status" == "done" && -z "$FROM" && -z "$ONLY" ]]; then say "kcc-run: run is DONE; nothing to resume"; finish done 0; fi
   if [[ "$R_status" == "aborted" && -z "$FROM" ]]; then say "kcc-run: run was ABORTED ($R_reason); start a new run with --input"; finish aborted 6; fi
@@ -1078,7 +1325,16 @@ while true; do
         if [[ "${S_SCOPE[$uidx]}" == "wave" ]]; then nw="$(next_wave "$C_ENTRY" "$R_wave")"; if [[ -n "$nw" ]]; then R_wave="$nw"; moved=1; fi; fi
         if [[ $moved -eq 0 && "${S_SCOPE[$uidx]}" != "run" && $((R_spec_index + 1)) -lt $(spec_count) ]]; then R_spec_index=$((R_spec_index + 1)); R_wave=""; moved=1; fi
         if [[ $moved -eq 0 ]]; then R_state=-99; fi
-      else advance; fi
+      else
+        advance
+        if [[ -n "$UNTIL" && "${S_ID[$uidx]}" -eq "$UNTIL" ]]; then
+          ui="$(get_idx "$UNTIL")"; ni="$(get_idx "$R_state")"
+          if [[ "$R_state" -lt 0 || "$ni" -gt "$ui" ]]; then
+            R_status=stopped; R_reason="until $UNTIL"; R_until=""; save_run
+            say "kcc-run: --until $UNTIL reached; run stopped (resume with --resume)"; finish until-done 0
+          fi
+        fi
+      fi
       save_run; continue ;;
     *) stop_run stopped "unexpected unit outcome $OUTCOME" 6 ;;
   esac

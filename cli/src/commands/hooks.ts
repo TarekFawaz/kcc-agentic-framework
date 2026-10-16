@@ -36,6 +36,14 @@ export function mergeClaudeHooks(root: string, write: boolean): string[] {
     for (const entry of entries) {
       for (const hook of entry.hooks ?? []) {
         const script = scriptOf(hook.command);
+        // An earlier template used a cmd-style `%CLAUDE_PROJECT_DIR%` path, which the Git Bash that Claude Code
+        // runs hooks in does not expand, so the hook failed on every session. Repair that command in place.
+        const stale = have.flatMap((e) => e.hooks ?? []).find((h) => scriptOf(h.command) === script && (h.command ?? "").includes("%CLAUDE_PROJECT_DIR%"));
+        if (stale) {
+          stale.command = hook.command;
+          added.push(`${event}: ${script} (repaired the %CLAUDE_PROJECT_DIR% path)`);
+          continue;
+        }
         const present = have.some((e) => (e.hooks ?? []).some((h) => scriptOf(h.command) === script));
         if (present) continue;
         // Reuse the human's entry with the same matcher, otherwise add the template's entry shape.

@@ -6,7 +6,7 @@ import { reapplyTailoring } from "../src/commands/tailor";
 import { applyPayload, drift, readLock } from "../src/lock";
 import { payloadFiles } from "../src/payload";
 import { registerMcp } from "../src/mcp/register";
-import { readSettings, writeSettings } from "../src/settings";
+import { migrateSettings, readSettings, writeSettings } from "../src/settings";
 
 const root = mkdtempSync(join(tmpdir(), "kcc-test-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -48,6 +48,22 @@ describe("install and upgrade", () => {
     expect(readFileSync(kcc("settings.json"), "utf8")).toContain("mine");
     rmSync(kcc("settings.json"));
     expect(applyPayload(root).written).toEqual(["settings.json"]);
+  });
+
+  test("upgrade adds settings keys a project lacks and keeps its own values", () => {
+    writeFileSync(kcc("settings.json"), '{"quality":{"coverage_min_pct":55},"mine":true}\n');
+    const dry = migrateSettings(root, payloadFiles().get("settings.json"), true);
+    expect(dry.length).toBeGreaterThan(0);
+    expect(readFileSync(kcc("settings.json"), "utf8")).not.toContain("spec_sizing");
+    const added = migrateSettings(root, payloadFiles().get("settings.json"));
+    expect(added).toEqual(dry);
+    const s = readSettings(root) as Record<string, any>;
+    expect(s.quality.coverage_min_pct).toBe(55);
+    expect(s.mine).toBe(true);
+    expect(s.spec_sizing.max_spec_lines).toBe(150);
+    expect(migrateSettings(root, payloadFiles().get("settings.json"))).toEqual([]);
+    rmSync(kcc("settings.json"));
+    applyPayload(root);
   });
 
   test("a deleted file is restored", () => {

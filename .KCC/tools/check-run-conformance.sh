@@ -7,7 +7,8 @@
 #
 # Usage:
 #   bash .KCC/tools/check-run-conformance.sh [--repo-root PATH] [--json] [--spec SPEC-ID]
-#        [--scope all|architecture|linking|trace|memory|token|idea|specs|plan|review|bugs]
+#        [--scope all|architecture|linking|trace|memory|token|idea|specs|plan|review|bugs|deep]
+#        [--run-profile fasttrack]   (auto-detected from coordination/run/run.json)
 #
 # Exit: 0 pass, 1 errors found, 2 usage/environment error.
 
@@ -17,6 +18,7 @@ TOOL_VERSION="2.0.0"
 REPO_ROOT=""
 SCOPE="all"
 SPEC=""
+RUN_PROFILE=""
 JSON=0
 
 while [ $# -gt 0 ]; do
@@ -24,14 +26,20 @@ while [ $# -gt 0 ]; do
     --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
     --scope) SCOPE="${2:-}"; shift 2 ;;
     --spec) SPEC="${2:-}"; shift 2 ;;
+    --run-profile) RUN_PROFILE="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
     -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
+case "$RUN_PROFILE" in
+  ""|fasttrack) ;;
+  *) echo "unknown run profile: $RUN_PROFILE (valid: fasttrack)" >&2; exit 2 ;;
+esac
+
 case "$SCOPE" in
-  all|architecture|linking|trace|memory|token|idea|specs|plan|review|bugs) ;;
+  all|architecture|linking|trace|memory|token|idea|specs|plan|review|bugs|deep) ;;
   *) echo "unknown scope: $SCOPE" >&2; exit 2 ;;
 esac
 
@@ -98,6 +106,16 @@ MAX_ITEMS="$(setting max_items 6)"
 MAX_FILES="$(setting max_files_per_item 5)"
 MAX_TESTS="$(setting max_tests_per_item 8)"
 MAX_SPEC_LINES="$(setting max_spec_lines 150)"
+MAX_BACKLOG_LINES="$(setting max_backlog_item_lines 80)"
+MAX_PLAN_LINES="$(setting max_plan_lines 250)"
+MAX_BRIEF_LINES="$(setting max_brief_lines 100)"
+MAX_SPECS_FAST="$(setting max_specs_fasttrack 5)"
+MAX_DEEP="$(setting max_per_run 2)"
+
+# Fast-track profile: explicit --run-profile, else the current run's policy (kcc-run stores "fasttrack": "1").
+FASTTRACK=0
+if [ "$RUN_PROFILE" = "fasttrack" ]; then FASTTRACK=1
+elif [ -z "$RUN_PROFILE" ] && [ -f "$REPO_ROOT/coordination/run/run.json" ] && grep -qE '"fasttrack"[[:space:]]*:[[:space:]]*"?1"?([^0-9]|$)' "$REPO_ROOT/coordination/run/run.json"; then FASTTRACK=1; fi
 
 # ---------------------------------------------------------------------------
 # Markdown helpers (mirrored 1:1 in check-run-conformance.ps1)
@@ -363,6 +381,26 @@ EOF
     fi
   done
 
+  # Fast-track profile (architecture-documentation.md -> required artifacts, column `fasttrack`): the
+  # Architecture Document carries C1, C2, a Decisions table and the toolchain; flowcharts and quality
+  # gates exist; ADR files, component diagrams, DFDs and sequences do not (over-production is drift).
+  if [ "$FASTTRACK" -eq 1 ]; then
+    if [ -f "$doc" ]; then
+      grep -q 'C4Context' "$doc" || violation "ARCH-FT-001" "error" "architect" "fast track: architecture.md has no embedded C1 context diagram (C4Context)." "architecture/architecture.md"
+      grep -q 'C4Container' "$doc" || violation "ARCH-FT-002" "error" "architect" "fast track: architecture.md has no embedded C2 container diagram (C4Container)." "architecture/architecture.md"
+      grep -qE '^##+[[:space:]]+Decisions' "$doc" || violation "ARCH-FT-003" "error" "architect" "fast track: architecture.md has no '## Decisions' table (decision, library and version range, catalogue citation, status)." "architecture/architecture.md"
+      grep -qE '^##+[[:space:]]+Toolchain' "$doc" || violation "ARCH-FT-004" "error" "architect" "fast track: architecture.md has no '## Toolchain' table." "architecture/architecture.md"
+    fi
+    if [ -z "$(find "$ARCH_DIR/flowcharts" -maxdepth 1 -type f -name '*.md' 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-005" "error" "architect" "fast track: architecture/flowcharts/ has no business flowchart." "architecture/flowcharts"; fi
+    [ -f "$ARCH_DIR/quality-gates.md" ] || violation "ARCH-FT-006" "error" "architect" "fast track: architecture/quality-gates.md is missing." "architecture/quality-gates.md"
+    if [ -n "$(find "$ARCH_DIR/adrs" -maxdepth 1 -type f -name 'ADR-*.md' 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-007" "error" "architect" "fast track records decisions in architecture.md -> ## Decisions, not in ADR files; remove architecture/adrs/." "architecture/adrs"; fi
+    [ -f "$ARCH_DIR/c4-component.md" ] && violation "ARCH-FT-008" "error" "architect" "fast track writes no component diagram; remove architecture/c4-component.md." "architecture/c4-component.md"
+    for extra in dfds sequences; do
+      if [ -n "$(find "$ARCH_DIR/$extra" -maxdepth 1 -type f 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-009" "error" "architect" "fast track writes no $extra; remove architecture/$extra/." "architecture/$extra"; fi
+    done
+    return 0
+  fi
+
   if [ -d "$SPECS_DIR" ]; then
     while IFS= read -r sa; do
       [ -n "$sa" ] || continue
@@ -441,6 +479,7 @@ latest_session() {
 }
 
 check_trace() {
+  [ "$FASTTRACK" -eq 0 ] || return 0
   [ -d "$TRACES_DIR" ] || return 0
   local latest r
   latest="$(latest_session)"
@@ -463,6 +502,7 @@ substantive_run() {
 }
 
 check_token() {
+  [ "$FASTTRACK" -eq 0 ] || return 0
   [ -d "$TRACES_DIR" ] || return 0
   substantive_run || return 0
   local latest tf
@@ -480,6 +520,7 @@ check_token() {
 }
 
 check_memory() {
+  [ "$FASTTRACK" -eq 0 ] || return 0
   [ -d "$MEMORY_DIR" ] || return 0
   substantive_run || return 0
   local dec pre
@@ -501,11 +542,16 @@ check_idea() {
     [ -n "$idea" ] || continue
     case "$(basename "$(dirname "$idea")")" in IDEA-*) ;; *) continue ;; esac
     r="$(rel "$idea")"
-    for h in "Reasoning" "Phases" "Upfront Budget" "Effort Estimate"; do
+    idea_headings="Reasoning|Phases|Upfront Budget|Effort Estimate"
+    if [ "$FASTTRACK" -eq 1 ]; then idea_headings="Reasoning|Phases"; fi
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
       if ! has_heading "$idea" "$h"; then
         violation "IDEA-001" "error" "idea-interrogator" "$r is missing required section '## $h'." "$r"
       fi
-    done
+    done <<EOH
+$(printf '%s\n' "$idea_headings" | tr '|' '\n')
+EOH
     if grep -qiE 'input[ _-]?class[^[:alnum:]_]*existing-solution' "$idea"; then
       for h in "Impact Analysis" "Gap Analysis" "Alternatives"; do
         if ! has_heading "$idea" "$h"; then
@@ -519,9 +565,18 @@ check_idea() {
       fi
     fi
     dir="$(dirname "$idea")"
-    for a in Questionnaire.md HumanAnswers.md Research.md ROI.md Conclusion.md QuickRoadmap.md SpecWriterStarter.md; do
+    idea_artifacts="Questionnaire.md HumanAnswers.md Research.md ROI.md Conclusion.md QuickRoadmap.md SpecWriterStarter.md"
+    if [ "$FASTTRACK" -eq 1 ]; then idea_artifacts="Research.md QuickRoadmap.md SpecWriterStarter.md"; fi
+    for a in $idea_artifacts; do
       if [ ! -f "$dir/$a" ]; then
         violation "IDEA-004" "error" "idea-interrogator" "$(rel "$dir") is missing required artifact $a." "$(rel "$dir")/$a"
+      fi
+    done
+    for bf in "$dir"/*Brief.md; do
+      [ -f "$bf" ] || continue
+      bn="$(awk 'END { print NR }' "$bf")"
+      if [ "$bn" -gt "$MAX_BRIEF_LINES" ]; then
+        violation "BRIEF-001" "warning" "idea-interrogator" "$(rel "$bf") has $bn lines (max $MAX_BRIEF_LINES). Shorten it; keep decisions and one-line reasons." "$(rel "$bf")"
       fi
     done
     roi="$dir/ROI.md"
@@ -589,6 +644,10 @@ check_specs() {
           violation "SPEC-001" "error" "spec-writer" "$r is missing required section '## $h'." "$r"
         fi
       done
+      # The dashboard and the lifecycle read the spec's status from its frontmatter.
+      if ! head -n 40 "$file" | tr -d '\r' | grep -qE '^status[[:space:]]*:[[:space:]]*[^[:space:]]'; then
+        violation "SPEC-010" "error" "spec-writer" "$r has no 'status:' in its frontmatter." "$r"
+      fi
       n="$(awk 'END { print NR }' "$file")"
       if [ "$n" -gt "$MAX_SPEC_LINES" ]; then
         violation "SZ-5" "error" "spec-writer" "$r has $n lines (max $MAX_SPEC_LINES). Move detail into backlog items or arch.md." "$r"
@@ -619,9 +678,18 @@ EOF
       if ! grep -qiE '^[[:space:]]*(#{1,6}[[:space:]]*|[-*][[:space:]]*|\*\*)?INVEST([^[:alnum:]_]|$)' "$it_file"; then
         violation "SPEC-004" "$sev" "spec-writer" "$ir has no INVEST line/section." "$ir"
       fi
+      il="$(awk 'END { print NR }' "$it_file")"
+      if [ "$il" -gt "$MAX_BACKLOG_LINES" ]; then
+        violation "SZ-6" "$sev" "spec-writer" "$ir has $il lines (max $MAX_BACKLOG_LINES). Keep the item to its ACs, impacted files, and INVEST line." "$ir"
+      fi
       nf="$(impacted_files "$it_file" | awk 'END { print NR }')"
       if [ "$nf" -gt "$MAX_FILES" ]; then
         violation "SZ-3" "$sev" "spec-writer" "$ir lists $nf impacted files (max $MAX_FILES). Split the item." "$ir"
+      fi
+      # Greenfield code lives under src/IDEA-{ID}-{slug}/; traceability and the wave-scope gate look only there.
+      badpath="$(impacted_files "$it_file" | awk '/^src\// && !/^src\/IDEA-/ { print; exit }')"
+      if [ -n "$badpath" ]; then
+        violation "SPEC-008" "error" "spec-writer" "$ir: impacted file '$badpath' is outside src/IDEA-{ID}-{slug}/." "$ir"
       fi
     done <<EOF
 $(list_items "$dir")
@@ -649,6 +717,17 @@ EOF
     if [ ! -f "$rm" ]; then
       violation "SPEC-005" "$gsev" "spec-writer" "$(rel "$g") has no ROADMAP.md." "$(rel "$g")/ROADMAP.md"
       IFS="$TAB"; continue
+    fi
+    # Fast track: a spec budget keeps the run small (each spec costs a writer, a plan, a build, a review).
+    # The human sets the budget at SPECS; a larger split needs their recorded 'Spec budget: N (human)'.
+    if [ "$FASTTRACK" -eq 1 ]; then
+      budget="$MAX_SPECS_FAST"
+      hb="$(tr -d '\r' < "$rm" | grep -iE '^[^[:alnum:]]*spec budget[^[:alnum:]]*[0-9]+.*human' | head -n 1 | grep -oE '[0-9]+' | head -n 1 || true)"
+      [ -n "$hb" ] && budget="$hb"
+      nspecs="$(printf '%s\n' "$specs" |awk -F'\t' -v g="$g" '$5 == g && $1 != "" && !seen[$1]++' | awk 'END { print NR }')"
+      if [ "$nspecs" -gt "$budget" ]; then
+        violation "SPEC-009" "error" "spec-writer" "$(rel "$g") has $nspecs specs; the fast-track budget is $budget. Merge specs into user-visible slices, or record the human's 'Spec budget: N (human approved)' in ROADMAP.md." "$(rel "$rm")"
+      fi
     fi
     done6=""
     while IFS="$TAB" read -r id name dir file group idea legacy; do
@@ -699,10 +778,14 @@ check_plan() {
     prel="$(rel "$dir")/plan.md"
     if [ ! -f "$plan" ]; then
       rank="$(status_rank "$(spec_status "$file")")"
-      if { [ -n "$SPEC" ] && [ "$SCOPE" = "plan" ]; } || [ "$rank" -ge 2 ]; then
+      if { [ -n "$SPEC" ] && [ "$SCOPE" = "plan" ]; } || [ "$rank" -ge 2 ] || [ "$FASTTRACK" -eq 1 ]; then
         violation "PLAN-001" "error" "planner" "$name has no plan.md (spec status requires a plan)." "$prel"
       fi
       continue
+    fi
+    pl="$(awk 'END { print NR }' "$plan")"
+    if [ "$pl" -gt "$MAX_PLAN_LINES" ]; then
+      violation "SZ-7" "error" "planner" "$prel has $pl lines (max $MAX_PLAN_LINES). Merge duplicate rows and move detail into the backlog items." "$prel"
     fi
     if ! has_heading "$plan" "Waves" && [ ! -f "$dir/parallelization.md" ]; then
       violation "PLAN-002" "error" "planner" "$prel has no '## Waves' section (and no legacy parallelization.md)." "$prel"
@@ -890,10 +973,51 @@ EOF
   return 0
 }
 
+# DeepThinking (protocols/deep-thinking.md): every deep-spawned needs an unused deep-approved for the same agent and
+# task, orchestrator-started spawns (a human's /deep is not counted) stay within deep.max_per_run, and the task is in models.json -> deep_tasks. Counted since the latest
+# auto-policy-parsed (one run).
+check_deep() {
+  local bc="$REPO_ROOT/coordination/backchannel.jsonl" mp="$REPO_ROOT/.KCC/kernel/models.json" cat="" out line
+  [ -f "$bc" ] || return 0
+  if [ -f "$mp" ]; then
+    cat="$(tr -d '\r\n' < "$mp" | grep -oE '"deep_tasks"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | grep -v '^"deep_tasks"$' | tr -d '"' | tr '\n' ' ' || true)"
+  fi
+  out="$(awk -v maxdeep="$MAX_DEEP" -v cat="$cat" '
+    function field(l, name,   m, r) {
+      r = "\"" name "\"[[:space:]]*:[[:space:]]*\"[^\"]*\""
+      if (match(l, r)) { m = substr(l, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*"/, "", m); sub(/"$/, "", m); return m }
+      return ""
+    }
+    BEGIN { n = split(cat, arr, " "); for (i = 1; i <= n; i++) known[arr[i]] = 1 }
+    { lines[NR] = $0; if ($0 ~ /"kind"[[:space:]]*:[[:space:]]*"auto-policy-parsed"/) start = NR }
+    END {
+      spawns = 0
+      for (i = (start ? start : 1); i <= NR; i++) {
+        l = lines[i]
+        if (l ~ /"kind"[[:space:]]*:[[:space:]]*"deep-approved"/) { k = field(l, "agent") "|" field(l, "task"); ap[k]++ }
+        else if (l ~ /"kind"[[:space:]]*:[[:space:]]*"deep-spawned"/) {
+          a = field(l, "agent"); t = field(l, "task"); k = a "|" t
+          if (l !~ /"initiator"[[:space:]]*:[[:space:]]*"human"/) spawns++
+          if (ap[k] > 0) ap[k]--; else print "DEEP-001\tdeep-spawned (" a ", " t ") has no unused deep-approved event before it. A human must see the cost first."
+          if (n > 0 && !(t in known)) print "DEEP-003\tdeep task " t " is not in models.json deep_tasks (" cat ")."
+        }
+      }
+      if (spawns > maxdeep) print "DEEP-002\t" spawns " deep spawns in this run, max " maxdeep " (settings deep.max_per_run)."
+    }' "$bc")"
+  [ -n "$out" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    violation "${line%%	*}" "error" "orchestrator" "${line#*	}" "coordination/backchannel.jsonl"
+  done <<EOF
+$out
+EOF
+  return 0
+}
+
 if [ "$JSON" -eq 0 ]; then echo "KCC run conformance: $REPO_ROOT  (scope: $SCOPE)"; fi
 
 case "$SCOPE" in
-  all) check_architecture; check_linking; check_trace; check_memory; check_token; check_idea; check_specs; check_plan; check_review; check_bugs ;;
+  all) check_architecture; check_linking; check_trace; check_memory; check_token; check_idea; check_specs; check_plan; check_review; check_bugs; check_deep ;;
   architecture) check_architecture ;;
   linking) check_linking ;;
   trace) check_trace ;;
@@ -904,6 +1028,7 @@ case "$SCOPE" in
   plan) check_plan ;;
   review) check_review ;;
   bugs) check_bugs ;;
+  deep) check_deep ;;
 esac
 
 STATUS="pass"

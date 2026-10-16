@@ -209,6 +209,7 @@ $expectedSkills = @(
     'butler-remember.md',
     'critical-human-gate.md',
     'dashboard.md',
+    'deep.md',
     'idea-interrogator.md',
     'infrastructure-interrogator.md',
     'inspect.md',
@@ -249,6 +250,23 @@ if (Test-Path -LiteralPath $skillsDir) {
         if ($expectedSkills -notcontains $file.Name) {
             Add-Warning "Skill '$($file.Name)' exists on disk but is not in validate-kcc.ps1 `$expectedSkills — add it so the required-file check covers it."
         }
+    }
+}
+
+# Size budgets for files that agents read on every turn (warn only). Long agent-read
+# files cost input tokens on every spawn; trim them or move detail into a protocol that is
+# read by heading on demand (.KCC/kernel/protocols/depth-levels.md, agent-runtime rule 2).
+$lineBudgets = @(
+    @{ Dir = '.KCC/capabilities/agents'; Max = 170; Kind = 'Agent' },
+    @{ Dir = '.KCC/capabilities/skills'; Max = 130; Kind = 'Skill' },
+    @{ Dir = '.KCC/capabilities/agents/refs'; Max = 170; Kind = 'Agent ref' }
+)
+foreach ($b in $lineBudgets) {
+    $d = Join-Path $RepoRoot $b.Dir
+    if (-not (Test-Path -LiteralPath $d)) { continue }
+    foreach ($file in (Get-ChildItem -LiteralPath $d -Filter '*.md' -File)) {
+        $n = @([System.IO.File]::ReadAllLines($file.FullName)).Count
+        if ($n -gt $b.Max) { Add-Warning "$($b.Kind) '$($file.Name)' has $n lines (budget $($b.Max)); trim it or move detail into a protocol read by heading." }
     }
 }
 

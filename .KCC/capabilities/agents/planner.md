@@ -2,7 +2,7 @@
 # Functional fields
 name: planner
 role: implementation planner
-model-class: strong-reasoning
+model-class: balanced
 effort: high
 description: >
   Reads a v6 spec file, its `Backlog/` items (stories, enablers, bugs), and
@@ -29,7 +29,7 @@ aliases:
 tags:
   - framework/agent
   - lifecycle/plan
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-24
 updated: 2026-09-21
 version: 5.0.0
@@ -73,8 +73,10 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
 5. **Read impacted files** under each item's `## Impacted Files`; trace
    code paths from the problem statement and ACs. New code prefix:
    `src/IDEA-{ID}-{slug}/`.
-6. **Dependencies.** From `specs/specs.md`, confirm each dependency's
-   `review.md` is approved.
+6. **Dependencies.** Read each dependency's spec and, if it exists, its
+   `plan.md`; plan against their declared contracts and files. An approved
+   review is NOT needed to plan (a spec is planned once its dependencies have
+   started building); IMPLEMENT is what waits for them to be APPROVED.
 7. **Backlog readiness.** Each item needs its own `Backlog/` file, `AC-N` IDs,
    Test Hints, Impacted Files under `src/IDEA-{ID}-{slug}/...` (<= 5, SZ-3),
    dialect, dependencies, passing INVEST. Too broad / untestable / not
@@ -82,9 +84,22 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
 8. **Dialects** from `.KCC/kernel/protocols/dialects/`: every dialect named by
    backlog items; always `testing-unit` + `testing-integration`;
    `testing-performance` / `testing-security` only if an item scopes them.
+8a. **Dependencies and toolchain.** Every third-party package the code will
+   import is added by a named item (usually the scaffold enabler): list the
+   manifest and lockfile in that item's Impacted Files and the packages, with
+   version ranges from the ADRs, in its ACs. Copy the runtime and tool ranges
+   from `architecture/architecture.md` -> `## Toolchain` into the plan's
+   `## Toolchain` table; PREFLIGHT checks them. A library an item needs that no
+   ADR names is a planning blocker, not an implementer decision.
+8b. **ADR status.** `Accepted` and `Accepted (assumed)` ADRs are settled: never
+   add a "STOP before implement" for them. Only a `Proposed` ADR blocks, and only
+   the items that depend on it (list them in `Risk Flags`).
 9. **Hidden impact:** tests, fixtures, docs, configs, generated code,
    migrations - under `src/IDEA-{ID}-{slug}/...`; cross-idea infrastructure ->
-   `Risk Flags`.
+   `Risk Flags`. Every such file an item writes beyond its Impacted Files goes
+   in the plan's `## Wave file allowances` table, because the wave-scope gate
+   reads only that table and Impacted Files (listing them under `## New Files`
+   alone fails the wave).
 10. **`## Waves`.** Every item in a dependency wave (the spec's `Wave`
     column is a first cut; `plan.md` is authoritative). Same-wave items must
     be file-disjoint (`parallel-execution.md` -> *File-disjoint
@@ -109,6 +124,10 @@ Template: read `.KCC/capabilities/agents/refs/planner-plan-template.md` ->
 Check, Architecture Gate Check, Backlog Coverage, Ordered Changes, Waves,
 Dialects Loaded, New Files, Risk Flags, Atomic test cases,
 Verification Steps, Scope, Confidence.
+
+## Fast track and depth
+
+`plan.md` <= `spec_sizing.max_plan_lines` (SZ-7); merge duplicate rows, never drop an AC's Test ID. Fill the Complexity column (`low|medium|high|extra-high`) for every item: the orchestrator picks the implementer model from it (`coordination/orchestrator.md`, rule 7). Under `fasttrack`: no token estimate, no butler. Honour `depthlevel`. Mark an item `high` Complexity when it is security-sensitive (authentication or authorization, crypto, secrets, personal or payment data, parsing of untrusted input, SQL or shell or template construction, deserialization, file or network access from user input): that runs it on the balanced model, never the executor tier. Make the first wave a scaffold enabler that gives `quality-gate` something to check: the stack's project manifest and lockfile, lint and test-runner config, a coverage setting, `.gitignore`, and a README with run instructions (for deployables also config from the environment and a health check). Without a manifest the build, lint, test, and coverage gates are skipped, not passed.
 
 ## Constraints
 

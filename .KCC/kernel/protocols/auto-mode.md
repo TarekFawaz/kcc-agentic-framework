@@ -762,6 +762,8 @@ USAGE
   auto <input> --silent --assume --accuracy NN%         #   + custom confidence floor
   auto <input> --silent --assume --accuracy NN% --budget NN [CCY]   # Operating scenario 3: controlled hand-off HOTL
   auto <input> --parallel                               # any scenario + force parallel spec creation & windows
+  auto <input> --fasttrack                              # any scenario: lean build path (no budget gates, no traces, lite docs)
+  auto <input> --depthlevel N                           # any scenario: detail level 1-5 (default 5; --fasttrack implies 2)
   auto IDEA-{ID}                                        # resume from an existing idea
   auto IDEA-{ID}-{slug}                                 # resume from an existing idea (with slug)
   auto SPEC-{ID}                                        # continue an existing spec
@@ -776,7 +778,7 @@ USAGE
 
 DOES NOT:
   - treat an empty invocation as a fresh idea
-  - skip the upfront budget estimate (even in --silent)
+  - skip the upfront budget estimate (even in --silent; only --fasttrack skips it, by design)
   - skip architecture artifacts (even in --silent - assumptions are documented)
   - allow --silent without --assume (or vice versa)
 
@@ -898,6 +900,8 @@ window-opening consent - no per-spec window prompt fires.
 | `budget_cap_amount` | none | Maximum approved cumulative hosted-model spend. |
 | `budget_cap_currency` | USD when omitted | Currency for hosted-model spend estimates. |
 | `parallel` | false | Force parallel spec creation (one subagent per selected epic) and pre-authorize all parallel session windows. Scenario-independent. |
+| `fasttrack` | false | Lean build path for developers: skip ROI, confirm, the architecture re-review loop, all budget gates and the windows gate; no traces or token-guard (a memory-only butler stays) (progress only in the backchannel); lite ideation, quick technical interrogation, architecture depth `lite`, the same full `quality-gate` scope. kcc-run emits `fasttrack-approved`, which opens the implementation lock. The CR-7, CR-9, CR-12, CR-13, CR-16 floors still apply, and so do the production gates (full QG-QUALITY, QG-TRACE, QG-BUGS, QG-PROD for deployables). Scenario-independent. |
+| `depthlevel` | 5 (`defaults.depthlevel`; 2 with `fasttrack`) | 1-5, how much detail agents write. Table and floors: `.KCC/kernel/protocols/depth-levels.md`. Passed in every handover packet. |
 
 `silent` and `assume` are coupled: one without the other is rejected. `parallel`
 is standalone and combines with any scenario.

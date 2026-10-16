@@ -60,12 +60,37 @@ contract and the same wave/barrier semantics.
 
 ### L1 - across independent specs
 
-When multiple specs share no cross-spec dependency, spawn one **spec flow** per
-spec concurrently. Example: a fleet system with `SPEC-1` user-management,
-`SPEC-2` live-tracking, and `SPEC-3` playback (no cross-spec dependency) -> run
-all three spec flows at once. This is the level `auto all` and multi-spec ideas
-exercise. The graph comes from `ROADMAP.md -> ## Execution Plan` (same Order =
-parallel lanes), each spec's `Depends on` header, and `specs/specs.md`.
+Dependencies are the only thing that decides whether specs run one after
+another or at the same time; there is no flag and no gate for it, and a
+dependency only holds back the steps that actually need it:
+
+- **PLAN runs just in time.** A spec is planned as soon as it is about to
+  build: right after SPECS when it has no dependencies, otherwise as soon as
+  every spec it depends on has started building, so its plan is ready when
+  they are approved. Ready specs are planned at the same time. A plan reads its
+  dependencies' specs and plans, not their code.
+- **IMPLEMENT waits** until every spec in its `Depends on` (from `ROADMAP.md ->
+  ## Execution Plan`, else the spec's own `Depends on` header) has an APPROVED
+  review. Then PREFLIGHT -> IMPLEMENT -> TEST -> REVIEW run for it concurrently
+  with every other spec that is ready, and a slow spec never holds back one that
+  does not depend on it. A chain is built one link at a time; a fan-out side by side.
+
+**In a Claude Code session (`auto`)** the main session is the orchestrator,
+because subagents cannot spawn subagents. It keeps every spec moving on its
+own clock: no spec waits for another spec's stage to finish unless it depends
+on it. In an interactive session it starts each spec's agents as background
+subagents and reacts to each one as it finishes: the moment a spec's plan is
+written, that spec goes to PREFLIGHT and IMPLEMENT if its dependencies are
+APPROVED, while other specs are still planning; the moment a wave's items are
+done, its next wave starts. In a non-interactive session (`claude -p`, kcc-run),
+which ends with the reply, it cannot wait in the background: there it issues
+the next agent of every ready spec in one message and waits for all of them.
+A spec that fails its check retries or pauses alone; the others keep going.
+Concurrent specs must be file-disjoint: before starting two specs
+together, confirm no file appears in both specs' Impacted Files; if one does
+(a shared lockfile, `docker-compose.yml`), run the later spec after the earlier
+one. **With `kcc run`** (unattended) the CLI does the same scheduling with one
+private lane per spec ([[parallel-lanes]]).
 
 ### L2 - within a spec
 

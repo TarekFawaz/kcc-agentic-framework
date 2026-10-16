@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-implement
 description: >
- Implement a spec, wave (`plan.md -> ## Waves`), or backlog item (Story/Enabler/Bug) from its approved plan, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001|Bug-001]
+ Implement a spec, wave (`plan.md -> ## Waves`), or backlog item (Story/Enabler/Bug) from its approved plan, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001|Bug-001] [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - implementer
@@ -27,6 +27,10 @@ status: active
 
 Implement spec <ARGS>.
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: skip step 4 (the `fasttrack-approved` backchannel event opens `check-impl-lock`), and the butler and token-guard. The preflight (5b) and all other steps stay.
+
 ## Steps
 
 1. Parse the SPEC-ID and optional scope from arguments. Scope may be the
@@ -40,8 +44,9 @@ Implement spec <ARGS>.
    `/spec-plan SPEC-{ID}` first.
 3. Verify `SPEC-{ID}-{slug}.md`, `Backlog/*.md`, and `plan.md -> ## Waves`
    exist (legacy v5: `backlog.md` / `parallelization.md` fallback) and the
-   plan maps changes to item keys.
-4. Verify a post-plan `/token-estimate SPEC-{ID}` approval is recorded in
+   plan maps changes to item keys. Every spec in its `Depends on` must have an
+   APPROVED `review.md`; otherwise this spec waits (its plan may already be done).
+4. (Skip under `--fasttrack`.) Verify a post-plan `/token-estimate SPEC-{ID}` approval is recorded in
    the session trace or `ROADMAP.md` Token Plan for the implement stage. Valid
    approvals are explicit human approval or AutoPolicy `auto-approved` with
    cumulative hosted-model spend still inside the approved budget cap. If

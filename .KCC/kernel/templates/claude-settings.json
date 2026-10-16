@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"%CLAUDE_PROJECT_DIR%\\.KCC\\tools\\record-token-actuals.ps1\" -FromHookStdin"
+            "command": "bash -c 'if command -v powershell >/dev/null 2>&1; then powershell -NoProfile -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/.KCC/tools/record-token-actuals.ps1\" -FromHookStdin; else bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/record-token-actuals.sh\" --from-hook-stdin; fi'"
           }
         ]
       }
@@ -86,6 +86,28 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-limit-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-dashboard-refresh.sh\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/kcc-dashboard-refresh.sh\""
           }
         ]
       }

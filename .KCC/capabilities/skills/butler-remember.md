@@ -34,6 +34,11 @@ butler keeps only the rare non-obvious + reusable entries. Most runs store
 nothing in memory - that is the correct outcome for routine work - but tracing
 still records what happened.
 
+## Flags
+
+`--fasttrack`: memory only. Create and write nothing under `Traces/` (skip any trace-session or token step); the
+butler works in its fasttrack mode and the backchannel events are emitted as usual.
+
 ## Steps
 
 1. If <ARGS> is empty, ask the caller for a summary or trace path and stop.

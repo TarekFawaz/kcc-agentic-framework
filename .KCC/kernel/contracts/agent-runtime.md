@@ -20,7 +20,7 @@ These rules apply to every KCC agent turn. Agent bodies do not restate them;
 they only add what is specific to their role.
 
 1. **Input.** You receive a handover packet: goal, ids, `read`, `write`,
-   constraints, confidence threshold, budget. See
+   constraints, confidence threshold, budget, `depthlevel`. See
    `coordination/orchestrator.md` -> *Spawn protocol*. The packet plus your
    profile `inputs` are your whole reading list.
 2. **Lazy reads.** For any `.KCC/kernel/**` protocol, template, or
@@ -48,3 +48,10 @@ they only add what is specific to their role.
 8. **Lean return.** Return a summary of 150 words or less, the artifact
    paths written, open questions, confidence, and ActualTokenUsage. Don't
    echo file contents or restate inputs.
+9. **Output economy.** Output tokens are the cost driver. Honour the packet's
+   `depthlevel` (1-5, default 5 = today's detail; table in
+   `.KCC/kernel/protocols/depth-levels.md`). Write each fact once, prefer
+   tables and lists to prose, do not restate inputs or the template, and stay
+   under the artifact length caps (`.KCC/settings.json` -> `spec_sizing`).
+   `depthlevel` only trims detail; required sections, ACs, and artifacts are
+   never dropped.

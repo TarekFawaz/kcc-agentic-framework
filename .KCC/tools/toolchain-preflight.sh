@@ -93,11 +93,40 @@ missing=()
 echo "Toolchain preflight (OS: $os)"
 echo "-----------------------------------"
 
-for tool in "$@"; do
+# A tool may carry a major-version constraint from plan.md '## Toolchain': node@>=20, node@20, node@>=20<25.
+version_ok() { # $1 version text, $2 constraint
+  local major op n rest
+  [[ -z "$2" ]] && return 0
+  major="$(printf '%s' "$1" | grep -oE '[0-9]+' | head -n 1)"
+  [[ -z "$major" ]] && return 0
+  if [[ "$2" =~ ^[0-9]+$ ]]; then [[ "$major" -eq "$2" ]]; return; fi
+  rest="$2"
+  while [[ "$rest" =~ ^(\>=|\<=|\>|\<|=)([0-9]+)(.*)$ ]]; do
+    op="${BASH_REMATCH[1]}"; n="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    case "$op" in
+      ">=") [[ "$major" -ge "$n" ]] || return 1 ;;
+      "<=") [[ "$major" -le "$n" ]] || return 1 ;;
+      ">") [[ "$major" -gt "$n" ]] || return 1 ;;
+      "<") [[ "$major" -lt "$n" ]] || return 1 ;;
+      "=") [[ "$major" -eq "$n" ]] || return 1 ;;
+    esac
+  done
+  return 0
+}
+
+for spec in "$@"; do
+  tool="${spec%%@*}"; constraint=""
+  [[ "$spec" == *@* ]] && constraint="${spec#*@}"
   if command -v "$tool" >/dev/null 2>&1; then
     version="$("$tool" --version 2>/dev/null | head -n 1 || true)"
     [[ -z "$version" ]] && version="present"
-    printf 'PRESENT  %s  (%s)\n' "$tool" "$version"
+    if version_ok "$version" "$constraint"; then
+      printf 'PRESENT  %s  (%s)\n' "$tool" "$version"
+    else
+      missing+=("$tool@$constraint")
+      printf 'WRONG    %s  (%s; the plan needs %s)\n' "$tool" "$version" "$constraint"
+      printf '         install: %s\n' "$(install_suggestion "$tool" "$os")"
+    fi
   else
     missing+=("$tool")
     printf 'MISSING  %s\n' "$tool"

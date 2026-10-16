@@ -142,7 +142,7 @@ expected_agents=(
 )
 expected_skills=(
   adapt-workflow.md architecture-review.md auto.md bug-report.md butler-brief.md butler-remember.md
-  critical-human-gate.md dashboard.md idea-interrogator.md
+  critical-human-gate.md dashboard.md deep.md hint.md idea-interrogator.md
   infrastructure-interrogator.md inspect.md security-interrogator.md
   solution-onboard.md spec-create.md spec-deploy.md
   spec-implement.md spec-merge.md spec-plan.md spec-review.md spec-status.md spec-test.md tailor-workflow.md
@@ -177,6 +177,19 @@ if [[ -d "$REPO_ROOT/.KCC/capabilities/skills" ]]; then
     has_frontmatter_key "$file" maintainer || add_warning "Skill missing maintainer: .KCC/capabilities/skills/$base"
   done < <(find "$REPO_ROOT/.KCC/capabilities/skills" -maxdepth 1 -type f -name '*.md' -print0)
 fi
+
+# Size budgets for files that agents read on every turn (warn only).
+line_budget_check() { # dir max kind
+  local d="$REPO_ROOT/$1" f n
+  [[ -d "$d" ]] || return 0
+  while IFS= read -r -d '' f; do
+    n="$(awk 'END { print NR }' "$f")"
+    if (( n > $2 )); then add_warning "$3 '$(basename "$f")' has $n lines (budget $2); trim it or move detail into a protocol read by heading."; fi
+  done < <(find "$d" -maxdepth 1 -type f -name '*.md' -print0)
+}
+line_budget_check .KCC/capabilities/agents 170 Agent
+line_budget_check .KCC/capabilities/skills 130 Skill
+line_budget_check .KCC/capabilities/agents/refs 170 "Agent ref"
 
 runtime_inside_kcc=(
   .KCC/ideation .KCC/specs .KCC/architecture .KCC/coordination

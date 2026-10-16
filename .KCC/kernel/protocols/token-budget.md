@@ -71,6 +71,7 @@ Output tokens are estimated as `base_input x output_ratio`. Stronger models emit
 | Model class           | output_ratio |
 |--|--|
 | `strong-reasoning`    | 0.60         |
+| `deep` (DeepThinking) | not estimated by ratio: use `deep-thinking.md` (about $0.80 floor, ~$48 per million output tokens including thinking; `max` effort can multiply output several times) |
 | `balanced`            | 0.45         |
 | `fast-implementation` | 0.30         |
 | `local-strong`        | 0.50         |
@@ -92,10 +93,10 @@ Apply this after the risk multiplier:
 
 | Complexity | multiplier | Model hint |
 |--|--|--|
-| low        | 1.0        | junior-safe, often `fast-implementation` or `balanced` |
+| low        | 1.0        | junior-safe, `fast-implementation` (executor) for implement |
 | medium     | 1.15       | mid-level, usually `balanced` |
-| high       | 1.35       | senior, often `strong-reasoning` for plan/review |
-| extra-high | 1.75       | principal-expert, `strong-reasoning` and wider confidence band |
+| high       | 1.35       | senior, `balanced`; implement escalates to `balanced` |
+| extra-high | 1.75       | principal-expert, `balanced` at high effort and wider confidence band |
 
 ### 5. Lifecycle-step multipliers
 

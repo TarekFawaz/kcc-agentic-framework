@@ -89,9 +89,14 @@ until `resets_at` plus `continuity.resume_grace_seconds`, then resumes the run
 | opencode | `opencode run --session {session_id} "{resume_prompt}"` |
 | generic | `{command} "{resume_prompt}"` (configured per workspace) |
 
-Unattended runs use an explicit, configured permission mode (default
-`acceptEdits`, plus the project allowlist). They **never** default to a
-permission-bypass mode. The watcher writes its log to
+Unattended runs use an explicit, configured permission mode. The default is
+Claude Code's `auto` mode: a classifier approves the builds, tests, and tool
+scripts a run needs and blocks risky actions, so no hand-maintained Bash
+allowlist is required (under `acceptEdits`, a headless session is denied every
+Bash command the allowlist does not spell out, and the implementer and verifier
+stop). `auto` needs a model that supports it: pin `claude-haiku-5-5` or newer,
+not the `haiku` alias, which can still resolve to Haiku 4.5. Runs **never**
+default to a permission-bypass mode. The watcher writes its log to
 `coordination/limit-watch.log`, emits `limit-reached`, `checkpoint-created`,
 `resume-scheduled`, and `resume-started`, and gives up after
 `continuity.max_resumes` attempts (default 5). If the resumed session hits

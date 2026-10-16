@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-create
 description: >
- Create one or more lean v6 specs (smallest user-valuable delivery each: one `SPEC-{ID}-{slug}.md` + `Backlog/` items, sized SZ-1..5) plus the per-idea `ROADMAP.md` under `IDEA-{ID}-{slug}-Specs/`, from an idea handoff, detailed human prompt, source file, source folder, or SpecWriterStarter.md. Usage: /spec-create <problem description or file-or-folder path or SpecWriterStarter.md>
+ Create one or more lean v6 specs (smallest user-valuable delivery each: one `SPEC-{ID}-{slug}.md` + `Backlog/` items, sized SZ-1..5) plus the per-idea `ROADMAP.md` under `IDEA-{ID}-{slug}-Specs/`, from an idea handoff, detailed human prompt, source file, source folder, or SpecWriterStarter.md. Usage: /spec-create <problem description or file-or-folder path or SpecWriterStarter.md> [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - technical-interrogator
@@ -31,6 +31,10 @@ status: active
 # Spec Create
 
 Create v6 spec(s) for: <ARGS>
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: at most `spec_sizing.max_specs_fasttrack` specs (default 5). Before writing them, show the human the proposed split (one line per spec: the user-visible outcome and its dependencies) and ask once to approve it or change the count or the slices; under `--silent --assume` use the budget without asking. A larger split the human approves is recorded in `ROADMAP.md` as `Spec budget: N (human approved)`. SPEC-001 is a walking skeleton (one thin feature end to end: API, UI, packaging, runnable); each later spec adds a user-visible feature. No Token Plan fill, no `/token-estimate`, no butler or trace. `ROADMAP.md` stays; the per-spec `arch.md` is the short skeleton only. Length caps: spec <= `spec_sizing.max_spec_lines`, each Backlog item <= `max_backlog_item_lines`.
 
 ## Steps
 

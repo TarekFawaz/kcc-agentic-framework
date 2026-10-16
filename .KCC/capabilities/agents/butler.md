@@ -196,6 +196,13 @@ accuracy-calibration -> *Per-agent calibration table format*, *Drift detection*.
 6. Update `Last updated` line.
 7. N < 5 -> blank drift, `Notes: insufficient data`.
 
+### Fasttrack mode (memory only)
+
+With `--fasttrack`: touch no `Traces/` folder and write no session files. Brief mode reads the memory
+index and returns a pack of 800 tokens or less. Remember mode writes only memory entries (decisions and
+preferences worth keeping, via `memory-append`) and emits the `brief-issued` / `remember-stored` events.
+Everything else in your process is skipped.
+
 ### Skip-butler mode
 
 On `skip-butler` or trivial work (one-line fix, doc typo): reply one line

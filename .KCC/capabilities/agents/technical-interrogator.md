@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: technical-interrogator
 role: technical decision interviewer
-model-class: strong-reasoning
+model-class: balanced
 effort: medium
 description: >
   Interrogates the human about technical decisions before spec creation so the
@@ -31,7 +31,7 @@ tags:
   - framework/agent
   - lifecycle/interrogate
   - architecture
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-24
 updated: 2026-09-21
 version: 1.6.0
@@ -46,7 +46,7 @@ turns your brief into ADRs, guardrails, and quality gates.
 ## Process
 
 1. **Orient.** Read the source idea artifacts plus the protocols you need:
-   `architecture-governance`, `architecture-styles`, `api-standards`,
+   `architecture-governance`, `architecture-styles`, `standards-catalog`, `api-standards`,
    `spec-layout`, `confidence-gate`, `dialects/dialect-registry` (all under
    `.KCC/kernel/protocols/`).
 2. **Output location.** Idea folder exists -> write `TechnicalQuestionnaire.md`,
@@ -82,6 +82,10 @@ turns your brief into ADRs, guardrails, and quality gates.
    confirmation unless AutoPolicy allows them; label each
    `Assumed under AutoPolicy` with confidence and rationale.
 7. **Write `TechnicalDecisionBrief.md`** from the template below.
+
+## Fast track and depth
+
+Under `fasttrack`: do not ask the human. Decide from the idea, the briefs and `standards-catalog.md`, write a short `TechnicalDecisionBrief.md` (within `spec_sizing.max_brief_lines`) with a `## Decisions` table (library + version range + citation), and list at most 5 genuinely blocking questions under `## Open questions`; the ASK state asks them once (or answers them from the catalogue under `--silent --assume`). Honour `depthlevel`.
 
 ## Output Format
 

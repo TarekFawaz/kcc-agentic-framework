@@ -189,6 +189,19 @@ Human hints (see [[hints]]) add `hint-issued` (`hint`, `to`, `by`, `expires_at`)
 `resume-started` and `resume-skipped` (`harness`, `reason`; the human continued
 the session before the reset).
 
+`auto --fasttrack` adds `fasttrack-approved` (`depthlevel`, `scope`; emitted by
+kcc-run right after `auto-policy-parsed`, and the only approval `check-impl-lock`
+accepts without an idea or spec id, valid until the next `auto-policy-parsed`).
+The complexity rule in the spawn protocol adds `model-escalated` (`agent`,
+`item`, `from`, `to`, `reason`).
+DeepThinking (`deep-thinking.md`) adds `deep-proposed` (`agent`, `task`, `reason`,
+`est_usd_low`, `est_usd_high`), `deep-approved` (`agent`, `task`, `effort`,
+`est_usd_high`, `approved_by`: `human` | `pre-approved`), `deep-declined` (`agent`,
+`task`, `fallback`: `strong` | `none`, `approved_by`), `deep-spawned` (`agent`, `task`,
+`model`, `effort`) and `deep-completed` (`agent`, `task`, `actual_usd`, `tokens`).
+`check-run-conformance -Scope deep` requires an unused `deep-approved` before each
+`deep-spawned`.
+
 Beyond the spine, token accounting adds `actual-recorded` (and
 `calibration-update`) once harness/API actuals exist (see those kinds below).
 

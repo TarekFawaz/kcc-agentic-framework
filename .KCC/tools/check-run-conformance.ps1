@@ -10,6 +10,11 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     This is the mechanical half of the self-healing gates: agents drift under
     `--silent --assume --parallel`; this tool catches the drift.
 
+    Run profile `fasttrack` (or a run started with `auto --fasttrack`, read from
+    coordination/run/run.json) skips the trace, memory, and token scopes and
+    relaxes the idea checks to the lean file set (Research.md, QuickRoadmap.md,
+    SpecWriterStarter.md; no ROI, questionnaire, answers, or conclusion).
+
     Checks (by scope):
       architecture - architecture/architecture.md exists, is non-trivial, and has
                      >=1 fenced ```mermaid``` block; zero *.mmd files under
@@ -24,10 +29,11 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
                      memory/decisions or memory/preferences is non-empty.
       token        - the latest trace session records an actual token row.
       idea         - IDEA-001..005: idea file sections, 7 artifacts, ROI confidence.
-      specs        - SPEC-001..007, SPEC-LEGACY, SZ-2, SZ-3, SZ-5 (spec-layout v6).
+      specs        - SPEC-001..008, SPEC-LEGACY, SZ-2, SZ-3, SZ-5 (spec-layout v6).
       plan         - PLAN-001..005, SZ-4 (waves, atomic tests, AC coverage).
       review       - REV-001..005 (verdict, evidence, traceability, open bugs).
       bugs         - BUG-001..004 (bug table fields, enums, regression tests).
+      deep         - DEEP-001..003 (every DeepThinking spawn was approved, within the cap and the task list).
 
     Read-only. PowerShell 5.1 compatible. No && operator. See
     kernel/contracts/tool-contract.md for the CLI / exit-code / JSON contract.
@@ -36,7 +42,10 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     Workspace root to check. Defaults to the parent of .KCC.
 
 .PARAMETER Scope
-    all | architecture | linking | trace | memory | token | idea | specs | plan | review | bugs.
+    all | architecture | linking | trace | memory | token | idea | specs | plan | review | bugs | deep.
+
+.PARAMETER RunProfile
+    Empty (full checks) or `fasttrack`. Auto-detected from coordination/run/run.json.
 
 .PARAMETER Spec
     Limit specs/plan/review/bugs checks to one spec (SPEC-001 or SPEC-001-slug).
@@ -53,12 +62,17 @@ param(
     [string]$RepoRoot,
     [string]$Scope = 'all',
     [string]$Spec,
+    [string]$RunProfile,
     [switch]$Json
 )
 
 $ErrorActionPreference = 'Stop'
 $ToolVersion = '2.0.0'
-$validScopes = @('all', 'architecture', 'linking', 'trace', 'memory', 'token', 'idea', 'specs', 'plan', 'review', 'bugs')
+$validScopes = @('all', 'architecture', 'linking', 'trace', 'memory', 'token', 'idea', 'specs', 'plan', 'review', 'bugs', 'deep')
+if ($RunProfile -and $RunProfile -ne 'fasttrack') {
+    [Console]::Error.WriteLine("unknown run profile: $RunProfile (valid: fasttrack)")
+    exit 2
+}
 if ($validScopes -notcontains $Scope) {
     [Console]::Error.WriteLine(("unknown scope: {0} (valid: {1})" -f $Scope, ($validScopes -join ', ')))
     exit 2
@@ -126,6 +140,7 @@ $memoryDir = Join-Path $RepoRoot 'memory'
 # Settings (spec_sizing)
 # ---------------------------------------------------------------------------
 $MaxItems = 6; $MaxFiles = 5; $MaxTests = 8; $MaxSpecLines = 150
+$MaxBacklogLines = 80; $MaxPlanLines = 250; $MaxBriefLines = 100; $MaxSpecsFast = 5; $MaxDeep = 2
 $settingsPath = Join-Path (Join-Path $RepoRoot '.KCC') 'settings.json'
 if (Test-Path -LiteralPath $settingsPath) {
     $st = Read-Text $settingsPath
@@ -133,6 +148,18 @@ if (Test-Path -LiteralPath $settingsPath) {
     $m = [regex]::Match($st, '"max_files_per_item"\s*:\s*(\d+)'); if ($m.Success) { $MaxFiles = [int]$m.Groups[1].Value }
     $m = [regex]::Match($st, '"max_tests_per_item"\s*:\s*(\d+)'); if ($m.Success) { $MaxTests = [int]$m.Groups[1].Value }
     $m = [regex]::Match($st, '"max_spec_lines"\s*:\s*(\d+)'); if ($m.Success) { $MaxSpecLines = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($st, '"max_backlog_item_lines"\s*:\s*(\d+)'); if ($m.Success) { $MaxBacklogLines = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($st, '"max_plan_lines"\s*:\s*(\d+)'); if ($m.Success) { $MaxPlanLines = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($st, '"max_brief_lines"\s*:\s*(\d+)'); if ($m.Success) { $MaxBriefLines = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($st, '"max_specs_fasttrack"\s*:\s*(\d+)'); if ($m.Success) { $MaxSpecsFast = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($st, '"deep"\s*:\s*\{[^}]*?"max_per_run"\s*:\s*(\d+)'); if ($m.Success) { $MaxDeep = [int]$m.Groups[1].Value }
+}
+
+# Fast-track profile: explicit -RunProfile, else the current run's policy (kcc-run stores "fasttrack": "1").
+$FastTrack = ($RunProfile -eq 'fasttrack')
+if (-not $RunProfile) {
+    $runJson = Join-Path (Join-Path (Join-Path $RepoRoot 'coordination') 'run') 'run.json'
+    if (Test-Path -LiteralPath $runJson) { $FastTrack = ((Read-Text $runJson) -match '"fasttrack"\s*:\s*"?1"?(?![0-9])') }
 }
 
 # ---------------------------------------------------------------------------
@@ -454,6 +481,27 @@ function Invoke-ArchitectureChecks {
         }
     }
 
+    # Fast-track profile (architecture-documentation.md -> required artifacts, column `fasttrack`): the
+    # Architecture Document carries C1, C2, a Decisions table and the toolchain; flowcharts and quality
+    # gates exist; ADR files, component diagrams, DFDs and sequences do not (over-production is drift).
+    if ($FastTrack) {
+        if (Test-Path -LiteralPath $archDoc) {
+            $ft = Read-Text $archDoc
+            if ($ft -notmatch 'C4Context') { Add-Violation 'ARCH-FT-001' 'error' 'architect' 'fast track: architecture.md has no embedded C1 context diagram (C4Context).' 'architecture/architecture.md' }
+            if ($ft -notmatch 'C4Container') { Add-Violation 'ARCH-FT-002' 'error' 'architect' 'fast track: architecture.md has no embedded C2 container diagram (C4Container).' 'architecture/architecture.md' }
+            if ($ft -notmatch '(?m)^##+\s+Decisions') { Add-Violation 'ARCH-FT-003' 'error' 'architect' "fast track: architecture.md has no '## Decisions' table (decision, library and version range, catalogue citation, status)." 'architecture/architecture.md' }
+            if ($ft -notmatch '(?m)^##+\s+Toolchain') { Add-Violation 'ARCH-FT-004' 'error' 'architect' "fast track: architecture.md has no '## Toolchain' table." 'architecture/architecture.md' }
+        }
+        $fc = Join-Path $archDir 'flowcharts'
+        if (-not (Test-Path -LiteralPath $fc) -or @(Get-ChildItem -LiteralPath $fc -File -Filter '*.md' -ErrorAction SilentlyContinue).Count -eq 0) { Add-Violation 'ARCH-FT-005' 'error' 'architect' 'fast track: architecture/flowcharts/ has no business flowchart.' 'architecture/flowcharts' }
+        if (-not (Test-Path -LiteralPath (Join-Path $archDir 'quality-gates.md'))) { Add-Violation 'ARCH-FT-006' 'error' 'architect' 'fast track: architecture/quality-gates.md is missing.' 'architecture/quality-gates.md' }
+        $adrDir = Join-Path $archDir 'adrs'
+        if ((Test-Path -LiteralPath $adrDir) -and @(Get-ChildItem -LiteralPath $adrDir -File -Filter 'ADR-*.md' -ErrorAction SilentlyContinue).Count -gt 0) { Add-Violation 'ARCH-FT-007' 'error' 'architect' 'fast track records decisions in architecture.md -> ## Decisions, not in ADR files; remove architecture/adrs/.' 'architecture/adrs' }
+        if (Test-Path -LiteralPath (Join-Path $archDir 'c4-component.md')) { Add-Violation 'ARCH-FT-008' 'error' 'architect' 'fast track writes no component diagram; remove architecture/c4-component.md.' 'architecture/c4-component.md' }
+        foreach ($extra in @('dfds', 'sequences')) { $xd = Join-Path $archDir $extra; if ((Test-Path -LiteralPath $xd) -and @(Get-ChildItem -LiteralPath $xd -File -ErrorAction SilentlyContinue).Count -gt 0) { Add-Violation 'ARCH-FT-009' 'error' 'architect' ("fast track writes no {0}; remove architecture/{0}/." -f $extra) ('architecture/' + $extra) } }
+        return
+    }
+
     if (Test-Path -LiteralPath $specsDir) {
         $specArchFiles = @(Get-ChildItem -LiteralPath $specsDir -Recurse -File -Filter 'arch.md' -ErrorAction SilentlyContinue)
         foreach ($sa in $specArchFiles) {
@@ -517,6 +565,7 @@ function Invoke-LinkingChecks {
 # TRACE
 # ---------------------------------------------------------------------------
 function Invoke-TraceChecks {
+    if ($FastTrack) { return }
     if (-not (Test-Path -LiteralPath $tracesDir)) { return }
     $sessions = @(Get-ChildItem -LiteralPath $tracesDir -Directory -Filter 'Session-*' -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending)
@@ -543,6 +592,7 @@ function Test-SubstantiveRun {
 # MEMORY
 # ---------------------------------------------------------------------------
 function Invoke-MemoryChecks {
+    if ($FastTrack) { return }
     if (-not (Test-Path -LiteralPath $memoryDir)) { return }
     if (-not (Test-SubstantiveRun)) { return }
 
@@ -560,6 +610,7 @@ function Invoke-MemoryChecks {
 # TOKEN ACTUALS
 # ---------------------------------------------------------------------------
 function Invoke-TokenChecks {
+    if ($FastTrack) { return }
     if (-not (Test-Path -LiteralPath $tracesDir)) { return }
     if (-not (Test-SubstantiveRun)) { return }
 
@@ -587,7 +638,9 @@ function Invoke-IdeaChecks {
         $rel = Get-RelPath $idea.FullName
         $lines = Read-Lines $idea.FullName
         $text = Read-Text $idea.FullName
-        foreach ($h in @('Reasoning', 'Phases', 'Upfront Budget', 'Effort Estimate')) {
+        $ideaHeadings = @('Reasoning', 'Phases', 'Upfront Budget', 'Effort Estimate')
+        if ($FastTrack) { $ideaHeadings = @('Reasoning', 'Phases') }
+        foreach ($h in $ideaHeadings) {
             if (-not (Test-Heading $lines $h)) {
                 Add-Violation 'IDEA-001' 'error' 'idea-interrogator' ("{0} is missing required section '## {1}'." -f $rel, $h) $rel
             }
@@ -605,9 +658,17 @@ function Invoke-IdeaChecks {
             }
         }
         $dir = Split-Path -Parent $idea.FullName
-        foreach ($a in @('Questionnaire.md', 'HumanAnswers.md', 'Research.md', 'ROI.md', 'Conclusion.md', 'QuickRoadmap.md', 'SpecWriterStarter.md')) {
+        $ideaArtifacts = @('Questionnaire.md', 'HumanAnswers.md', 'Research.md', 'ROI.md', 'Conclusion.md', 'QuickRoadmap.md', 'SpecWriterStarter.md')
+        if ($FastTrack) { $ideaArtifacts = @('Research.md', 'QuickRoadmap.md', 'SpecWriterStarter.md') }
+        foreach ($a in $ideaArtifacts) {
             if (-not (Test-Path -LiteralPath (Join-Path $dir $a))) {
                 Add-Violation 'IDEA-004' 'error' 'idea-interrogator' ("{0} is missing required artifact {1}." -f (Get-RelPath $dir), $a) ((Get-RelPath $dir) + '/' + $a)
+            }
+        }
+        foreach ($bf in @(Get-ChildItem -LiteralPath $dir -File -Filter '*Brief.md' -ErrorAction SilentlyContinue)) {
+            $bn = (Read-Lines $bf.FullName).Count
+            if ($bn -gt $MaxBriefLines) {
+                Add-Violation 'BRIEF-001' 'warning' 'idea-interrogator' ("{0} has {1} lines (max {2}). Shorten it; keep decisions and one-line reasons." -f (Get-RelPath $bf.FullName), $bn, $MaxBriefLines) (Get-RelPath $bf.FullName)
             }
         }
         $roi = Join-Path $dir 'ROI.md'
@@ -676,6 +737,10 @@ function Invoke-SpecsChecks {
                     Add-Violation 'SPEC-001' 'error' 'spec-writer' ("{0} is missing required section '## {1}'." -f $rel, $h) $rel
                 }
             }
+            # The dashboard and the lifecycle read the spec's status from its frontmatter.
+            if (-not ((($lines | Select-Object -First 40) -join "`n") -match '(?m)^status\s*:\s*\S')) {
+                Add-Violation 'SPEC-010' 'error' 'spec-writer' ("{0} has no 'status:' in its frontmatter." -f $rel) $rel
+            }
             if ($lines.Count -gt $MaxSpecLines) {
                 Add-Violation 'SZ-5' 'error' 'spec-writer' ("{0} has {1} lines (max {2}). Move detail into backlog items or arch.md." -f $rel, $lines.Count, $MaxSpecLines) $rel
             }
@@ -704,9 +769,19 @@ function Invoke-SpecsChecks {
             if (-not $hasInvest) {
                 Add-Violation 'SPEC-004' $sev 'spec-writer' ("{0} has no INVEST line/section." -f $irel) $irel
             }
+            if ($ilines.Count -gt $MaxBacklogLines) {
+                Add-Violation 'SZ-6' $sev 'spec-writer' ("{0} has {1} lines (max {2}). Keep the item to its ACs, impacted files, and INVEST line." -f $irel, $ilines.Count, $MaxBacklogLines) $irel
+            }
             $nf = (Get-ImpactedFiles $it.File).Count
             if ($nf -gt $MaxFiles) {
                 Add-Violation 'SZ-3' $sev 'spec-writer' ("{0} lists {1} impacted files (max {2}). Split the item." -f $irel, $nf, $MaxFiles) $irel
+            }
+            # Greenfield code lives under src/IDEA-{ID}-{slug}/; traceability and the wave-scope gate look only there.
+            foreach ($ip in (Get-ImpactedFiles $it.File)) {
+                if ($ip -match '^src/' -and $ip -notmatch '^src/IDEA-') {
+                    Add-Violation 'SPEC-008' 'error' 'spec-writer' ("{0}: impacted file '{1}' is outside src/IDEA-{{ID}}-{{slug}}/." -f $irel, $ip) $irel
+                    break
+                }
             }
         }
         if (-not $groups.ContainsKey($sp.Group)) { $groups[$sp.Group] = New-Object System.Collections.ArrayList }
@@ -723,6 +798,17 @@ function Invoke-SpecsChecks {
             continue
         }
         $rt = Read-Text $rm
+        # Fast track: a spec budget keeps the run small (each spec costs a writer, a plan, a build, a review).
+        # The human sets the budget at SPECS; a larger split needs their recorded 'Spec budget: N (human)'.
+        if ($FastTrack) {
+            $budget = $MaxSpecsFast
+            $bm = [regex]::Match($rt, '(?im)^\W*spec budget\W*:?\W*(\d+)[^\n]*human')
+            if ($bm.Success) { $budget = [int]$bm.Groups[1].Value }
+            $n = @($gspecs | ForEach-Object { $_.Id } | Sort-Object -Unique).Count
+            if ($n -gt $budget) {
+                Add-Violation 'SPEC-009' 'error' 'spec-writer' ("{0} has {1} specs; the fast-track budget is {2}. Merge specs into user-visible slices, or record the human's 'Spec budget: N (human approved)' in ROADMAP.md." -f (Get-RelPath $g), $n, $budget) (Get-RelPath $rm)
+            }
+        }
         $done6 = @{}
         foreach ($sp in $gspecs) {
             if ($done6.ContainsKey($sp.Id)) { continue }
@@ -762,12 +848,15 @@ function Invoke-PlanChecks {
         $prel = (Get-RelPath $sp.Dir) + '/plan.md'
         if (-not (Test-Path -LiteralPath $plan)) {
             $rank = Get-StatusRank (Get-SpecStatus $sp)
-            if (($Spec -and $Scope -eq 'plan') -or $rank -ge 2) {
+            if (($Spec -and $Scope -eq 'plan') -or $rank -ge 2 -or $FastTrack) {
                 Add-Violation 'PLAN-001' 'error' 'planner' ("{0} has no plan.md (spec status requires a plan)." -f $sp.Name) $prel
             }
             continue
         }
         $plines = Read-Lines $plan
+        if ($plines.Count -gt $MaxPlanLines) {
+            Add-Violation 'SZ-7' 'error' 'planner' ("{0} has {1} lines (max {2}). Merge duplicate rows and move detail into the backlog items." -f $prel, $plines.Count, $MaxPlanLines) $prel
+        }
         if (-not (Test-Heading $plines 'Waves') -and -not (Test-Path -LiteralPath (Join-Path $sp.Dir 'parallelization.md'))) {
             Add-Violation 'PLAN-002' 'error' 'planner' ("{0} has no '## Waves' section (and no legacy parallelization.md)." -f $prel) $prel
         }
@@ -893,6 +982,46 @@ function Invoke-ReviewChecks {
 # ---------------------------------------------------------------------------
 # BUGS
 # ---------------------------------------------------------------------------
+# DeepThinking (protocols/deep-thinking.md): every deep-spawned needs an unused deep-approved for the same agent and
+# task, orchestrator-started spawns (a human's /deep is not counted) stay within deep.max_per_run, and the task is in models.json -> deep_tasks. Counted since the latest
+# auto-policy-parsed (one run).
+function Invoke-DeepChecks {
+    $bc = Join-Path (Join-Path $RepoRoot 'coordination') 'backchannel.jsonl'
+    if (-not (Test-Path -LiteralPath $bc)) { return }
+    $lines = Read-Lines $bc
+    $start = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '"kind"\s*:\s*"auto-policy-parsed"') { $start = $i } }
+    $catalogue = @()
+    $mp = Join-Path (Join-Path (Join-Path $RepoRoot '.KCC') 'kernel') 'models.json'
+    if (Test-Path -LiteralPath $mp) {
+        $cm = [regex]::Match((Read-Text $mp), '"deep_tasks"\s*:\s*\[([^\]]*)\]')
+        if ($cm.Success) { foreach ($x in [regex]::Matches($cm.Groups[1].Value, '"([^"]+)"')) { $catalogue += $x.Groups[1].Value } }
+    }
+    $approved = @{}
+    $spawns = 0
+    for ($i = $start; $i -lt $lines.Count; $i++) {
+        $k = [regex]::Match($lines[$i], '"kind"\s*:\s*"(deep-approved|deep-spawned)"')
+        if (-not $k.Success) { continue }
+        $a = [regex]::Match($lines[$i], '"agent"\s*:\s*"([^"]*)"').Groups[1].Value
+        $t = [regex]::Match($lines[$i], '"task"\s*:\s*"([^"]*)"').Groups[1].Value
+        $key = $a + '|' + $t
+        if ($k.Groups[1].Value -eq 'deep-approved') {
+            if (-not $approved.ContainsKey($key)) { $approved[$key] = 0 }
+            $approved[$key]++
+            continue
+        }
+        if ($lines[$i] -notmatch '"initiator"\s*:\s*"human"') { $spawns++ }
+        if ($approved.ContainsKey($key) -and $approved[$key] -gt 0) { $approved[$key]-- }
+        else { Add-Violation 'DEEP-001' 'error' 'orchestrator' ("deep-spawned ({0}, {1}) has no unused deep-approved event before it. A human must see the cost first." -f $a, $t) 'coordination/backchannel.jsonl' }
+        if ($catalogue.Count -gt 0 -and $catalogue -notcontains $t) {
+            Add-Violation 'DEEP-003' 'error' 'orchestrator' ("deep task '{0}' is not in models.json deep_tasks ({1})." -f $t, ($catalogue -join ', ')) 'coordination/backchannel.jsonl'
+        }
+    }
+    if ($spawns -gt $MaxDeep) {
+        Add-Violation 'DEEP-002' 'error' 'orchestrator' ("{0} deep spawns in this run, max {1} (settings deep.max_per_run)." -f $spawns, $MaxDeep) 'coordination/backchannel.jsonl'
+    }
+}
+
 function Invoke-BugsChecks {
     $specs = Get-TargetSpecs
     foreach ($sp in $specs) {
@@ -950,6 +1079,7 @@ if ($Scope -eq 'all' -or $Scope -eq 'specs') { Invoke-SpecsChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'plan') { Invoke-PlanChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'review') { Invoke-ReviewChecks }
 if ($Scope -eq 'all' -or $Scope -eq 'bugs') { Invoke-BugsChecks }
+if ($Scope -eq 'all' -or $Scope -eq 'deep') { Invoke-DeepChecks }
 
 $errors = @($violations | Where-Object { $_.severity -eq 'error' })
 $warnings = @($violations | Where-Object { $_.severity -eq 'warning' })

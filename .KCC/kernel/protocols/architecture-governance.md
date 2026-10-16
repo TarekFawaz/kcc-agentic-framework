@@ -310,10 +310,23 @@ and enablers do not link to `architecture/` directly; they go through the
 spec folder note, which links to `arch.md`, which links to the global
 artifacts.
 
-In `auto --silent --assume` mode, the same flow applies, but the architect
-documents low-risk assumptions in `architecture/assumptions.md` and keeps
-ADR `Status: Proposed` until the human confirms. The planner still reads
-everything as-is; the verifier flags any `Proposed`-status ADR that gated a
+### ADR status under --silent --assume and fasttrack
+
+Nobody is asked during these runs, so an ADR that waits for a human would stop
+the plan at implement. The architect therefore sets the status by what backs
+the decision:
+
+| The decision ... | Status | Plan |
+|--|--|--|
+| follows a default in [[standards-catalog]] or [[architecture-styles]] (cite it) | `Accepted` | proceeds |
+| is a low-risk assumption (not a CR-7 domain), recorded in `architecture/assumptions.md` | `Accepted (assumed)`, with `assumption: A-NNN` | proceeds; the CLOSE summary lists every assumed ADR for review |
+| touches a CR-7 prohibited domain (security, privacy, secrets, compliance) and no catalogue default covers it | `Proposed` | the planner marks the dependent items blocked and a human gate opens; nothing else waits |
+
+A minor or patch version bump inside the range an ADR declares is not an ADR
+change; a new major version or a different library is.
+
+The planner never adds a blanket "STOP before implement" for `Accepted` or
+`Accepted (assumed)` ADRs. The verifier flags any `Proposed` ADR that gated a
 quality check.
 
 ---
@@ -332,7 +345,7 @@ Each ADR contains:
 # ADR-0001: {Decision Title}
 
 ## Status
-Proposed | Accepted | Superseded | Deprecated
+Proposed | Accepted | Accepted (assumed) | Superseded | Deprecated
 
 ## Context
 {Forces, constraints, technical decision brief inputs, related specs}

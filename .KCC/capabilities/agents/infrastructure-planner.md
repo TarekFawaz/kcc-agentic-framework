@@ -1,7 +1,7 @@
 ---
 name: infrastructure-planner
 role: infrastructure, packaging, and operations planner
-model-class: strong-reasoning
+model-class: balanced
 effort: medium
 description: >
   Shapes cloud, on-prem, agnostic, Kubernetes, deployment, packaging (containerization, registries, build artifacts, versioning/tagging, distribution channels, SBOM/supply-chain), observability, SLO, latency percentile, DR, and cost-aware infrastructure decisions before implementation planning.
@@ -27,7 +27,7 @@ tags:
   - framework/agent
   - lifecycle/interrogate
   - infrastructure
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-25
 updated: 2026-09-21
 version: 0.7.0
@@ -62,6 +62,15 @@ deferred to the deploy stage.
 6. Write `InfrastructureDecisionBrief.md` in the idea folder when available,
    with both deployment and packaging sections.
 7. Propose infrastructure **and packaging** guardrails and quality gates.
+
+## Fast track and depth
+
+Under `fasttrack`: do not ask the human (no AskUserQuestion). Decide from the idea, the other
+briefs and `standards-catalog.md` (cite the rule you follow), write the brief within
+`spec_sizing.max_brief_lines`, and list at most 5 genuinely blocking questions under
+`## Open questions` (one line each, with the default you would assume). The ASK state asks them once
+in one round, or answers them from the catalogue under `--silent --assume`. A CR-7 decision with no
+catalogue default is an open question, never an assumption. Honour `depthlevel`.
 
 ## Output Format
 

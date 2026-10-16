@@ -102,13 +102,35 @@ $missing = @()
 Write-Output "Toolchain preflight (OS: $os)"
 Write-Output "-----------------------------------"
 
-foreach ($tool in $toolList) {
+# A tool may carry a major-version constraint from plan.md '## Toolchain': node@>=20, node@20, node@>=20<25.
+function Test-VersionOk([string]$version, [string]$constraint) {
+    if (-not $constraint) { return $true }
+    $m = [regex]::Match($version, '(\d+)(\.\d+)*')
+    if (-not $m.Success) { return $true }
+    $major = [int]$m.Groups[1].Value
+    if ($constraint -match '^\d+$') { return $major -eq [int]$constraint }
+    foreach ($c in [regex]::Matches($constraint, '(>=|<=|>|<|=)(\d+)')) {
+        $n = [int]$c.Groups[2].Value
+        switch ($c.Groups[1].Value) { '>=' { if ($major -lt $n) { return $false } } '<=' { if ($major -gt $n) { return $false } } '>' { if ($major -le $n) { return $false } } '<' { if ($major -ge $n) { return $false } } '=' { if ($major -ne $n) { return $false } } }
+    }
+    return $true
+}
+
+foreach ($spec in $toolList) {
+    $tool = $spec; $constraint = ''
+    if ($spec -match '^([^@]+)@(.+)$') { $tool = $Matches[1]; $constraint = $Matches[2] }
     $cmd = Get-Command $tool -ErrorAction SilentlyContinue
     if ($cmd) {
         $version = ''
         try { $version = (& $tool --version 2>$null | Select-Object -First 1) } catch { $version = '' }
         if ([string]::IsNullOrWhiteSpace($version)) { $version = 'present' }
-        Write-Output ("PRESENT  {0}  ({1})" -f $tool, $version.Trim())
+        if (Test-VersionOk $version $constraint) {
+            Write-Output ("PRESENT  {0}  ({1})" -f $tool, $version.Trim())
+        } else {
+            $missing += ($tool + '@' + $constraint)
+            Write-Output ("WRONG    {0}  ({1}; the plan needs {2})" -f $tool, $version.Trim(), $constraint)
+            Write-Output ("         install: {0}" -f (Get-InstallSuggestion -Tool $tool -OS $os))
+        }
     } else {
         $missing += $tool
         Write-Output ("MISSING  {0}" -f $tool)

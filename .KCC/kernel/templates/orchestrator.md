@@ -24,34 +24,57 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
 
 1. **Resolve, don't guess.** Look up the agent in the Agent Profiles table
    (or `orchestrator.json` → `agents[].spawn`). Use its harness model and
-   effort. Never inherit the caller's model, and never raise it on your own.
+   effort. Never inherit the caller's model, and never raise it on your own,
+   except by the complexity rule (7) or an approved deep spawn (11).
 2. **Fresh context per unit.** Spawn a new subagent for each
    idea/spec/story/wave unit. Never fork or resume the caller's transcript.
-   One unit, one agent, one return.
+   One unit, one agent, one return. A hand-back is short: a 10-line summary
+   (what was written, the check result, confidence, open points) plus the
+   list of files; never the agent's whole report. Wait for every agent you
+   spawn (parallel ones too) before you finish: in a non-interactive session (`claude -p`,
+   kcc-run) the session ends with your reply, so never run a subagent in the
+   background there.
 3. **Handover packet, not file dumps.** Pass ≤ 300 words:
    `goal`, `ids` (IDEA/SPEC/STORY), `read` (paths + headings, never
    contents), `write` (expected artifact paths), `constraints`,
    `confidence_threshold`, `budget` (token-guard estimate id, if one exists),
+   `depthlevel` (1-5 from the AutoPolicy, default 5; omit at 5),
    `hints` (the active human hints for this agent: `kcc hint --pending --for
    <agent> --all`; omit when none).
    Shape: `.KCC/kernel/protocols/handover.md`. Hints given while a subagent runs
    reach it by hook, and you relay them with `SendMessage`
    (`.KCC/kernel/protocols/hints.md`).
-4. **Lazy reads.** The agent reads only its packet's `read` list and its
+4. **Lazy reads.** Read a skill, this map and the state table once per
+   session, then work from your notes: never re-read them per state, unit or
+   retry. The agent reads only its packet's `read` list and its
    own profile inputs. For files over ~400 lines or any
    `.KCC/kernel/protocols/*`, Grep for the heading first and read that
    section only. Never load `.KCC/` wholesale.
-5. **Lean return.** Reply with: ≤ 150-word summary, artifact paths written,
+5. **Lean return.** Reply with: the 10-line summary of rule 2 (≤ 150 words), artifact paths written,
    open questions, `Confidence: NN%`, and the `ActualTokenUsage` block
    (`.KCC/kernel/contracts/agent-contract.md`). No file echoes and no
    restated inputs.
 6. **Parallel fan-out.** Spawn independent units from the same
    `plan.md -> ## Waves` wave in **one** message, then wait for all of them
    before starting the next wave (`.KCC/kernel/protocols/parallel-execution.md`).
-7. **Escalation ladder.** If a retry follows FAIL or low confidence, raise
-   effort one step (`low→medium→high→xhigh`). Moving up a model class needs
-   `/critical-human-gate` or a token-guard re-estimate. Below the confidence
-   threshold, stop and run the gate. Don't loop.
+7. **Model routing** (`.KCC/kernel/protocols/model-routing.md`). Start from the
+   agent's profile tier and effort, then move at most one tier, from signals:
+   `research`/`architecture`/`security` never below balanced; a `novel`
+   domain (`Research.md -> ## Domain`) one tier up and effort high; a
+   `common` domain one tier down for spec, plan, docs and scaffold work;
+   CR-7 risk or `Complexity: high` never below balanced and effort high; a
+   large unit (> 3 items or > 5 files) effort one step up; a retry one tier
+   up and one effort up; under 20% budget left never above balanced unless
+   risk. Name the tier, model id (`kernel/models.json`), effort and reasons
+   in the packet and emit `model-selected`. Pin the id, never the alias
+   (`haiku` can be an older generation; the Agent tool accepts the id).
+   **Complexity rule (the one pre-approved class change).** The `implementer`
+   runs on the executor class (`fast-implementation`). Spawn it on `balanced`
+   for a backlog item whose `plan.md` Complexity is `high`/`extra-high` or
+   whose SZ-3/SZ-4 count is at its cap, or that is security-sensitive (auth, crypto, secrets, personal data, untrusted input), and on a retry after a FAIL once the
+   effort step is used. Pass `model` for that spawn and emit a backchannel
+   `model-escalated` event (agent, item, reason). Any move to
+   `strong-reasoning` still needs the gate.
 8. **Gates are scripts.** A delegate's work is done only when the state's
    exit-check tool passes (`.KCC/kernel/contracts/tool-contract.md`). Route
    violations to their `fix_owner`. Exit 3 (deferred) is never a pass.
@@ -62,12 +85,21 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    profile (fast class, low effort) and keep their output short (a context
    pack or a budget table). Skip `butler-brief` for single-file, read-only
    questions.
+11. **DeepThinking is a human-costed exception** (`.KCC/kernel/protocols/deep-thinking.md`).
+   You may propose it in `auto` and under `--fasttrack`, only for the four tasks in
+   `kernel/models.json -> deep_tasks` (not `human-directed`) and only when their trigger
+   is clearly met; never from a silent run. Before each spawn emit `deep-proposed` with a
+   cost range, ask the human once (approve at xhigh, approve at max, use strong, skip),
+   emit `deep-approved` or `deep-declined`, then `deep-spawned` and, after the return,
+   `deep-completed` with the actual cost. Tag every event `initiator: orchestrator`; at
+   most `settings.json -> deep.max_per_run` per run. The human can also start one at any
+   time with `/deep` (`initiator: human`, no run limit); never refuse or delay that.
 
 ### Harness binding
 
 | Harness | How to spawn with the profile |
 |---|---|
-| Claude Code | `Agent(subagent_type: "<name>", prompt: <handover>)`. Model, effort, and tools come from `.claude/agents/<name>.md` frontmatter. Don't pass `model` except on an approved escalation. |
+| Claude Code | `Agent(subagent_type: "<name>", prompt: <handover>)`. Model, effort, and tools come from `.claude/agents/<name>.md` frontmatter. Don't pass `model` except on an approved escalation (rule 7) or an approved deep spawn (rule 11). |
 | Codex | Use `.codex/agents/<name>.md` (`model`, `model_reasoning_effort`) as the sub-session profile. |
 | OpenCode | `@<name>` subagent from `.opencode/agents/<name>.md`. |
 | Generic / Ollama | `.agents/manifest.json` or `ollama/agents.json`, keyed by agent name. |

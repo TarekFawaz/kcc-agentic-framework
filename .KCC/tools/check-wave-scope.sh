@@ -13,6 +13,9 @@
 #   WAVE-001 implementer  changed src/ file not declared for the wave
 #   WAVE-002 implementer  --test-command exited non-zero
 #   WAVE-003 planner      wave has no items in plan.md
+#   WAVE-004 implementer  the wave declares src/ files and none of them changed
+# Files declared by an earlier wave of the same spec are accepted too (nothing
+# commits between waves, so earlier work still shows as changed).
 #
 # Usage: bash .KCC/tools/check-wave-scope.sh --spec SPEC-ID --wave N [--base REF|MANIFEST]
 #        [--test-command "CMD"] [--repo-root PATH] [--json]
@@ -110,11 +113,14 @@ backlog_dir() {
 impacted_files() {
   section "$1" 'impacted files' | awk '
     /^[ \t]*[-*][ \t]+[^ \t]/ {
-      l = $0
-      if (match(l, /`[^`]+`/)) p = substr(l, RSTART + 1, RLENGTH - 2)
-      else { sub(/^[ \t]*[-*][ \t]+/, "", l); split(l, a, /[ \t]+/); p = a[1] }
-      gsub(/^[ \t]+|[ \t]+$/, "", p); gsub(/\\/, "/", p); sub(/^\.\//, "", p)
-      print p
+      # Every backticked path on the bullet counts, not only the first; a backticked route (`/healthz`) is not a file.
+      l = $0; n = 0
+      while (match(l, /`[^` \t]+`/)) {
+        p = substr(l, RSTART + 1, RLENGTH - 2); l = substr(l, RSTART + RLENGTH)
+        if (p ~ /^\// || p !~ /[.\/]/) continue
+        gsub(/\\/, "/", p); sub(/^\.\//, "", p); print p; n++
+      }
+      if (n == 0) { l = $0; sub(/^[ \t]*[-*][ \t]+/, "", l); split(l, a, /[ \t]+/); p = a[1]; gsub(/\\/, "/", p); sub(/^\.\//, "", p); print p }
     }'
 }
 
@@ -206,6 +212,7 @@ if [ -n "$BD" ] && [ -n "$WAVE_ITEMS" ]; then
 $WAVE_ITEMS
 EOF
 fi
+DECLARED_IMPACTED_RAW="$DECLARED"
 # Plan-declared allowances: plan.md '## Wave file allowances' rows
 # '| Story-001 | `src/.../tests/x/**` `src/.../*.csproj` |'. Item 'any' applies to every wave.
 if [ -f "$SPEC_DIR/plan.md" ] && [ -n "$WAVE_ITEMS" ]; then
@@ -286,8 +293,30 @@ EOF
     END { for (p in k) if (substr(p, 1, 4) == "src/" && !(p in seen)) print orig[p] }')"
 fi
 
+# Only the items' own Impacted Files count as proof that the wave did its work (WAVE-004); allowances
+# (tests, fixtures, lockfiles, item 'any') are extras and must not make a wave that wrote nothing look done.
+DECLARED_IMPACTED="$DECLARED_IMPACTED_RAW"
+# Files declared by earlier waves of this spec.
+EARLIER_DECLARED=""
+if [ -n "$WSRC" ] && [ -n "$BD" ]; then
+  EARLIER_ITEMS="$(printf '%s
+' "$WSRC" | wave_list | awk -F'	' -v w="$WAVE_N" '($1 + 0) < (w + 0) && !seen[$2]++ { print $2 }')"
+  while IFS= read -r it; do
+    [ -n "$it" ] || continue
+    for f in "$BD/$it"*.md; do
+      [ -f "$f" ] || continue
+      case "$(basename "$f")" in "$it"[0-9]*) continue ;; esac
+      EARLIER_DECLARED="$EARLIER_DECLARED$(impacted_files "$f" | tr '[:upper:]' '[:lower:]')
+"
+    done
+  done <<EOF
+$EARLIER_ITEMS
+EOF
+fi
+
 # --- WAVE-001 ---
 SRC_CHANGED=0
+CUR_HIT=0
 while IFS= read -r c; do
   [ -n "$c" ] || continue
   r="${c//\\//}"
@@ -306,12 +335,44 @@ while IFS= read -r c; do
   done <<EOF
 $DECLARED
 EOF
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    hit=0
+    if [ "$d" = "$low" ]; then hit=1; fi
+    case "$d" in
+      */) case "$low" in "$d"*) hit=1 ;; esac ;;
+      *\**) case "$low" in $d) hit=1 ;; esac ;;
+    esac
+    if [ "$hit" -eq 1 ]; then CUR_HIT=$((CUR_HIT + 1)); break; fi
+  done <<EOF
+$DECLARED_IMPACTED
+EOF
+  if [ "$ok" -eq 0 ]; then
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ "$d" = "$low" ]; then ok=1; break; fi
+      case "$d" in
+        */) case "$low" in "$d"*) ok=1; break ;; esac ;;
+        *\**) case "$low" in $d) ok=1; break ;; esac ;;
+      esac
+    done <<EOF
+$EARLIER_DECLARED
+EOF
+  fi
   if [ "$ok" -eq 0 ]; then
     violation "WAVE-001" "error" "implementer" "$r changed but is not in the Impacted Files of any wave $WAVE_N item ($ITEMS_CSV)." "$r"
   fi
 done <<EOF
 $(printf '%s\n' "$CHANGED" | grep -v '^$' | LC_ALL=C sort -u || true)
 EOF
+
+# --- WAVE-004: a wave that declares src/ files must change at least one of them ---
+DECLARES_SRC=0
+case "$DECLARED_IMPACTED" in src/*|*"
+src/"*) DECLARES_SRC=1 ;; esac
+if [ -n "$WAVE_ITEMS" ] && [ "$DECLARES_SRC" -eq 1 ] && [ "$CUR_HIT" -eq 0 ]; then
+  violation "WAVE-004" "error" "implementer" "Wave $WAVE_N ($ITEMS_CSV) declares src/ files but none of them changed: the implementer wrote nothing." "$PREL"
+fi
 
 # --- WAVE-002 ---
 TEST_EXIT="null"

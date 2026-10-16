@@ -3,6 +3,9 @@ import { HARNESSES, parse, target, UsageError, workspace } from "./args";
 import { doctor } from "./commands/doctor";
 import { hint } from "./commands/hint";
 import { init } from "./commands/init";
+import { dashboard } from "./commands/dashboard";
+import { models } from "./commands/models";
+import { report } from "./commands/report";
 import { runTailor } from "./commands/tailor";
 import { upgrade } from "./commands/upgrade";
 import { registerMcp } from "./mcp/register";
@@ -31,6 +34,16 @@ Check
   doctor [--json] [--fix-hooks]
                       Check the installation; exit 1 when something must be fixed.
                       --fix-hooks adds missing KCC hooks to .claude/settings.json.
+  models [--check | --refresh] [--deep]
+                      The model of each tier per harness (kernel/models.json). --check probes the
+                      pinned Claude ids and the generated agents; --refresh also shows what each
+                      alias resolves to today (a newer generation shows up here).
+                      --deep adds the DeepThinking tier to the probes (about $0.80 each).
+  report [--skeleton-min N] [--app-min N] [--out file]
+                      Measure the run in this folder: time per stage, human waits, agents and cost, and a
+                      verdict against a budget (default skeleton 45 min, whole app 180); exit 1 on a miss.
+  dashboard [--check]  Rebuild dashboard/index.html and prove it compiles; --check also renders it
+                      headless (Chrome or Edge) and fails on a blank page.
   validate [--mode cell|repo]
                       Run the framework validator.
   limits [--json]     Show usage, the last limit hit, and the next resume.
@@ -46,6 +59,10 @@ Run
   run --input <idea|path|IDEA-ID|SPEC-ID|all> [kcc-run options]
                       Drive the lifecycle; on a usage limit it waits and resumes.
   run --resume        Continue a suspended or paused run.
+                      After SPECS, each spec starts as soon as the specs it depends on are done:
+                      independent specs run at the same time (--max-parallel N, default 4).
+  run --lane SPEC-X --answer <choice>
+                      Answer the gate a spec stopped at, then: kcc run --resume
   run --wrap [--harness <name>] -- <command...>
                       Supervise any harness command the same way.
   tool <name> [args]  Run any tool from .KCC/tools (bash-style flags on every OS).
@@ -101,6 +118,12 @@ async function main(argv: string[]): Promise<number> {
       const root = workspace(t.dir);
       return runTool(root, "sync-adapters", ["--harness", harness, "--repo-root", root]).status;
     }
+    case "dashboard":
+      return dashboard(rest);
+    case "models":
+      return models(rest);
+    case "report":
+      return report(rest);
     case "validate": {
       const { positionals, values } = parse(rest, [], ["dir", "mode"]);
       const root = workspace(target(positionals, values.dir, false).dir);

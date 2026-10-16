@@ -57,6 +57,24 @@ it. See [[.KCC/kernel/protocols/parallel-execution]].
 {Any new files needed: tests, configs, docs, migrations, etc., all under
 `src/IDEA-{ID}-{slug}/`}
 
+## Toolchain
+{Runtime and tool major-version ranges copied from `architecture/architecture.md`
+-> `## Toolchain`. PREFLIGHT checks each row (`node@>=20`).}
+
+| Tool | Version |
+|--|--|
+| node | >=20 |
+
+## Wave file allowances
+{One row per item for every file or glob it writes beyond its Impacted Files:
+test files, fixtures, lockfiles, generated code, configs. `check-wave-scope`
+reads ONLY this table (plus Impacted Files) and fails the wave on any other
+changed file under `src/`. Item `any` applies to every wave.}
+
+| Item | Paths (backticked, `src/IDEA-{ID}-{slug}/...`, `/**` allowed) |
+|--|--|
+| Enabler-001 | `src/IDEA-{ID}-{slug}/api/test/**` |
+
 ## Risk Flags
 {Lock ordering, breaking changes, config changes, rollback concerns,
 cross-idea infrastructure leaks}

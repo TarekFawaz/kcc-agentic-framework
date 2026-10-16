@@ -27,6 +27,10 @@ status: active
 
 Interrogate security concerns for: <ARGS>
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: still runs when CR-7 triggers it. Ask only blocking questions; never assume security-class answers.
+
 ## Steps
 
 1. Resolve `<ARGS>` to an idea folder, technical brief, or spec request.

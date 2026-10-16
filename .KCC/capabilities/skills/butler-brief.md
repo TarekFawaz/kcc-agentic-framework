@@ -34,6 +34,11 @@ the first butler touch of a run, it also **guarantees the run's trace session
 exists** (butler is the trace custodian) - so even pure HITL individual-skill
 use gets a `Traces/Session-*/` folder.
 
+## Flags
+
+`--fasttrack`: memory only. Create and write nothing under `Traces/` (skip any trace-session or token step); the
+butler works in its fasttrack mode and the backchannel events are emitted as usual.
+
 ## Steps
 
 1. If <ARGS> is empty, ask the caller for a SPEC-ID or topic and stop.

@@ -128,6 +128,10 @@ Otherwise **CHANGES_NEEDED** (file:line, Test IDs/ACs, Bug links),
 **QUALITY_DEFERRED** (quality-gate exit 3), or **TOOLCHAIN_DEFERRED**
 (commands not run + missing tools). Deferred verdicts are never a pass.
 
+## Fast track and depth
+
+Under `fasttrack`: no butler, trace, or token-guard; `quality-gate` runs its full scope (coverage floor, dependency audit, SAST, and SBOM plus image scan for deployables), exactly as in a full run. Traceability, ACs, evidence, bug checks, QG-PROD, and the security review of the diff (input validation at trust boundaries, authorization, secrets, injection, unsafe defaults) are unchanged; findings become `Bug-*` items. `review.md` <= `spec_sizing.max_plan_lines`; honour `depthlevel`.
+
 ## Constraints
 
 - Never modify source code. Write only `review.md`, `Backlog/Bug-*.md`, and

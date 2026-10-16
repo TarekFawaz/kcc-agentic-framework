@@ -79,13 +79,13 @@ permission:
 
 | Neutral class         | OpenCode model id                              |
 |--|--|
-| `strong-reasoning`    | `anthropic/claude-opus-5`                      |
-| `balanced`            | `anthropic/claude-sonnet-5`                    |
-| `fast-implementation` | `anthropic/claude-haiku-4-5`                   |
+| `strong-reasoning`    | `anthropic/claude-opus-5-5`                    |
+| `balanced`            | `anthropic/claude-sonnet-5-5`                  |
+| `fast-implementation` | `anthropic/claude-haiku-5-5`                   |
 | `local-strong`        | `ollama/qwen2.5:72b` (see [[ollama]])          |
 | `local-fast`          | `ollama/qwen2.5:7b` (see [[ollama]])           |
 
-Edit `opencode.json` to switch providers globally (for example, `openai/gpt-5`) or override per-agent via the generated agent file's `model:` field.
+Edit `opencode.json` to switch providers globally (for example, `openai/gpt-6-astra`) or override per-agent via the generated agent file's `model:` field.
 
 ## Argument placeholder
 

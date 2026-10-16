@@ -318,9 +318,10 @@ function New-SkillSpawnFooter {
     # handover, and return rules live in coordination/orchestrator.md.
     param([Parameter(Mandatory)]$Meta)
     $delegates = @(Get-DelegateList -Meta $Meta)
-    if (-not $delegates.Count) { return "`n" }
+    $economy = "`n`n## Output economy`n`nHonour ``depthlevel`` (1-5, default 5) from the AutoPolicy per ``.KCC/kernel/protocols/depth-levels.md``; write each fact once, tables over prose, stay under the artifact length caps.`n"
+    if (-not $delegates.Count) { return $economy }
     $names = ($delegates | ForEach-Object { ('`{0}`' -f $_) }) -join ', '
-    return "`n`n## Spawning`n`nDelegate to $names per ``coordination/orchestrator.md`` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (``orchestrator.json`` -> ``agents[].spawn``), handover packet in, lean return out.`n"
+    return "`n`n## Spawning`n`nDelegate to $names per ``coordination/orchestrator.md`` -> *Spawn protocol*: fresh subagent per unit, model and effort from its profile (``orchestrator.json`` -> ``agents[].spawn``), handover packet in, lean return out.`n" + $economy
 }
 
 function New-SkillPackageContent {
@@ -374,23 +375,25 @@ interface:
 # ============================================================
 
 # model-class -> harness-specific model id.
-# Claude agents use aliases (they float to the latest model of each tier);
-# $ModelClassToClaudeId records what each alias resolves to today, for the
-# orchestrator map and token-guard pricing.
+# Claude agents are pinned to full model IDs, not the opus/sonnet/haiku aliases:
+# an alias resolves to whatever the installed Claude Code build maps it to, and
+# `haiku` can still mean Haiku 4.5 (no auto mode). Bump the IDs here when a new
+# generation ships. $ModelClassToClaudeId feeds the orchestrator map and
+# token-guard pricing and is kept equal to the pinned ID.
 $ModelClassToClaude = @{
-    'strong-reasoning'    = 'opus'
-    'balanced'            = 'sonnet'
-    'fast-implementation' = 'haiku'
-    'local-strong'        = 'opus'
-    'local-fast'          = 'haiku'
+    'strong-reasoning'    = 'claude-opus-5-5'
+    'balanced'            = 'claude-sonnet-5-5'
+    'fast-implementation' = 'claude-haiku-5-5'
+    'local-strong'        = 'claude-opus-5-5'
+    'local-fast'          = 'claude-haiku-5-5'
 }
 
 $ModelClassToClaudeId = @{
-    'strong-reasoning'    = 'claude-opus-5'
-    'balanced'            = 'claude-sonnet-5'
-    'fast-implementation' = 'claude-haiku-4-5'
-    'local-strong'        = 'claude-opus-5'
-    'local-fast'          = 'claude-haiku-4-5'
+    'strong-reasoning'    = 'claude-opus-5-5'
+    'balanced'            = 'claude-sonnet-5-5'
+    'fast-implementation' = 'claude-haiku-5-5'
+    'local-strong'        = 'claude-opus-5-5'
+    'local-fast'          = 'claude-haiku-5-5'
 }
 
 # model-class -> default reasoning effort (low | medium | high | xhigh | max).
@@ -404,9 +407,9 @@ $ModelClassDefaultEffort = [ordered]@{
 }
 
 $ModelClassUse = [ordered]@{
-    'strong-reasoning'    = 'Interrogation, architecture, spec writing, planning, implementation'
-    'balanced'            = 'Verification, critique, migration, IaC generation'
-    'fast-implementation' = 'Meta-agents: butler memory, token-guard budgets'
+    'strong-reasoning'    = 'Escalations only: hard architecture or failing-review rework (human gate)'
+    'balanced'            = 'Interrogation, architecture, spec writing, planning, verification, critique, migration'
+    'fast-implementation' = 'Executor: implementation per approved plan; meta-agents (butler, token-guard)'
     'local-strong'        = 'Local strong reasoning via an Ollama-compatible harness'
     'local-fast'          = 'Local low-cost support via an Ollama-compatible harness'
 }
@@ -419,17 +422,17 @@ $EffortToCodex = @{
 }
 
 $ModelClassToCodex = @{
-    'strong-reasoning'    = 'gpt-5'
-    'balanced'            = 'gpt-5-mini'
-    'fast-implementation' = 'gpt-5-nano'
-    'local-strong'        = 'gpt-5'
-    'local-fast'          = 'gpt-5-nano'
+    'strong-reasoning'    = 'gpt-6-astra'
+    'balanced'            = 'gpt-6.1-sol'
+    'fast-implementation' = 'gpt-6-luna'
+    'local-strong'        = 'gpt-6-astra'
+    'local-fast'          = 'gpt-6-luna'
 }
 
 $ModelClassToOpenCode = @{
-    'strong-reasoning'    = 'anthropic/claude-opus-5'
-    'balanced'            = 'anthropic/claude-sonnet-5'
-    'fast-implementation' = 'anthropic/claude-haiku-4-5'
+    'strong-reasoning'    = 'anthropic/claude-opus-5-5'
+    'balanced'            = 'anthropic/claude-sonnet-5-5'
+    'fast-implementation' = 'anthropic/claude-haiku-5-5'
     'local-strong'        = 'ollama/qwen2.5:72b'
     'local-fast'          = 'ollama/qwen2.5:7b'
 }
@@ -546,20 +549,43 @@ function Resolve-OpenCodePermissions {
 # Read the neutral framework
 # ============================================================
 
+function Get-ModelOverrides {
+    # `.KCC/model-overrides` is user-owned (never shipped or overwritten by
+    # `kcc upgrade`). One line per agent: `name = model-class [effort]`.
+    param([Parameter(Mandatory)][string]$Root)
+    $map = @{}
+    $f = Join-Path $Root '.KCC/model-overrides'
+    if (-not (Test-Path -LiteralPath $f)) { return $map }
+    foreach ($line in [System.IO.File]::ReadAllLines($f)) {
+        $t = ($line -replace '#.*$', '').Trim()
+        if ($t -notmatch '^([^=\s]+)\s*=\s*(\S+)(?:\s+(\S+))?\s*$') { continue }
+        $cls = $Matches[2]; $eff = $Matches[3]
+        if (-not $ModelClassDefaultEffort.Contains($cls)) { Write-Warning "model-overrides: unknown model-class '$cls' for $($Matches[1]); ignored"; continue }
+        if ($eff -and ($ValidEfforts -notcontains $eff)) { Write-Warning "model-overrides: unknown effort '$eff' for $($Matches[1]); ignored"; $eff = $null }
+        $map[$Matches[1]] = @{ Class = $cls; Effort = $eff }
+    }
+    return $map
+}
+
 function Read-NeutralAgents {
     param([Parameter(Mandatory)][string]$Root)
     $dir = Join-Path (Get-CapabilitiesRoot -Root $Root) 'agents'
     if (-not (Test-Path -LiteralPath $dir)) {
         throw "Neutral agents directory not found: $dir"
     }
+    $overrides = Get-ModelOverrides -Root $Root
     $out = New-Object System.Collections.ArrayList
     foreach ($file in (Get-ChildItem -LiteralPath $dir -Filter '*.md' -File)) {
         $raw = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
         $parts = Split-Frontmatter -Text $raw
         $meta  = ConvertFrom-MiniYaml -Yaml $parts.Yaml
         $name  = if ($meta['name']) { $meta['name'] } else { [IO.Path]::GetFileNameWithoutExtension($file.Name) }
+        if ($overrides.ContainsKey($name)) {
+            $meta['model-class'] = $overrides[$name].Class
+            if ($overrides[$name].Effort) { $meta['effort'] = $overrides[$name].Effort }
+        }
         # Shared runtime rules live in one contract; every agent gets a pointer.
-        $body  = $parts.Body.TrimEnd() + "`n`n## Runtime`n`nFollow ``.KCC/kernel/contracts/agent-runtime.md``: handover in, lazy reads, ``Confidence: NN%`` + ``ActualTokenUsage``, lean return.`n"
+        $body  = $parts.Body.TrimEnd() + "`n`n## Runtime`n`nFollow ``.KCC/kernel/contracts/agent-runtime.md``: handover in, lazy reads, ``Confidence: NN%`` + ``ActualTokenUsage``, lean return, output economy (``depthlevel``).`n"
         [void]$out.Add([pscustomobject]@{
             Name = $name
             Meta = $meta
@@ -639,8 +665,8 @@ function Get-AgentSpawnProfile {
     $cls = Normalize-OneLine -Text $meta['model-class']
     $effort = Get-AgentEffort -Meta $meta -AgentName $Agent.Name
     $tools = if ($meta.Contains('tools-required')) { $meta['tools-required'] } else { @() }
-    $claudeModel = if ($ModelClassToClaude.ContainsKey($cls)) { $ModelClassToClaude[$cls] } else { 'sonnet' }
-    $claudeId = if ($ModelClassToClaudeId.ContainsKey($cls)) { $ModelClassToClaudeId[$cls] } else { 'claude-sonnet-5' }
+    $claudeModel = if ($ModelClassToClaude.ContainsKey($cls)) { $ModelClassToClaude[$cls] } else { 'claude-sonnet-5-5' }
+    $claudeId = if ($ModelClassToClaudeId.ContainsKey($cls)) { $ModelClassToClaudeId[$cls] } else { 'claude-sonnet-5-5' }
     # Claude subagent `tools` takes bare names only. Narrow Bash scopes are
     # published as exec_scope (intent for the caller and for reviewers).
     $resolved = @(Resolve-ClaudeTools -AgentName $Agent.Name -NeutralTools $tools)
@@ -658,11 +684,11 @@ function Get-AgentSpawnProfile {
             exec_scope = $scopes
         }
         codex       = [ordered]@{
-            model  = if ($ModelClassToCodex.ContainsKey($cls)) { $ModelClassToCodex[$cls] } else { 'gpt-5-mini' }
+            model  = if ($ModelClassToCodex.ContainsKey($cls)) { $ModelClassToCodex[$cls] } else { 'gpt-6.1-sol' }
             effort = $EffortToCodex[$effort]
         }
         opencode    = [ordered]@{
-            model = if ($ModelClassToOpenCode.ContainsKey($cls)) { $ModelClassToOpenCode[$cls] } else { 'anthropic/claude-sonnet-5' }
+            model = if ($ModelClassToOpenCode.ContainsKey($cls)) { $ModelClassToOpenCode[$cls] } else { 'anthropic/claude-sonnet-5-5' }
         }
         ollama      = [ordered]@{
             model = if ($ModelClassToOllama.ContainsKey($cls)) { $ModelClassToOllama[$cls] } else { 'qwen2.5:32b' }
@@ -706,7 +732,7 @@ function New-SpawnTable {
         if ($p.claude.exec_scope.Count) { $tools += ' (Bash limited to: ' + (($p.claude.exec_scope | ForEach-Object { $_ -replace '^Bash\((.*)\)$', '$1' }) -join ', ') + ')' }
         $io = (Get-FirstSentence -Text $a.Meta['inputs'] -Max 90) + ' -> ' + (Get-FirstSentence -Text $a.Meta['outputs'] -Max 90)
         $io = $io -replace '\|', '/'
-        [void]$lines.Add(('| `{0}` | `{1}` | `{2}` ({3}) | `{4}` | `{5}` / `{6}` | {7} | {8} |' -f $a.Name, $p.model_class, $p.claude.model, $p.claude.model_id, $p.effort, $p.codex.model, $p.codex.effort, $tools, $io))
+        [void]$lines.Add(('| `{0}` | `{1}` | `{2}` | `{4}` | `{5}` / `{6}` | {7} | {8} |' -f $a.Name, $p.model_class, $p.claude.model, $p.claude.model_id, $p.effort, $p.codex.model, $p.codex.effort, $tools, $io))
     }
     return ($lines -join "`n")
 }
@@ -757,7 +783,7 @@ function New-ModelClassTable {
     [void]$lines.Add('| Class | Claude | Default effort | Codex | OpenCode | Ollama | Intended use |')
     [void]$lines.Add('|-------|--------|----------------|-------|----------|--------|--------------|')
     foreach ($cls in $ModelClassDefaultEffort.Keys) {
-        [void]$lines.Add(('| `{0}` | `{1}` ({2}) | `{3}` | `{4}` | `{5}` | `{6}` | {7} |' -f $cls, $ModelClassToClaude[$cls], $ModelClassToClaudeId[$cls], $ModelClassDefaultEffort[$cls], $ModelClassToCodex[$cls], $ModelClassToOpenCode[$cls], $ModelClassToOllama[$cls], $ModelClassUse[$cls]))
+        [void]$lines.Add(('| `{0}` | `{1}` | `{3}` | `{4}` | `{5}` | `{6}` | {7} |' -f $cls, $ModelClassToClaude[$cls], $ModelClassToClaudeId[$cls], $ModelClassDefaultEffort[$cls], $ModelClassToCodex[$cls], $ModelClassToOpenCode[$cls], $ModelClassToOllama[$cls], $ModelClassUse[$cls]))
     }
     return ($lines -join "`n")
 }
@@ -827,16 +853,17 @@ function New-OrchestratorJson {
         spawn_protocol = [ordered]@{
             doc           = 'coordination/orchestrator.md#spawn-protocol'
             rules         = @(
-                'resolve model+effort from agents[].spawn; never inherit the caller model',
+                'resolve model+effort from agents[].spawn; never inherit the caller model (only exceptions: the complexity rule, an approved deep spawn)',
                 'fresh subagent per unit; never fork or resume the caller transcript',
-                'handover packet <= 300 words: goal, ids, read (paths only), write, constraints, confidence_threshold, budget',
+                'handover packet <= 300 words: goal, ids, read (paths only), write, constraints, confidence_threshold, budget, depthlevel (omit at 5)',
                 'lazy reads: grep the heading, then read that section; never load .KCC/ wholesale',
                 'return <= 150-word summary + artifact paths + Confidence + ActualTokenUsage; no file echoes',
                 'fan out independent wave units in one message; barrier before the next wave',
-                'retry escalation: effort +1 step; a model-class change needs critical-human-gate or a token-guard re-estimate',
+                'retry escalation: effort +1 step; a model-class change needs critical-human-gate or a token-guard re-estimate, except complexity rule: implementer runs on the executor class and may be spawned on balanced for high/extra-high or security-sensitive items or after a FAIL (emit model-escalated)',
                 'gates are scripts: done only when the state exit-check tool passes; exit 3 (deferred) is never a pass',
                 'continuity: at the soft usage threshold spawn nothing new; the hard threshold writes a restore point and suspends',
-                'meta-agents (butler, token-guard) stay on their fast/low profile'
+                'meta-agents (butler, token-guard) stay on their fast/low profile',
+                'deepthinking: only the kernel/models.json deep_tasks may run on the deep tier (xhigh/max), only after the human sees the cost range and approves (events deep-proposed, deep-approved|deep-declined, deep-spawned, deep-completed); never silent; the orchestrator may propose it in auto and fasttrack, and the human can start one anytime with /deep'
             )
             effort_levels = $ValidEfforts
         }
@@ -962,16 +989,27 @@ function Initialize-FrameworkInfrastructure {
 .agents/
 ollama/
 
+# Ideas, specs, architecture and src/ are the project's deliverables and ARE committed.
 Traces/Session-*/
-ideation/IDEA-*/
-specs/IDEA-*-Specs/
 solution/*/
 migrations/IMPORT-*/
-src/
 dashboard/
 
 coordination/backchannel.jsonl
 coordination/backchannel-*.jsonl
+coordination/run/
+coordination/gates/
+coordination/checkpoints/
+.kcc-lanes/
+coordination/lanes.json
+
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
 
 .tmp/
 .tmp-*
@@ -1224,7 +1262,7 @@ function Invoke-ClaudeSync {
         $model    = $profile.claude.model
         $effort   = $profile.claude.effort
         if (-not $ModelClassToClaude.ContainsKey($profile.model_class)) {
-            Write-Warning "[claude] agent '$name' has unknown model-class '$($profile.model_class)' - defaulting to sonnet"
+            Write-Warning "[claude] agent '$name' has unknown model-class '$($profile.model_class)' - defaulting to claude-sonnet-5-5"
         }
         $claudeTools = @($profile.claude.tools)
 
@@ -1330,7 +1368,7 @@ function Invoke-CodexSync {
         $role     = $meta['role']
         $tools    = if ($meta.Contains('tools-required')) { $meta['tools-required'] } else { @() }
 
-        $model = if ($ModelClassToCodex.ContainsKey($modelCls)) { $ModelClassToCodex[$modelCls] } else { 'gpt-5-mini' }
+        $model = if ($ModelClassToCodex.ContainsKey($modelCls)) { $ModelClassToCodex[$modelCls] } else { 'gpt-6.1-sol' }
         $toolsList = ($tools | ForEach-Object { '  - ' + (($_ -replace '\s+#.*$', '').Trim()) }) -join "`n"
 
         $descLine = '  ' + ($desc -replace "`r?`n", ' ')
@@ -1457,7 +1495,7 @@ function Invoke-OpenCodeSync {
         $isMeta   = ($meta['meta-agent'] -eq 'true')
         $mode     = if ($isMeta) { 'subagent' } else { 'subagent' }   # all are subagents under our orchestrator
 
-        $model = if ($ModelClassToOpenCode.ContainsKey($modelCls)) { $ModelClassToOpenCode[$modelCls] } else { 'anthropic/claude-sonnet-5' }
+        $model = if ($ModelClassToOpenCode.ContainsKey($modelCls)) { $ModelClassToOpenCode[$modelCls] } else { 'anthropic/claude-sonnet-5-5' }
         $permissionMap = Resolve-OpenCodePermissions -NeutralTools $tools
 
         $permissionBlock = ''
@@ -1534,7 +1572,7 @@ $obsidianBlock
 {
   "`$schema": "https://opencode.ai/config.json",
   "theme": "system",
-  "model": "anthropic/claude-sonnet-5",
+  "model": "anthropic/claude-sonnet-5-5",
   "autoshare": false,
   "autoupdate": false,
   "permission": {

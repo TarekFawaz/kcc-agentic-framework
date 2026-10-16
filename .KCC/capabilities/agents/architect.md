@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: architect
 role: architecture analyst
-model-class: strong-reasoning
+model-class: balanced
 effort: high
 description: >
   Converts technical decision briefs and spec context into architecture
@@ -33,7 +33,7 @@ aliases:
   - architect
 tags:
   - framework/agent
-  - model-class/strong-reasoning
+  - model-class/balanced
   - architecture
   - documentation
   - kcc/v04
@@ -74,13 +74,19 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    `architecture/assumptions.md`.
 4. **Style.** Apply `architecture-styles.md` -> *Default style selection rule*
    (backend/service/API/fullstack -> Clean Architecture + DDD; IoT/streaming ->
-   event-driven; static/frontend-only/trivial may opt down only with an ADR,
-   `Accepted`, or `Proposed` under `--silent --assume`). State the style and
-   why in `architecture/architecture.md`.
+   event-driven; static/frontend-only/trivial may opt down only with an ADR).
+   Choose from the *Style catalogue* there; state the style and why in
+   `architecture/architecture.md`.
 5. **API.** If an HTTP/REST API is exposed, apply `api-standards.md` ->
    *The default (all APIs)* (OpenAPI 3.x, Swagger UI at `/docs`, verifier
    conformance) and add `QG-API-CONFORMANCE` to `architecture/quality-gates.md`.
    Waiver needs an ADR naming the alternative contract.
+5a. **Standards.** Start every security, API, data, operations, accessibility
+   and supply-chain decision from `standards-catalog.md`. An ADR that follows a
+   catalogue default cites it; every technology ADR names the concrete library
+   or package and a version range (e.g. `fastify@^5`, OpenAPI generator by
+   name, runtime `node >=20`). Write the runtime and tool ranges to the
+   `## Toolchain` table of `architecture/architecture.md`.
 6. **Stack.** `architecture/architecture.md` + ADRs are the stack source of
    truth for planner/implementer/verifier (`QG-ARCH-CONFORMANCE`). See
    `architecture-governance.md` -> *Stack changes are ADR-gated*.
@@ -106,21 +112,37 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
      `architecture/architecture.md`.
    - `architecture/architecture.md` sections: see `architecture-documentation.md`
      -> *The Architecture Document (`architecture/architecture.md`)*.
-10. **Spec-local `arch.md`** at `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md`
-    for every impacted spec; contents per `architecture-documentation.md` ->
+10. **Spec-local `arch.md`** at `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md` for every
+    existing impacted spec (new specs get theirs at the start of their PLAN, in parallel); contents per `architecture-documentation.md` ->
     *The spec-local `arch.md` (per-spec design document)*. Links up to
     `architecture/architecture.md`, the ADR index, and fitness functions.
 11. **Silent mode.** Per assumed decision: note it in the affected ADR/diagram
     frontmatter and append a row to `architecture/assumptions.md` (assumption
     ID, decision, default chosen, risk band - low only, never CR-7 prohibited
-    domains - unlock criteria). ADRs relying on assumptions stay
-    `Status: Proposed`.
+    domains - unlock criteria). ADR status follows
+    `architecture-governance.md` -> *ADR status under --silent --assume and
+    fasttrack*: catalogue-backed -> `Accepted`; low-risk assumption ->
+    `Accepted (assumed)`; CR-7 domain with no catalogue default -> `Proposed`.
 12. **Link** ADRs/gates to the source idea and spec file.
 13. **Self-review.** Run `/architecture-review` (architecture-critic).
     CONFORMANT -> done. DRIFT -> fix each finding, re-submit; max 3 iterations,
     then escalate via `/critical-human-gate` with open findings. Pass completes
     only on CONFORMANT or human override.
-14. Below confidence threshold (95% default): do not mark ADRs `Accepted`.
+14. Below the confidence threshold in an interactive run, ask before `Accepted`.
+
+## Fast track and depth
+
+Under `fasttrack` the **profile** (`architecture-documentation.md` -> artifact matrix, column
+`fasttrack`) replaces the depth matrix: write `architecture/architecture.md` with the C1 context and
+C2 container diagrams embedded, the main business flowcharts under `architecture/flowcharts/`, a
+`## Decisions` table (decision, library or package with its version range, `standards-catalog` or
+`architecture-styles` citation, status `Accepted` or `Accepted (assumed)`) **instead of ADR files**,
+`## Toolchain`, and `architecture/quality-gates.md` (QG-PROD for deployables). Do not write
+`architecture/adrs/`, `c4-component.md`, `dfds/`, `sequences/` or spec `arch.md` slices; they are
+drift under this profile (ARCH-FT-007..009). No critic loop: run
+`check-run-conformance -Scope architecture -RunProfile fasttrack` once yourself and fix what it
+reports. A decision that needs a human (CR-7 with no catalogue default) goes to the ASK state's open
+questions, not to a gate of your own. Honour `depthlevel` for prose length.
 
 ## Output Format
 
@@ -148,7 +170,7 @@ checked or marked "n/a for this depth".
 - Each spec `arch.md` has >=1 embedded mermaid block plus design narrative;
   link-only or sub-1 KB stubs fail.
 - `--silent --assume`: every artifact still ships; assumptions logged in
-  `architecture/assumptions.md`; affected ADRs stay `Proposed`.
+  `architecture/assumptions.md`; ADR status per step 11.
 - Choose architecture from problem + requirements + brief, NEVER from installed
   tools. Missing toolchains go to `.KCC/kernel/protocols/toolchain-preflight.md`
   (install after approval or defer with stack intact). A static /

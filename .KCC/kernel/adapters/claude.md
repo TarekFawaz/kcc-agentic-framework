@@ -57,16 +57,26 @@ Neutral -> Claude (`.claude/agents/{name}.md`):
 
 ### Model class mapping
 
-Aliases float to the newest model in each tier. The resolved IDs are
-recorded in `coordination/orchestrator.json` -> `model_classes`.
+Agents are pinned to full model IDs, not the `opus` / `sonnet` / `haiku`
+aliases. An alias resolves to whatever the installed Claude Code build maps it
+to, and `haiku` can still mean Haiku 4.5 (no auto mode) while `sonnet` can land
+on `claude-sonnet-5`. When a new generation ships, change the IDs in
+`sync-adapters` (`$ModelClassToClaude` / `model_for`) and run `kcc sync`. The IDs
+are recorded in `coordination/orchestrator.json` -> `model_classes`.
 
-| Neutral class         | Claude `model:` | Resolves to (2026-09) | Default `effort:` |
-|--|--|--|--|
-| `strong-reasoning`    | `opus`          | `claude-opus-5`       | `high`   |
-| `balanced`            | `sonnet`        | `claude-sonnet-5`     | `medium` |
-| `fast-implementation` | `haiku`         | `claude-haiku-4-5`    | `low`    |
+| Neutral class         | Claude `model:`      | Default `effort:` |
+|--|--|--|
+| `strong-reasoning`    | `claude-opus-5-5`    | `high`   |
+| `balanced`            | `claude-sonnet-5-5`  | `medium` |
+| `fast-implementation` | `claude-haiku-5-5`   | `low`    |
 | `local-strong`        | n/a - use Ollama adapter | | |
 | `local-fast`          | n/a - use Ollama adapter | | |
+
+**DeepThinking** is a spawn-time tier, not a class: `claude-fable-5-1` (alias `fable`) at `xhigh` or `max`
+(`--effort` accepts `low` .. `max`; there is nothing above `max`). No agent has it in its frontmatter. The
+orchestrator passes `model` and `effort` on an approved spawn only (proposed by it, or started by you with `/deep`)
+(`.KCC/kernel/protocols/deep-thinking.md`); a probe of it costs about $0.80, so `kcc models --check` skips it
+unless given `--deep`.
 
 ### Tool name mapping
 
@@ -138,7 +148,7 @@ A `SessionEnd` hook in `.claude/settings.json` runs the token-actuals producer:
 ```json
 "SessionEnd": [
   { "hooks": [ { "type": "command",
-    "command": "powershell -ExecutionPolicy Bypass -File \"%CLAUDE_PROJECT_DIR%\\.KCC\\tools\\record-token-actuals.ps1\" -FromHookStdin" } ] }
+    "command": "bash \"$CLAUDE_PROJECT_DIR/.KCC/tools/record-token-actuals.sh\" --from-hook-stdin" } ] }
 ]
 ```
 
