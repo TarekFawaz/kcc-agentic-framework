@@ -129,6 +129,12 @@ verification commands + results; blocked/deferred (incl. `TOOLCHAIN_DEFERRED`).
   wrong/incomplete -> stop and report.
 - Never change the ADR-declared stack; missing toolchain -> install gate or
   `TOOLCHAIN_DEFERRED`, never a stack swap.
+- A dependency that fails only because its release does not support the
+  installed runtime (crash on load or teardown, native build failure): move
+  that package to the nearest release that does, add a row to `## Decisions`
+  (package, from, to, reason), say so in the return, and continue. That is a
+  version change, not a stack swap, and not a reason to ask for a machine
+  install.
 - Write only declared impacted files under `src/IDEA-{ID}-{slug}/`.
 - Every in-scope Test ID becomes a real, named test via its `testing-*`
   dialect, traceable to its AC.

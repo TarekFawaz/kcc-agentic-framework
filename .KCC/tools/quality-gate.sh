@@ -147,6 +147,8 @@ COV_MIN="$(setting quality.coverage_min_pct 80)"
 COV_SRC="settings.quality.coverage_min_pct"
 [[ -f "$SETTINGS_FILE" ]] || COV_SRC="default"
 FAIL_DEPS="$(setting quality.fail_on.dependencies high | tr 'A-Z' 'a-z')"
+# The npm audit gate covers what ships; dev-only advisories gate only when quality.audit_dev_dependencies is true.
+AUDIT_DEV="$(setting quality.audit_dev_dependencies false | tr 'A-Z' 'a-z')"
 FAIL_SAST="$(setting quality.fail_on.sast error | tr 'A-Z' 'a-z')"
 # local (semgrep on PATH) or docker (semgrep/semgrep image; Windows has no native semgrep).
 SAST_RUNNER="$(setting quality.scanners.sast_runner local | tr 'A-Z' 'a-z')"
@@ -801,7 +803,8 @@ deps_fallback() { # stack dir proj
     node)
       if [[ -f "$dir/package-lock.json" ]] && have npm; then
         local lvl="$FAIL_DEPS"; [[ "$lvl" == "medium" ]] && lvl=moderate; [[ "$lvl" == "any" ]] && lvl=low
-        run_split "$dir" npm audit --json "--audit-level=$lvl" || rc=$?
+        local omit=(); [[ "$AUDIT_DEV" == "true" ]] || omit=(--omit=dev)
+        run_split "$dir" npm audit --json "--audit-level=$lvl" ${omit[@]+"${omit[@]}"} || rc=$?
         local flat; flat="$(json_flatten_file "$LAST_OUT")"
         local total; total="$(flat_get "$flat" metadata.vulnerabilities.total)"
         if [[ -z "$total" ]]; then

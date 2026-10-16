@@ -99,4 +99,14 @@ describe("a silent run never prompts", () => {
     expect(text("kcc-run.ps1")).toMatch(/\$console = .*-and -not \$Silent/);
     expect(text("kcc-run.sh")).toMatch(/-t 0 && -t 1 && \$JSON -eq 0 && \$SILENT -eq 0/);
   });
+  test("a silent run answers a deferred quality check itself (never a pass) and never waits on a console for any gate", () => {
+    const text = (n: string): string => payloadFiles().get(`tools/${n}`)!.toString("utf8");
+    for (const f of ["kcc-run.ps1", "kcc-run.sh"]) {
+      const t = text(f);
+      expect(t).toContain("deferred quality check accepted by policy (not a pass)");
+      expect(t).toMatch(/accept-deferred/);
+    }
+    expect(text("kcc-run.ps1")).toMatch(/if \(\$R\.silent -eq '1'\) \{[\s\S]*?return 'paused'/);
+    expect(text("kcc-run.sh")).toMatch(/if \[\[ "\$R_silent" == "1" \]\]; then[\s\S]*?return 0/);
+  });
 });

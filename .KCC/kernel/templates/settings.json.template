@@ -55,6 +55,7 @@
   },
   "quality": {
     "coverage_min_pct": 80,
+    "audit_dev_dependencies": false,
     "scanners": {
       "secrets": "gitleaks",
       "dependencies": "osv-scanner",

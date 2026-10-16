@@ -107,6 +107,9 @@ $CovMin = [double](Get-Setting 'quality.coverage_min_pct' 80)
 $CovSrc = 'settings.quality.coverage_min_pct'
 if (-not (Test-Path -LiteralPath $settingsFile)) { $CovSrc = 'default' }
 $FailDeps = ([string](Get-Setting 'quality.fail_on.dependencies' 'high')).ToLowerInvariant()
+# The npm audit gate covers what ships. Dev-only advisories (a test runner or bundler) are not exposed in production and
+# an unattended run cannot major-bump them without breaking its own pinned stack, so they gate only when asked to.
+$AuditDev = (([string](Get-Setting 'quality.audit_dev_dependencies' 'false')).ToLowerInvariant() -eq 'true')
 $FailSast = ([string](Get-Setting 'quality.fail_on.sast' 'error')).ToLowerInvariant()
 # 'local' (semgrep on PATH) or 'docker' (semgrep/semgrep image; for Windows, where semgrep has no native build).
 $SastRunner = ([string](Get-Setting 'quality.scanners.sast_runner' 'local')).ToLowerInvariant()
@@ -1007,10 +1010,11 @@ function Invoke-DepsFallback([string]$Stack, [string]$Dir, [string]$Project) {
         $lvl = $FailDeps
         if ($lvl -eq 'medium') { $lvl = 'moderate' }
         if ($lvl -eq 'any') { $lvl = 'low' }
-        $rc = Invoke-Logged -Dir $Dir -Argv @('npm', 'audit', '--json', ('--audit-level=' + $lvl))
+        $auditArgs = @('npm', 'audit', '--json', ('--audit-level=' + $lvl)); if (-not $AuditDev) { $auditArgs += '--omit=dev' }
+        $rc = Invoke-Logged -Dir $Dir -Argv $auditArgs
         $j = $null
         try { $j = [IO.File]::ReadAllText($script:LastOut) | ConvertFrom-Json } catch { $j = $null }
-        $shown = 'npm audit --json --audit-level=' + $lvl
+        $shown = 'npm audit --json --audit-level=' + $lvl + $(if ($AuditDev) { '' } else { ' --omit=dev' })
         if (($null -eq $j) -or ($null -eq $j.metadata) -or ($null -eq $j.metadata.vulnerabilities)) {
             if ($Require) { Add-Check 'QG-DEPS' 'dependencies' 'node' $Project 'fail' 'error' $shown $rc 'npm audit did not complete (registry unreachable?)' 'human' (Get-Rel $script:LastLog) }
             else { Add-Missing 'osv-scanner'; Add-Check 'QG-DEPS' 'dependencies' 'node' $Project 'deferred' 'warning' $shown $rc 'npm audit did not complete (registry unreachable?); install osv-scanner or retry online' 'human' (Get-Rel $script:LastLog) }

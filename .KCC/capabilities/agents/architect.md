@@ -87,6 +87,13 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    or package and a version range (e.g. `fastify@^5`, OpenAPI generator by
    name, runtime `node >=20`). Write the runtime and tool ranges to the
    `## Toolchain` table of `architecture/architecture.md`.
+5b. **Versions follow the machine, the stack does not.** Probe the installed
+   runtime (`node --version`, `python --version`) and pin each library to a
+   release whose supported-runtime range includes it. For a package with a
+   native addon (better-sqlite3, argon2, bcrypt, sharp), read the newest
+   release's `engines` (`npm view <pkg> engines`) before pinning: a pin that
+   excludes the installed runtime is a defect (round 8: `better-sqlite3@^11`
+   crashed the test runner on Node 24).
 6. **Stack.** `architecture/architecture.md` + ADRs are the stack source of
    truth for planner/implementer/verifier (`QG-ARCH-CONFORMANCE`). See
    `architecture-governance.md` -> *Stack changes are ADR-gated*.

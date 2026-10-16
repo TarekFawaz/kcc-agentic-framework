@@ -827,6 +827,18 @@ function Open-Gate([string]$name, [string]$kind, [string]$question, $st, $ctx, [
     return (Prompt-Gate)
 }
 function Prompt-Gate {
+    # A silent run has no human. The one gate it answers itself is a deferred quality check (a scanner that is not
+    # installed): accepting it is recorded in the gate file, the decision event and closed.md, and is never a pass.
+    # Every other gate pauses the run, and a silent run never waits on a console that nobody answers.
+    if ($R.silent -eq '1') {
+        if ($R.gate_name -eq 'quality-deferred-on-exit-3') {
+            $script:Note = 'silent run: deferred quality check accepted by policy (not a pass); install the missing tool and re-run the gate to close it'
+            Say ('kcc-run: ' + $script:Note)
+            Apply-Answer 'accept-deferred'
+            return 'answered'
+        }
+        return 'paused'
+    }
     $tty = $false
     try { $tty = (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected) -and [Environment]::UserInteractive } catch { $tty = $false }
     if ($Json -or -not $tty -or $env:KCC_RUN_NO_PROMPT -eq '1') { return 'paused' }

@@ -711,6 +711,17 @@ open_gate() { # $1 name, $2 kind, $3 question, $4 idx, $5 extra
 }
 prompt_gate() { # sets OUTCOME paused|answered
   OUTCOME=paused
+  # A silent run has no human. The one gate it answers itself is a deferred quality check (a scanner that is not
+  # installed): accepting it is recorded in the gate file, the decision event and closed.md, and is never a pass.
+  # Every other gate pauses the run, and a silent run never waits on a console that nobody answers.
+  if [[ "$R_silent" == "1" ]]; then
+    if [[ "$R_gate_name" == "quality-deferred-on-exit-3" ]]; then
+      NOTE="silent run: deferred quality check accepted by policy (not a pass); install the missing tool and re-run the gate to close it"
+      say "kcc-run: $NOTE"
+      apply_answer "accept-deferred"; OUTCOME=answered
+    fi
+    return 0
+  fi
   if [[ "$JSON" -eq 1 || "${KCC_RUN_NO_PROMPT:-}" == "1" ]]; then return 0; fi
   if [[ ! -t 0 || ! -t 1 ]]; then return 0; fi
   local a
