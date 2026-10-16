@@ -3,14 +3,14 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 
 .SYNOPSIS
     Deterministic quality gate for a KCC workspace (build, lint, tests,
-    coverage, lockfile, secrets, dependencies, SAST, SBOM, image scan).
+    coverage, lockfile, secrets, dependencies, SAST, static rules, SBOM, image scan).
 
 .DESCRIPTION
     Mirror of quality-gate.sh (same check IDs, JSON shape, exit codes).
     Contract: .KCC/kernel/contracts/tool-contract.md
 
     Checks: QG-STACK QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS
-            QG-DEPS QG-SAST QG-SBOM QG-IMAGE
+            QG-DEPS QG-SAST QG-STATIC QG-SBOM QG-IMAGE
 
     Exit: 0 pass | 1 violations | 2 usage/environment | 3 deferred (a scanner
     or toolchain is missing; NOT a pass). This tool NEVER installs anything;
@@ -75,7 +75,7 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath.TrimEnd('\', '/')
 
 if ($Spec -and ($Spec -notmatch '^SPEC-[0-9A-Za-z]+$')) { Exit-Env "invalid -Spec '$Spec' (expected SPEC-{ID})" }
 $Scope = ($Scope.ToLowerInvariant() -replace '\s', '')
-$validScopes = @('all', 'lock', 'build', 'lint', 'test', 'coverage', 'secrets', 'deps', 'sast', 'sbom', 'image')
+$validScopes = @('all', 'lock', 'build', 'lint', 'test', 'coverage', 'secrets', 'deps', 'sast', 'static', 'sbom', 'image')
 foreach ($s in ($Scope -split ',')) { if ($validScopes -notcontains $s) { Exit-Env "unknown scope '$s'" } }
 if ($Fast) { $Scope = 'secrets' }
 $scopeList = @($Scope -split ',')
@@ -1129,12 +1129,268 @@ function Invoke-SastCheck {
     else { Add-Check 'QG-SAST' 'sast' '' '' 'pass' 'none' $shown $rc ('semgrep: no findings at severity >= ' + $FailSast) 'implementer' (Get-Rel $out) }
 }
 
+# ------------------------------------------------------------------ QG-STATIC (architecture/static-rules.tsv)
+# One rule per line, tab-separated: id <TAB> files <TAB> forbidden <TAB> allowed_in <TAB> message
+#   files      regex matched against the path relative to the workspace (which files the rule scans)
+#   forbidden  regex searched in every matching file (keep to the POSIX ERE subset so both shells agree)
+#   allowed_in regex of relative paths where the pattern IS permitted (may be empty)
+# '#' starts a comment line; a header row "id<TAB>files<TAB>..." is ignored. node_modules, dist, build, .git, coverage,
+# TestResults, lockfiles and the rules file itself are never scanned; test files are scanned like any other.
+function Test-RegexOk([string]$Pattern) {
+    try { $null = New-Object System.Text.RegularExpressions.Regex($Pattern); return $true } catch { return $false }
+}
+function Invoke-StaticCheck {
+    if (-not (Test-InScope 'static')) { return }
+    $rrel = 'architecture/static-rules.tsv'
+    $rules = Join-Path (Join-Path $RepoRoot 'architecture') 'static-rules.tsv'
+    if (-not (Test-Path -LiteralPath $rules -PathType Leaf)) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'skipped' 'none' '' $null 'no architecture/static-rules.tsv declared' 'architect' ''
+        return
+    }
+    $rid = New-Object System.Collections.ArrayList
+    $rfiles = New-Object System.Collections.ArrayList
+    $rpat = New-Object System.Collections.ArrayList
+    $rallow = New-Object System.Collections.ArrayList
+    $bad = New-Object System.Collections.ArrayList
+    $n = 0
+    foreach ($raw in [IO.File]::ReadAllLines($rules)) {
+        $n++
+        $line = $raw.TrimEnd("`r")
+        $t = $line.TrimStart()
+        if (($t.Length -eq 0) -or $t.StartsWith('#')) { continue }
+        $cols = $line.Split([char]9)
+        if ($cols.Count -lt 5) { [void]$bad.Add('line ' + $n + ': expected 5 tab-separated columns (id, files, forbidden, allowed_in, message), found ' + $cols.Count); continue }
+        $id = $cols[0]; $files = $cols[1]; $pat = $cols[2]; $allow = $cols[3]
+        $msg = ($cols[4..($cols.Count - 1)] -join "`t")
+        if (($id -eq 'id') -and ($files -eq 'files')) { continue }
+        if ((-not $id) -or (-not $files) -or (-not $pat) -or (-not $msg)) { [void]$bad.Add('line ' + $n + ': id, files, forbidden and message must not be empty'); continue }
+        if (-not (Test-RegexOk $files)) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'files' is not a valid regex"); continue }
+        if (-not (Test-RegexOk $pat)) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'forbidden' is not a valid regex"); continue }
+        if ($allow -and (-not (Test-RegexOk $allow))) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'allowed_in' is not a valid regex"); continue }
+        [void]$rid.Add($id); [void]$rfiles.Add($files); [void]$rpat.Add($pat); [void]$rallow.Add($allow)
+    }
+    if ($bad.Count -gt 0) {
+        $shownBad = @($bad | Select-Object -First 5)
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'fail' 'error' '' $null ($rrel + ' is malformed (' + $bad.Count + ' line(s)): ' + (($shownBad | ForEach-Object { $_ + '; ' }) -join '') + 'fix the rules file') 'architect' $rrel
+        return
+    }
+    if ($rid.Count -eq 0) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'skipped' 'none' '' $null ($rrel + ' declares no rules') 'architect' $rrel
+        return
+    }
+    # file list: relative paths (forward slashes), ordinal order, same pruning as the bash mirror
+    $skipDirs = @('node_modules', 'dist', 'build', '.git', 'coverage', 'TestResults')
+    $skipFiles = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'poetry.lock', 'Pipfile.lock', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock')
+    $rels = New-Object System.Collections.ArrayList
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue($WS)
+    $wsPrefix = $WS.TrimEnd('\', '/') + $Sep
+    $wsIsRoot = ($WS -ieq $RepoRoot)
+    while ($queue.Count -gt 0) {
+        $dir = $queue.Dequeue()
+        try {
+            foreach ($f in [IO.Directory]::GetFiles($dir)) {
+                $leaf = Split-Path -Leaf $f
+                if ($skipFiles -contains $leaf) { continue }
+                $r = $f.Substring($wsPrefix.Length).Replace('\', '/')
+                if ($wsIsRoot -and ($r -eq $rrel)) { continue }
+                [void]$rels.Add($r)
+            }
+        } catch { }
+        try {
+            foreach ($d in [IO.Directory]::GetDirectories($dir)) {
+                if ($skipDirs -contains (Split-Path -Leaf $d)) { continue }
+                $queue.Enqueue($d)
+            }
+        } catch { }
+    }
+    $relArr = $rels.ToArray()
+    [Array]::Sort($relArr, [StringComparer]::Ordinal)
+    $hits = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $rid.Count; $i++) {
+        $reFiles = New-Object System.Text.RegularExpressions.Regex($rfiles[$i])
+        $reAllow = $null
+        if ($rallow[$i]) { $reAllow = New-Object System.Text.RegularExpressions.Regex($rallow[$i]) }
+        $rePat = New-Object System.Text.RegularExpressions.Regex($rpat[$i])
+        $reAny = New-Object System.Text.RegularExpressions.Regex($rpat[$i], [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        foreach ($r in $relArr) {
+            if (-not $reFiles.IsMatch($r)) { continue }
+            if ($reAllow -and $reAllow.IsMatch($r)) { continue }
+            $text = $null
+            try { $text = [IO.File]::ReadAllText($wsPrefix + ($r -replace '/', $Sep)) } catch { continue }
+            if ($text.IndexOf([char]0) -ge 0) { continue }
+            if (-not $reAny.IsMatch($text)) { continue }
+            $ln = 0
+            foreach ($l in $text.Split([char]10)) {
+                $ln++
+                if ($rePat.IsMatch($l)) { [void]$hits.Add($r + ':' + $ln + ' ' + $rid[$i]) }
+            }
+        }
+    }
+    $cmdShown = 'static-rules scan (' + $rid.Count + ' rule(s) from ' + $rrel + ')'
+    if ($hits.Count -eq 0) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'pass' 'none' $cmdShown 0 ('static rules: ' + $rid.Count + ' rule(s) over ' + $relArr.Count + ' file(s), no forbidden pattern found') 'implementer' ''
+        return
+    }
+    $ev = Join-Path $Art 'static-hits.txt'
+    $evLines = New-Object System.Collections.ArrayList
+    foreach ($h in ($hits | Select-Object -First 20)) { [void]$evLines.Add($h) }
+    if ($hits.Count -gt 20) { [void]$evLines.Add('... and ' + ($hits.Count - 20) + ' more') }
+    [IO.File]::WriteAllText($ev, (($evLines -join "`n") + "`n"))
+    $ids = @($hits | ForEach-Object { $_.Substring($_.LastIndexOf(' ') + 1) } | Sort-Object -Unique) -join ','
+    $first = (@($hits | Select-Object -First 3) -join ', ')
+    Add-Check 'QG-STATIC' 'static-rules' '' '' 'fail' 'error' $cmdShown 1 ('static rules: ' + $hits.Count + ' forbidden-pattern hit(s) (rule(s): ' + $ids + '); first: ' + $first + '; first 20 in the evidence file') 'implementer' (Get-Rel $ev)
+}
+
+# ------------------------------------------------------------------ QG-IMAGE image-scan-built (compose-built images)
+# Images come from the compose file(s) in the workspace or the repo root: the image: value of every service that has build:, or
+# <project>-<service> (what compose names it) when no image: is set. The compose file is parsed, not rendered with
+# "docker compose config", because that needs every required ${VAR:?} to be set and fails on a clean checkout.
+function Get-ComposeFiles {
+    $seen = @{}
+    $found = New-Object System.Collections.ArrayList
+    foreach ($d in @($WS, $RepoRoot)) {
+        foreach ($n in @('docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml')) {
+            $p = Join-Path $d $n
+            if ((Test-Path -LiteralPath $p -PathType Leaf) -and (-not $seen.ContainsKey($p.ToLowerInvariant()))) {
+                $seen[$p.ToLowerInvariant()] = $true
+                [void]$found.Add($p)
+            }
+        }
+    }
+    return ,$found
+}
+function Get-YamlValue([string]$Text) {
+    $v = $Text -replace '^[^:]*:\s*', ''
+    $v = $v -replace '\s+#.*$', ''
+    $v = $v.Trim()
+    if (($v.Length -ge 2) -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) { $v = $v.Substring(1, $v.Length - 2) }
+    return $v
+}
+# Returns @{ project = '<top-level name:>'; services = @( @{ name; image; build } ) }
+function Read-Compose([string]$File) {
+    $project = ''
+    $services = New-Object System.Collections.ArrayList
+    $insvc = $false; $svcind = 0; $propind = 0
+    $cur = $null
+    foreach ($raw in [IO.File]::ReadAllLines($File)) {
+        $line = $raw.TrimEnd("`r")
+        if ($line -match '^\s*(#.*)?$') { continue }
+        $ind = $line.Length - $line.TrimStart(' ').Length
+        $txt = $line.TrimStart(' ')
+        if ($ind -eq 0) {
+            if ($cur) { [void]$services.Add($cur); $cur = $null }
+            $insvc = ($txt -match '^services:\s*(#.*)?$')
+            if ($txt -match '^name:') { $project = Get-YamlValue $txt }
+            continue
+        }
+        if (-not $insvc) { continue }
+        if ($svcind -eq 0) { $svcind = $ind }
+        if ($ind -eq $svcind) {
+            if ($cur) { [void]$services.Add($cur) }
+            $nm = ($txt -replace ':.*$', '') -replace '["'' ]', ''
+            $cur = @{ name = $nm; image = ''; build = $false }
+            continue
+        }
+        if ($propind -eq 0) { $propind = $ind }
+        if (($ind -eq $propind) -and $cur) {
+            if ($txt -match '^build:') { $cur.build = $true }
+            elseif ($txt -match '^image:') { $cur.image = Get-YamlValue $txt }
+        }
+    }
+    if ($cur) { [void]$services.Add($cur) }
+    return @{ project = $project; services = $services }
+}
+function Expand-EnvRefs([string]$S) {
+    $re = '\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-([^}]*))?\}'
+    for ($k = 0; $k -lt 10; $k++) {
+        $m = [regex]::Match($S, $re)
+        if (-not $m.Success) { break }
+        $val = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+        if (-not $val) { $val = $m.Groups[3].Value }
+        $S = $S.Substring(0, $m.Index) + $val + $S.Substring($m.Index + $m.Length)
+    }
+    return $S
+}
+function Get-TrivyCount([string]$File) {
+    if (-not (Test-Path -LiteralPath $File)) { return 0 }
+    return ([regex]::Matches([IO.File]::ReadAllText($File), '"Severity"\s*:\s*"[A-Z]+"')).Count
+}
+function Invoke-ImageBuiltCheck([bool]$HasDockerfile) {
+    $files = Get-ComposeFiles
+    if ($files.Count -eq 0) {
+        if ($HasDockerfile) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'skipped' 'none' '' $null 'no compose file declared (docker-compose.yml/compose.yml): built-image scan skipped' 'infrastructure-implementer' '' }
+        return
+    }
+    $imgs = New-Object System.Collections.ArrayList
+    foreach ($f in $files) {
+        $c = Read-Compose $f
+        $proj = $env:COMPOSE_PROJECT_NAME
+        if (-not $proj) { $proj = $c.project }
+        if (-not $proj) { $proj = Split-Path -Leaf (Split-Path -Parent $f) }
+        $proj = ($proj.ToLowerInvariant() -replace '[^a-z0-9_-]', '')
+        foreach ($s in $c.services) {
+            if (-not $s.build) { continue }
+            $img = Expand-EnvRefs $s.image
+            if (-not $img) { $img = $proj + '-' + $s.name }
+            if (-not ($imgs -contains $img)) { [void]$imgs.Add($img) }
+        }
+    }
+    if ($imgs.Count -eq 0) {
+        if ($HasDockerfile) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'skipped' 'none' '' $null 'compose file declares no service with build: built-image scan skipped' 'infrastructure-implementer' '' }
+        return
+    }
+    if (-not (Test-Tool 'docker')) { Add-Deferred 'QG-IMAGE' 'image-scan-built' '' '' 'docker' 'built-image scan'; return }
+    if (-not (Test-Tool 'trivy')) { Add-Deferred 'QG-IMAGE' 'image-scan-built' '' '' 'trivy' 'built-image scan'; return }
+    $sevs = 'CRITICAL'
+    switch ($FailDeps) { 'high' { $sevs = 'HIGH,CRITICAL' } 'medium' { $sevs = 'MEDIUM,HIGH,CRITICAL' } 'moderate' { $sevs = 'MEDIUM,HIGH,CRITICAL' } 'low' { $sevs = 'LOW,MEDIUM,HIGH,CRITICAL' } 'any' { $sevs = 'LOW,MEDIUM,HIGH,CRITICAL' } }
+    $i = 0
+    foreach ($img in $imgs) {
+        $i++
+        $rc = Invoke-Logged -Dir $WS -Argv @('docker', 'image', 'inspect', $img)
+        if ($rc -ne 0) {
+            # not built (or the daemon is unreachable): never a pass, and this tool does not build (builds are slow)
+            if ($Require) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'fail' 'error' ('docker image inspect ' + $img) $rc ("built image '" + $img + "' not found locally: image not built: run docker compose build (-Require)") 'infrastructure-implementer' ('image-not-built:' + $img) }
+            else { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'deferred' 'warning' ('docker image inspect ' + $img) $rc ("built image '" + $img + "' not found locally: image not built: run docker compose build; deferred (not a pass)") 'infrastructure-implementer' ('image-not-built:' + $img) }
+            continue
+        }
+        $out = Join-Path $Art ('trivy-image-' + $i + '.json')
+        $all = Join-Path $Art ('trivy-image-' + $i + '-all.json')
+        $shown = 'trivy image --severity ' + $sevs + ' --ignore-unfixed --exit-code 1 ' + $img
+        $rc = Invoke-Logged -Dir $WS -Argv @('trivy', 'image', '--severity', $sevs, '--ignore-unfixed', '--exit-code', '1', '--format', 'json', '--output', $out, $img)
+        $logf = $script:LastLog
+        if (($rc -ne 0) -and (($rc -ne 1) -or (-not (Test-Path -LiteralPath $out)))) {
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'fail' 'error' $shown $rc ('trivy image ' + $img + ' failed (exit ' + $rc + ')') 'infrastructure-implementer' (Get-Rel $logf)
+            continue
+        }
+        $nfix = 0
+        if ($rc -eq 1) { $nfix = Get-TrivyCount $out }
+        # second pass without --ignore-unfixed: only to report how many findings have no fix (visible, never gating)
+        $unf = 'unfixed count unavailable'
+        $rc2 = Invoke-Logged -Dir $WS -Argv @('trivy', 'image', '--severity', $sevs, '--format', 'json', '--output', $all, $img)
+        if (($rc2 -eq 0) -and (Test-Path -LiteralPath $all)) {
+            $ntot = Get-TrivyCount $all
+            $nun = $ntot - $nfix
+            if ($nun -lt 0) { $nun = 0 }
+            $unf = [string]$nun + ' unfixed, not gating'
+        }
+        if ($rc -eq 0) {
+            $evf = $out
+            if (Test-Path -LiteralPath $all) { $evf = $all }
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'pass' 'none' $shown $rc ('trivy image ' + $img + ': no fixable finding at ' + $sevs + ' (' + $unf + ')') 'infrastructure-implementer' (Get-Rel $evf)
+        } else {
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'fail' 'error' $shown $rc ('trivy image ' + $img + ': ' + $nfix + ' fixable finding(s) at ' + $sevs + ' (' + $unf + ')') 'infrastructure-implementer' (Get-Rel $out)
+        }
+    }
+}
+
 function Invoke-ContainerChecks {
     if ((-not (Test-InScope 'sbom')) -and (-not (Test-InScope 'image'))) { return }
     $docker = @(Get-WalkFiles $WS 3 | Where-Object { $n = Split-Path -Leaf $_; ($n -eq 'Dockerfile') -or ($n -like 'Dockerfile.*') -or ($n -like '*.Dockerfile') -or ($n -eq 'Containerfile') })
     if ($docker.Count -eq 0) {
         if (Test-InScope 'sbom') { Add-Check 'QG-SBOM' 'sbom' '' '' 'skipped' 'none' '' $null 'not a deployable (no Dockerfile/Containerfile)' 'infrastructure-implementer' '' }
         if (Test-InScope 'image') { Add-Check 'QG-IMAGE' 'image-scan' '' '' 'skipped' 'none' '' $null 'not a deployable (no Dockerfile/Containerfile)' 'infrastructure-implementer' '' }
+        if (Test-InScope 'image') { Invoke-ImageBuiltCheck $false }
         return
     }
     if (Test-InScope 'sbom') {
@@ -1158,6 +1414,7 @@ function Invoke-ContainerChecks {
                 Add-Check 'QG-IMAGE' 'image-scan' '' '' 'fail' 'error' $shown $rc ('trivy: ' + $n + ' finding(s) at ' + $sevs) 'infrastructure-implementer' (Get-Rel $out)
             } else { Add-Check 'QG-IMAGE' 'image-scan' '' '' 'fail' 'error' $shown $rc ('trivy failed (exit ' + $rc + ')') 'infrastructure-implementer' (Get-Rel $script:LastLog) }
         } else { Add-Deferred 'QG-IMAGE' 'image-scan' '' '' 'trivy' 'image/fs scan' }
+        Invoke-ImageBuiltCheck $true
     }
 }
 
@@ -1209,6 +1466,7 @@ Invoke-SecretsCheck
 if (-not $Fast) {
     Invoke-DepsCheck $Projects
     Invoke-SastCheck
+    Invoke-StaticCheck
     Invoke-ContainerChecks
 }
 

@@ -6,11 +6,11 @@
 # Contract: .KCC/kernel/contracts/tool-contract.md
 #
 # Checks: QG-STACK QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS
-#         QG-DEPS QG-SAST QG-SBOM QG-IMAGE
+#         QG-DEPS QG-SAST QG-STATIC QG-SBOM QG-IMAGE
 #
 # Usage:
 #   bash .KCC/tools/quality-gate.sh [--repo-root PATH] [--spec SPEC-ID] [--path DIR]
-#        [--scope all|lock,build,lint,test,coverage,secrets,deps,sast,sbom,image]
+#        [--scope all|lock,build,lint,test,coverage,secrets,deps,sast,static,sbom,image]
 #        [--fast] [--require] [--emit] [--json]
 #
 # Exit: 0 pass | 1 violations | 2 usage/environment | 3 deferred (a scanner or
@@ -35,6 +35,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: quality-gate.sh [--repo-root PATH] [--spec SPEC-ID] [--path DIR] [--scope LIST]
                        [--fast] [--require] [--emit] [--json]
+  scopes: all lock build lint test coverage secrets deps sast static sbom image (default all)
 EOF
 }
 
@@ -65,7 +66,7 @@ REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 if [[ -n "$SPEC" && ! "$SPEC" =~ ^SPEC-[0-9A-Za-z]+$ ]]; then die_env "invalid --spec '$SPEC' (expected SPEC-{ID})"; fi
 SCOPE="$(printf '%s' "$SCOPE" | tr 'A-Z' 'a-z' | tr -d ' ')"
 for s in ${SCOPE//,/ }; do
-  case "$s" in all|lock|build|lint|test|coverage|secrets|deps|sast|sbom|image) ;; *) die_env "unknown scope '$s'";; esac
+  case "$s" in all|lock|build|lint|test|coverage|secrets|deps|sast|static|sbom|image) ;; *) die_env "unknown scope '$s'";; esac
 done
 if [[ $FAST -eq 1 ]]; then SCOPE="secrets"; fi
 in_scope() { [[ ",$SCOPE," == *",all,"* || ",$SCOPE," == *",$1,"* ]]; }
@@ -922,6 +923,190 @@ check_sast() {
   else add_check QG-SAST sast "" "" pass none "semgrep scan --config auto --json" "$rc" "semgrep: no findings at severity >= $FAIL_SAST" implementer "$(rel "$out")"; fi
 }
 
+# ---------------------------------------------------------------- QG-STATIC (architecture/static-rules.tsv)
+# One rule per line, tab-separated: id <TAB> files <TAB> forbidden <TAB> allowed_in <TAB> message
+#   files      ERE matched against the path relative to the workspace (which files the rule scans)
+#   forbidden  ERE searched in every matching file (grep -E semantics; keep to the POSIX subset so both shells agree)
+#   allowed_in ERE of relative paths where the pattern IS permitted (may be empty)
+# '#' starts a comment line; a header row "id<TAB>files<TAB>..." is ignored. node_modules, dist, build, .git, coverage,
+# TestResults, lockfiles and the rules file itself are never scanned; test files are scanned like any other.
+check_static() {
+  in_scope static || return 0
+  local rules="$REPO_ROOT/architecture/static-rules.tsv" rrel="architecture/static-rules.tsv"
+  if [[ ! -f "$rules" ]]; then
+    add_check QG-STATIC static-rules "" "" skipped none "" "" "no architecture/static-rules.tsv declared" architect ""
+    return 0
+  fi
+  local -a R_ID=() R_FILES=() R_PAT=() R_ALLOW=() R_MSG=()
+  local -a bad=()
+  local line t rest id files pat allow msg tabs n=0 rc
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    t="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$t" || "${t:0:1}" == "#" ]] && continue
+    tabs="${line//[^$'\t']/}"
+    if [[ ${#tabs} -lt 4 ]]; then bad+=("line $n: expected 5 tab-separated columns (id, files, forbidden, allowed_in, message), found $((${#tabs} + 1))"); continue; fi
+    id="${line%%$'\t'*}"; rest="${line#*$'\t'}"
+    files="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    pat="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    allow="${rest%%$'\t'*}"; msg="${rest#*$'\t'}"
+    if [[ "$id" == "id" && "$files" == "files" ]]; then continue; fi
+    if [[ -z "$id" || -z "$files" || -z "$pat" || -z "$msg" ]]; then bad+=("line $n: id, files, forbidden and message must not be empty"); continue; fi
+    rc=0; LC_ALL=C grep -E -e "$files" </dev/null >/dev/null 2>&1 || rc=$?
+    if [[ $rc -ge 2 ]]; then bad+=("line $n ($id): 'files' is not a valid extended regex"); continue; fi
+    rc=0; LC_ALL=C grep -E -e "$pat" </dev/null >/dev/null 2>&1 || rc=$?
+    if [[ $rc -ge 2 ]]; then bad+=("line $n ($id): 'forbidden' is not a valid extended regex"); continue; fi
+    if [[ -n "$allow" ]]; then
+      rc=0; LC_ALL=C grep -E -e "$allow" </dev/null >/dev/null 2>&1 || rc=$?
+      if [[ $rc -ge 2 ]]; then bad+=("line $n ($id): 'allowed_in' is not a valid extended regex"); continue; fi
+    fi
+    R_ID+=("$id"); R_FILES+=("$files"); R_PAT+=("$pat"); R_ALLOW+=("$allow"); R_MSG+=("$msg")
+  done <"$rules"
+  if [[ ${#bad[@]} -gt 0 ]]; then
+    add_check QG-STATIC static-rules "" "" fail error "" "" "$rrel is malformed (${#bad[@]} line(s)): $(printf '%s; ' "${bad[@]:0:5}")fix the rules file" architect "$rrel"
+    return 0
+  fi
+  if [[ ${#R_ID[@]} -eq 0 ]]; then
+    add_check QG-STATIC static-rules "" "" skipped none "" "" "$rrel declares no rules" architect "$rrel"
+    return 0
+  fi
+  local list="$ART/static-files.txt" sel="$ART/static-sel.txt" sel2="$ART/static-sel2.txt" hits="$ART/static-hits.all.txt" ev="$ART/static-hits.txt"
+  : >"$hits"
+  ( cd "$WS" && find . -type d \( -name node_modules -o -name dist -o -name build -o -name .git -o -name coverage -o -name TestResults \) -prune -o \
+      -type f ! \( -name package-lock.json -o -name npm-shrinkwrap.json -o -name pnpm-lock.yaml -o -name yarn.lock -o -name bun.lockb -o -name bun.lock \
+      -o -name poetry.lock -o -name Pipfile.lock -o -name Cargo.lock -o -name go.sum -o -name composer.lock -o -name Gemfile.lock \) -print ) 2>/dev/null \
+    | sed 's|^\./||' | LC_ALL=C sort >"$list" || true
+  # the rules file is data, not code: it names the forbidden patterns
+  if [[ "$WS" == "$REPO_ROOT" ]]; then grep -vxF -e "$rrel" "$list" >"$sel" || true; mv "$sel" "$list"; fi
+  local nfiles; nfiles="$(wc -l <"$list" | tr -d ' ')"
+  local i
+  for i in "${!R_ID[@]}"; do
+    LC_ALL=C grep -E -e "${R_FILES[$i]}" "$list" >"$sel" || true
+    if [[ -n "${R_ALLOW[$i]}" ]]; then LC_ALL=C grep -Ev -e "${R_ALLOW[$i]}" "$sel" >"$sel2" || true; mv "$sel2" "$sel"; fi
+    [[ -s "$sel" ]] || continue
+    ( cd "$WS" && tr '\n' '\0' <"$sel" | LC_ALL=C xargs -0 grep -nHIE -e "${R_PAT[$i]}" -- 2>/dev/null ) \
+      | awk -F: -v id="${R_ID[$i]}" '{ print $1 ":" $2 " " id }' >>"$hits" || true
+  done
+  local nh; nh="$(wc -l <"$hits" | tr -d ' ')"
+  if [[ "$nh" -eq 0 ]]; then
+    add_check QG-STATIC static-rules "" "" pass none "static-rules scan (${#R_ID[@]} rule(s) from $rrel)" 0 "static rules: ${#R_ID[@]} rule(s) over $nfiles file(s), no forbidden pattern found" implementer ""
+    return 0
+  fi
+  { head -n 20 "$hits"; if [[ "$nh" -gt 20 ]]; then echo "... and $((nh - 20)) more"; fi; } >"$ev"
+  local ids first
+  ids="$(awk '{ print $2 }' "$hits" | sort -u | tr '\n' ',' | sed 's/,$//')"
+  first="$(head -n 3 "$hits" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+  add_check QG-STATIC static-rules "" "" fail error "static-rules scan (${#R_ID[@]} rule(s) from $rrel)" 1 "static rules: $nh forbidden-pattern hit(s) (rule(s): $ids); first: $first; first 20 in the evidence file" implementer "$(rel "$ev")"
+}
+
+# ---------------------------------------------------------------- QG-IMAGE image-scan-built (compose-built images)
+# Images come from the compose file(s) in the workspace or the repo root: the image: value of every service that has build:, or
+# <project>-<service> (what compose names it) when no image: is set. The compose file is parsed, not rendered with
+# "docker compose config", because that needs every required ${VAR:?} to be set and fails on a clean checkout.
+find_compose_files() {
+  local d n seen=""
+  for d in "$WS" "$REPO_ROOT"; do
+    for n in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+      if [[ -f "$d/$n" ]]; then
+        case "|$seen|" in *"|$d/$n|"*) ;; *) seen="${seen:+$seen|}$d/$n"; printf '%s\n' "$d/$n" ;; esac
+      fi
+    done
+  done
+}
+# prints "P|<top-level name:>" and "S|<service>|<image:>|<1 if build:>" lines
+parse_compose() {
+  awk '
+    function val(s) { sub(/^[^:]*:[ \t]*/, "", s); sub(/[ \t]+#.*$/, "", s); gsub(/^["\047]|["\047]$/, "", s); gsub(/[ \t]+$/, "", s); return s }
+    function flush() { if (name != "") print "S|" name "|" img "|" bld; name = ""; img = ""; bld = 0 }
+    { line = $0; sub(/\r$/, "", line) }
+    line ~ /^[ \t]*(#.*)?$/ { next }
+    { match(line, /^ */); ind = RLENGTH; txt = substr(line, ind + 1) }
+    ind == 0 { flush(); insvc = (txt ~ /^services:[ \t]*(#.*)?$/); if (txt ~ /^name:/) print "P|" val(txt); next }
+    !insvc { next }
+    svcind == 0 { svcind = ind }
+    ind == svcind { flush(); name = txt; sub(/:.*$/, "", name); gsub(/["\047 ]/, "", name); next }
+    propind == 0 { propind = ind }
+    ind == propind { if (txt ~ /^build:/) bld = 1; else if (txt ~ /^image:/) img = val(txt) }
+    END { flush() }
+  ' "$1"
+}
+interp_env() { # ${VAR}, ${VAR:-default}, ${VAR-default} from the environment
+  local s="$1" re='\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-([^}]*))?\}' name def val k=0
+  while [[ "$s" =~ $re && $k -lt 10 ]]; do
+    name="${BASH_REMATCH[1]}"; def="${BASH_REMATCH[3]}"; val="${!name:-$def}"
+    s="${s/"${BASH_REMATCH[0]}"/$val}"; k=$((k + 1))
+  done
+  printf '%s' "$s"
+}
+
+check_image_built() { # $1 = 1 when a Dockerfile exists in the workspace
+  local has_df="$1" files f imgs="" kind a b c proj svc img
+  files="$(find_compose_files)"
+  if [[ -z "$files" ]]; then
+    [[ "$has_df" == 1 ]] && add_check QG-IMAGE image-scan-built "" "" skipped none "" "" "no compose file declared (docker-compose.yml/compose.yml): built-image scan skipped" infrastructure-implementer ""
+    return 0
+  fi
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    proj="${COMPOSE_PROJECT_NAME:-}"
+    local parsed; parsed="$(parse_compose "$f")"
+    [[ -n "$proj" ]] || proj="$(printf '%s\n' "$parsed" | awk -F'|' '$1 == "P" { print $2 }' | head -n 1)"
+    [[ -n "$proj" ]] || proj="$(basename "$(dirname "$f")")"
+    proj="$(printf '%s' "$proj" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-')"
+    while IFS='|' read -r kind a b c; do
+      [[ "$kind" == S && "$c" == 1 ]] || continue
+      svc="$a"; img="$(interp_env "$b")"
+      [[ -n "$img" ]] || img="$proj-$svc"
+      printf '%s
+' "$imgs" | grep -qxF -e "$img" || imgs="${imgs:+$imgs
+}$img"
+    done <<<"$parsed"
+  done <<<"$files"
+  if [[ -z "$imgs" ]]; then
+    [[ "$has_df" == 1 ]] && add_check QG-IMAGE image-scan-built "" "" skipped none "" "" "compose file declares no service with build: built-image scan skipped" infrastructure-implementer ""
+    return 0
+  fi
+  if ! have docker; then defer_check QG-IMAGE image-scan-built "" "" docker "built-image scan"; return 0; fi
+  if ! have trivy; then defer_check QG-IMAGE image-scan-built "" "" trivy "built-image scan"; return 0; fi
+  local sevs="CRITICAL"
+  case "$FAIL_DEPS" in high) sevs="HIGH,CRITICAL";; medium|moderate) sevs="MEDIUM,HIGH,CRITICAL";; low|any) sevs="LOW,MEDIUM,HIGH,CRITICAL";; esac
+  local i=0 rc rc2 out all nfix ntot unf shown
+  while IFS= read -r img; do
+    i=$((i + 1)); rc=0
+    run_in "$WS" docker image inspect "$img" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      # not built (or the daemon is unreachable): never a pass, and this tool does not build (builds are slow)
+      if [[ $REQUIRE -eq 1 ]]; then add_check QG-IMAGE image-scan-built "" "" fail error "docker image inspect $img" "$rc" "built image '$img' not found locally: image not built: run docker compose build (--require)" infrastructure-implementer "image-not-built:$img"
+      else add_check QG-IMAGE image-scan-built "" "" deferred warning "docker image inspect $img" "$rc" "built image '$img' not found locally: image not built: run docker compose build; deferred (not a pass)" infrastructure-implementer "image-not-built:$img"; fi
+      continue
+    fi
+    out="$ART/trivy-image-$i.json"; all="$ART/trivy-image-$i-all.json"
+    shown="trivy image --severity $sevs --ignore-unfixed --exit-code 1 $img"
+    rc=0
+    run_in "$WS" trivy image --severity "$sevs" --ignore-unfixed --exit-code 1 --format json --output "$(native_path "$out")" "$img" || rc=$?
+    local logf="$LAST_LOG"
+    if [[ $rc -ne 0 && ( $rc -ne 1 || ! -f "$out" ) ]]; then
+      add_check QG-IMAGE image-scan-built "" "" fail error "$shown" "$rc" "trivy image $img failed (exit $rc)" infrastructure-implementer "$(rel "$logf")"
+      continue
+    fi
+    nfix=0; [[ $rc -eq 1 ]] && nfix="$(grep -Eo '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"' "$out" | wc -l | tr -d ' ' || true)"
+    # second pass without --ignore-unfixed: only to report how many findings have no fix (visible, never gating)
+    rc2=0; unf="unfixed count unavailable"
+    run_in "$WS" trivy image --severity "$sevs" --format json --output "$(native_path "$all")" "$img" || rc2=$?
+    if [[ $rc2 -eq 0 && -f "$all" ]]; then
+      ntot="$(grep -Eo '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"' "$all" | wc -l | tr -d ' ' || true)"
+      unf="$((ntot - nfix)) unfixed, not gating"; [[ $((ntot - nfix)) -ge 0 ]] || unf="0 unfixed, not gating"
+    fi
+    if [[ $rc -eq 0 ]]; then
+      local evf="$out"; [[ -f "$all" ]] && evf="$all"
+      add_check QG-IMAGE image-scan-built "" "" pass none "$shown" "$rc" "trivy image $img: no fixable finding at $sevs ($unf)" infrastructure-implementer "$(rel "$evf")"
+    else
+      add_check QG-IMAGE image-scan-built "" "" fail error "$shown" "$rc" "trivy image $img: $nfix fixable finding(s) at $sevs ($unf)" infrastructure-implementer "$(rel "$out")"
+    fi
+  done <<<"$imgs"
+}
+
 DOCKERFILE=""
 check_container() {
   in_scope sbom || in_scope image || return 0
@@ -931,6 +1116,7 @@ check_container() {
   if [[ -z "$DOCKERFILE" ]]; then
     in_scope sbom && add_check QG-SBOM sbom "" "" skipped none "" "" "not a deployable (no Dockerfile/Containerfile)" infrastructure-implementer ""
     in_scope image && add_check QG-IMAGE image-scan "" "" skipped none "" "" "not a deployable (no Dockerfile/Containerfile)" infrastructure-implementer ""
+    in_scope image && check_image_built 0
     return 0
   fi
   if in_scope sbom; then
@@ -953,6 +1139,7 @@ check_container() {
         add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy: $n finding(s) at $sevs" infrastructure-implementer "$(rel "$out")"
       else add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy failed (exit $rc)" infrastructure-implementer "$(rel "$LAST_LOG")"; fi
     else defer_check QG-IMAGE image-scan "" "" trivy "image/fs scan"; fi
+    check_image_built 1
   fi
 }
 
@@ -990,6 +1177,7 @@ check_secrets
 if [[ $FAST -eq 0 ]]; then
   check_deps
   check_sast
+  check_static
   check_container
 fi
 

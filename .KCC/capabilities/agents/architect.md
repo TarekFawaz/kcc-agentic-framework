@@ -118,6 +118,13 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    - `architecture/adrs/ADR-000N-{slug}.md` per durable decision; update
      `architecture/adrs/adrs.md`, `architecture/guardrails.md`,
      `architecture/quality-gates.md` (objective, enforceable gates).
+   - When `QG-STATIC` is active (guardrails checkable by pattern), also write
+     `architecture/static-rules.tsv`: one rule per such guardrail, tab-separated
+     `id`, `files` (regex on the path), `forbidden` (regex), `allowed_in` (regex, may be empty), `message`.
+     In `quality-gates.md` say that `quality-gate` runs QG-STATIC from this file
+     (not prose, not a manual grep). In the `QG-PROD` image-scan item name both
+     `quality-gate` checks: `image-scan` (source) and `image-scan-built` (images the
+     compose file builds).
    - Confirm dialects from `.KCC/kernel/protocols/dialects/`; record in ADRs or
      `architecture/architecture.md`.
    - `architecture/architecture.md` sections: see `architecture-documentation.md`
