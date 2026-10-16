@@ -80,7 +80,7 @@ if [[ -f "$REPO_ROOT/coordination/backchannel.jsonl" ]]; then
 fi
 
 emit_states() {
-  local f="$REPO_ROOT/.KCC/kernel/auto-states.json" first=1 rec id name scope skipped skipv onlyv
+  local f="$REPO_ROOT/.KCC/kernel/auto-states.json" first=1 rec id name scope skipped skipv onlyv gotov
   [[ $FAST -eq 1 && -f "$REPO_ROOT/.KCC/kernel/auto-states-fasttrack.json" ]] && f="$REPO_ROOT/.KCC/kernel/auto-states-fasttrack.json"
   [[ -f "$f" ]] || return 0
   tr -d '\r\n' < "$f" | sed 's/{ *"id"/\n{ "id"/g' | grep -E '^\{ *"id"' | while IFS= read -r rec; do
@@ -95,10 +95,19 @@ emit_states() {
     fi
     onlyv="$(printf '%s' "$rec" | sed -nE 's/.*"only_in" *: *(\[[^]]*\]).*/\1/p')"
     if [[ -n "$onlyv" && -n "$SCEN" && "$onlyv" != *"\"$SCEN\""* ]]; then skipped=1; fi
+    # on_fail_goto: where a failed exit check sends the spec (the loop-back edge of the lifecycle flowchart)
+    gotov="$(printf '%s' "$rec" | sed -nE 's/.*"on_fail_goto" *: *([0-9]+).*/\1/p')"
     [[ $first -eq 1 ]] || printf ','
     first=0
-    printf '{"id":%s,"name":%s,"scope":%s,"skipped":%s}' "$(num "$id")" "$(q "$name")" "$(q "$scope")" "$(bool $skipped)"
+    printf '{"id":%s,"name":%s,"scope":%s,"skipped":%s,"goto":%s}' "$(num "$id")" "$(q "$name")" "$(q "$scope")" "$(bool $skipped)" "${gotov:-null}"
   done
+}
+# max_attempts of the state table (the CR-3 loop gate opens after that many consecutive failed exit checks)
+states_max_attempts() {
+  local f="$REPO_ROOT/.KCC/kernel/auto-states.json" v
+  [[ $FAST -eq 1 && -f "$REPO_ROOT/.KCC/kernel/auto-states-fasttrack.json" ]] && f="$REPO_ROOT/.KCC/kernel/auto-states-fasttrack.json"
+  v=""; [[ -f "$f" ]] && v="$(tr -d '\r\n' < "$f" | sed -nE 's/.*"max_attempts" *: *([0-9]+).*/\1/p')"
+  printf '%s' "${v:-3}"
 }
 
 # ---- ideas ---------------------------------------------------------------------
@@ -277,7 +286,7 @@ derive_state() { # prints "<state> <running|done>" or nothing
   ids="$(emit_states | tr '{' '\n' | grep '"skipped":false' | sed -nE 's/.*"id":([0-9]+).*/\1/p' | tr '\n' ' ')"
   # Run-wide stages (up to SPECS) advance on any event; PLAN..REVIEW advance per spec, and the pipeline shows
   # the earliest stage a spec is still in (a spec-less event, e.g. an early preflight, moves nothing).
-  r="$(tr -d '\r' < "$bc" | awk -v ids="$ids" '
+  r="$(tr -d '\r' < "$bc" | awk -v ids="$ids" -v wr="$FAST" '
     function nxt(d,   i) { for (i = 1; i <= n; i++) if (ord[i] + 0 > d + 0) return ord[i] + 0; return d + 0 }
     BEGIN { n = split(ids, ord, " ") }
     { k = ""; f = ""; sp = ""
@@ -295,7 +304,7 @@ derive_state() { # prints "<state> <running|done>" or nothing
       else if (k == "test-completed") id = 16
       else if (k == "review-produced") id = 17
       else if (k == "session-closed") { id = 18; closed = 1 }
-      if (k == "spec-created" && sp != "" && !(sp in sd)) sd[sp] = 9
+      if (k == "spec-created" && sp != "" && !(sp in sd)) sd[sp] = (wr == 1 ? 10 : 9) # fast track has a WRITE state (10): a spec-created event with a spec means it is written
       if (id >= 0 && id < 10) { if (id > done) done = id }
       else if (id >= 10 && id < 18 && sp != "") { if (!(sp in sd) || id > sd[sp]) sd[sp] = id }
       else if (id == 18) done = 18
@@ -327,7 +336,7 @@ derive_state() { # prints "<state> <running|done>" or nothing
 
 # ---- lanes: git worktrees (.worktrees/) and kcc run lanes (.kcc-lanes/) where specs are being built ----
 emit_lanes() {
-  local ld d n files last first=1 spec lrf lst lwv lss
+  local ld d n files last first=1 spec lrf lst lwv lss lrs lat lgi lgn lgs lup
   for ld in .worktrees .kcc-lanes; do
     [[ -d "$REPO_ROOT/$ld" ]] || continue
     for d in "$REPO_ROOT/$ld"/*/; do
@@ -337,9 +346,11 @@ emit_lanes() {
       last="$(find "$d" -maxdepth 4 -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)"
       [[ -n "$last" ]] && last="$(date -u -d "@$last" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
       [[ $first -eq 1 ]] || printf ','; first=0
-      lrf="$d/coordination/run/run.json"; lst=""; lwv=""; lss=""
-      if [[ -f "$lrf" ]]; then lst="$(rawval "$lrf" state)"; lwv="$(rawval "$lrf" wave)"; lss="$(rawval "$lrf" status)"; fi
-      printf '{"name":%s,"kind":%s,"spec":%s,"files":%s,"updated":%s,"runState":%s,"runWave":%s,"runStatus":%s}' "$(q "$n")" "$(q "${ld#.}")" "$(q "$spec")" "${files:-0}" "$(q "$last")" "$(q "$lst")" "$(q "$lwv")" "$(q "$lss")"
+      lrf="$d/coordination/run/run.json"; lst=""; lwv=""; lss=""; lrs=""; lat=""; lgi=""; lgn=""; lgs=""; lup=""
+      if [[ -f "$lrf" ]]; then lst="$(rawval "$lrf" state)"; lwv="$(rawval "$lrf" wave)"; lss="$(rawval "$lrf" status)"
+        lrs="$(rawval "$lrf" reason)"; lat="$(rawval "$lrf" attempts)"; lgi="$(rawval "$lrf" gate_id)"; lgn="$(rawval "$lrf" gate_name)"; lgs="$(rawval "$lrf" gate_state)"; lup="$(rawval "$lrf" updated)"; fi
+      printf '{"name":%s,"kind":%s,"spec":%s,"files":%s,"updated":%s,"runState":%s,"runWave":%s,"runStatus":%s,"runReason":%s,"runAttempts":%s,"runGateId":%s,"runGateName":%s,"runGateState":%s,"runUpdated":%s}' "$(q "$n")" "$(q "${ld#.}")" "$(q "$spec")" "${files:-0}" "$(q "$last")" "$(q "$lst")" "$(q "$lwv")" "$(q "$lss")" \
+        "$(q "$lrs")" "$(q "$lat")" "$(q "$lgi")" "$(q "$lgn")" "$(q "$lgs")" "$(q "$lup")"
     done
   done
 }
@@ -351,7 +362,7 @@ emit_run() {
     if [[ -n "$dv" ]]; then
       echo 'Stage derived from backchannel events (chat-driven run).' >> "$NOTES_FILE"
       local rsn=""; [[ "${dv#* }" == "idle" ]] && rsn="no event or agent activity for more than 30 minutes; resume with: auto resume"
-      printf '{"status":%s,"state":%s,"wave":"","scenario":%s,"harness":"chat","fasttrack":%s,"parallel":%s,"depthlevel":%s,"reason":%s,"updated":"","created":"","input":"","idea":%s,"currentSpec":"","gate_name":""}' \
+      printf '{"status":%s,"state":%s,"wave":"","scenario":%s,"harness":"chat","fasttrack":%s,"parallel":%s,"depthlevel":%s,"reason":%s,"updated":"","created":"","input":"","idea":%s,"currentSpec":"","gate_name":"","attempts":"","gate_id":"","gate_state":"","gate_spec":""}' \
         "$(q "${dv#* }")" "${dv%% *}" "$(q "$SCEN")" "$(bool $FAST)" "$(bool $PAR)" "$(q "$( [[ -f "$RUN_FILE" ]] && rawval "$RUN_FILE" depthlevel)")" "$(q "$rsn")" "$(q "$( [[ -f "$RUN_FILE" ]] && rawval "$RUN_FILE" idea)")"
       return 0
     fi
@@ -361,10 +372,11 @@ emit_run() {
   [[ "$idx" =~ ^[0-9]+$ ]] || idx=0
   cur="$(printf '%s' "$specs" | tr ' ' '\n' | awk -v i="$idx" 'NF{ if (n++==i) print }' | grep -oE 'SPEC-[0-9A-Za-z]+' | head -n 1 || true)"
   st="$(rawval "$RUN_FILE" state)"
-  printf '{"status":%s,"state":%s,"wave":%s,"scenario":%s,"harness":%s,"fasttrack":%s,"parallel":%s,"depthlevel":%s,"reason":%s,"updated":%s,"created":%s,"input":%s,"idea":%s,"currentSpec":%s,"gate_name":%s}' \
+  printf '{"status":%s,"state":%s,"wave":%s,"scenario":%s,"harness":%s,"fasttrack":%s,"parallel":%s,"depthlevel":%s,"reason":%s,"updated":%s,"created":%s,"input":%s,"idea":%s,"currentSpec":%s,"gate_name":%s,"attempts":%s,"gate_id":%s,"gate_state":%s,"gate_spec":%s}' \
     "$(q "$(rawval "$RUN_FILE" status)")" "$(num "$st")" "$(q "$(rawval "$RUN_FILE" wave)")" "$(q "$SCEN")" "$(q "$(rawval "$RUN_FILE" harness)")" "$(bool $FAST)" "$(bool $PAR)" \
     "$(q "$(rawval "$RUN_FILE" depthlevel)")" "$(q "$(rawval "$RUN_FILE" reason)")" "$(q "$(rawval "$RUN_FILE" updated)")" "$(q "$(rawval "$RUN_FILE" created)")" \
-    "$(q "$(rawval "$RUN_FILE" input)")" "$(q "$(rawval "$RUN_FILE" idea)")" "$(q "$cur")" "$(q "$(rawval "$RUN_FILE" gate_name)")"
+    "$(q "$(rawval "$RUN_FILE" input)")" "$(q "$(rawval "$RUN_FILE" idea)")" "$(q "$cur")" "$(q "$(rawval "$RUN_FILE" gate_name)")" \
+    "$(q "$(rawval "$RUN_FILE" attempts)")" "$(q "$(rawval "$RUN_FILE" gate_id)")" "$(q "$(rawval "$RUN_FILE" gate_state)")" "$(q "$(rawval "$RUN_FILE" gate_spec)")"
 }
 
 # ---- events ---------------------------------------------------------------------------------
@@ -386,6 +398,40 @@ emit_events() {
       if (pi > 0) { rest = substr($0, pi); c = index(rest, ":"); raw = substr(rest, c + 1); sub(/^ +/, "", raw); sub(/\} *$/, "", raw) }
       printf "%s{\"id\":\"%s\",\"ts\":\"%s\",\"kind\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"spec\":\"%s\",\"payload\":\"%s\"}", (n++ ? "," : ""), esc(str(head, "id")), esc(str(head, "ts|timestamp")), esc(str(head, "kind|event")), esc(str(head, "from|agent")), esc(str(head, "to")), esc(str(head, "spec")), esc(raw)
     }'
+}
+# A kcc lane (.kcc-lanes/SPEC-x) logs to its own coordination/backchannel.jsonl; the live sync copies those events into the
+# workspace file only while `kcc run` is alive. Events of a lane that the workspace file does not hold (same ts, kind, spec)
+# are listed here with the lane's name, so the lifecycle flowchart and the timeline see what the lane did.
+emit_lane_events() {
+  local bc="$REPO_ROOT/coordination/backchannel.jsonl" mk="$TMP/mainkeys.txt" lane lbc first=1 piece
+  : > "$mk"
+  if [[ -f "$bc" ]]; then tr -d '\r' < "$bc" | awk 'NF{ t=""; k=""; s=""; h=$0; pi=index(h, "\"payload\""); if (pi > 0) h=substr(h, 1, pi - 1); if (match(h, /"ts" *: *"[^"]*"/)) t=substr(h, RSTART, RLENGTH); if (match(h, /"kind" *: *"[^"]*"/)) k=substr(h, RSTART, RLENGTH); if (match(h, /"spec" *: *"[^"]*"/)) s=substr(h, RSTART, RLENGTH); gsub(/ /, "", t); gsub(/ /, "", k); gsub(/ /, "", s); print t "|" k "|" s }' | sort -u > "$mk"; fi
+  for lane in "$REPO_ROOT"/.kcc-lanes/*/ "$REPO_ROOT"/.worktrees/*/; do
+    lane="${lane%/}"; lbc="$lane/coordination/backchannel.jsonl"
+    [[ -f "$lbc" ]] || continue
+    piece="$(tr -d '\r' < "$lbc" | awk -v lane="$(basename "$lane")" -v mkf="$mk" '
+      function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s); gsub(/[\001-\010\013\014\016-\037]/, "", s); return s }
+      function str(h, keys,   n, k, re, a, i) {
+        n = split(keys, k, "|")
+        for (i = 1; i <= n; i++) { re = "\"" k[i] "\" *: *\"[^\"]*\""; if (match(h, re)) { a = substr(h, RSTART, RLENGTH); sub(/^[^:]*: *"/, "", a); sub(/"$/, "", a); return a } }
+        return ""
+      }
+      BEGIN { while ((getline l < mkf) > 0) have[l] = 1 }
+      NF {
+        pi = index($0, "\"payload\"")
+        head = (pi > 0) ? substr($0, 1, pi - 1) : $0
+        raw = ""
+        if (pi > 0) { rest = substr($0, pi); c = index(rest, ":"); raw = substr(rest, c + 1); sub(/^ +/, "", raw); sub(/\} *$/, "", raw) }
+        ts = str(head, "ts|timestamp"); kd = str(head, "kind|event"); sp = str(head, "spec")
+        key = "\"ts\":\"" ts "\"|\"kind\":\"" kd "\"|" (sp == "" ? "" : "\"spec\":\"" sp "\"")
+        if (key in have) next
+        printf "%s{\"id\":\"%s\",\"ts\":\"%s\",\"kind\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"spec\":\"%s\",\"lane\":\"%s\",\"payload\":\"%s\"}", (n++ ? "," : ""), esc(str(head, "id")), esc(ts), esc(kd), esc(str(head, "from|agent")), esc(str(head, "to")), esc(sp), esc(lane), esc(raw)
+      }')"
+    [[ -n "$piece" ]] || continue
+    [[ $first -eq 1 ]] || printf ','
+    first=0
+    printf '%s' "$piece"
+  done
 }
 
 # ---- checkpoints -----------------------------------------------------------------------------------
@@ -598,9 +644,16 @@ emit_runlogs() {
     [[ "$base" =~ ^state-([0-9]+)-(run|SPEC-[0-9A-Za-z]+)(-w([0-9]+))?-([0-9]+|install)\.log$ ]] || continue
     spec="${BASH_REMATCH[2]}"; [[ "$spec" == "run" ]] && spec=""
     started="$(head -n 1 "$f" | sed -nE 's/^# kcc-run ([^ ]+).*/\1/p')"
+    # line 2 of the log is the harness command: it names the agent, model and effort of this dispatch
+    local hdr2 lag lmo lef rs1 rs4 rs5
+    rs1="${BASH_REMATCH[1]}"; rs4="${BASH_REMATCH[4]:-}"; rs5="${BASH_REMATCH[5]}"
+    hdr2="$(sed -n 2p "$f" | cut -c1-600)"
+    lag="$(printf '%s' "$hdr2" | grep -oE -m1 -- '--agent [^ ]+' | head -n 1 | cut -d' ' -f2 || true)"
+    lmo="$(printf '%s' "$hdr2" | grep -oE -m1 -- '--model [^ ]+' | head -n 1 | cut -d' ' -f2 || true)"
+    lef="$(printf '%s' "$hdr2" | grep -oE -m1 -- '--effort [^ ]+' | head -n 1 | cut -d' ' -f2 || true)"
     [[ $first -eq 1 ]] || printf ','
     first=0
-    printf '{"state":%s,"spec":%s,"wave":%s,"attempt":%s,"started":%s,"ended":%s,"file":%s}' "${BASH_REMATCH[1]}" "$(q "$spec")" "$(q "${BASH_REMATCH[4]:-}")" "$(q "${BASH_REMATCH[5]}")" "$(q "$started")" "$(q "$(mtime_iso "$f")")" "$(q "${rel}coordination/run/logs/$base")"
+    printf '{"state":%s,"spec":%s,"wave":%s,"attempt":%s,"started":%s,"ended":%s,"file":%s,"agent":%s,"model":%s,"effort":%s}' "$rs1" "$(q "$spec")" "$(q "$rs4")" "$(q "$rs5")" "$(q "$started")" "$(q "$(mtime_iso "$f")")" "$(q "${rel}coordination/run/logs/$base")" "$(q "$lag")" "$(q "$lmo")" "$(q "$lef")"
   done
   done
 }
@@ -620,7 +673,9 @@ JSON_FILE="$TMP/data.json"
   printf ',"ideas":['; emit_ideas; printf ']'
   printf ',"specs":['; cat "$SPECS_FILE"; printf ']'
   printf ',"roadmaps":['; cat "$ROADMAPS_FILE"; printf ']'
+  printf ',"maxAttempts":%s' "$(num "$(states_max_attempts)")"
   printf ',"events":['; emit_events; printf ']'
+  printf ',"laneEvents":['; emit_lane_events; printf ']'
   printf ',"checkpoints":['; emit_checkpoints; printf ']'
   printf ',"sessions":['; emit_sessions; printf ']'
   printf ',"decisions":['; cat "$DEC_FILE"; printf ']'

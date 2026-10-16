@@ -38,7 +38,7 @@ describe("dashboard stage of a chat-driven run", () => {
     expect(runTool(root, "build-dashboard", ["--repo-root", root], { capture: true }).status).toBe(0);
     const html = readFileSync(join(root, "dashboard", "index.html"), "utf8");
     const run = JSON.parse(/"run":(\{[^}]*\})/.exec(html)![1]!);
-    expect(run.state).toBe(14); // fast-track table (no PLAN state): SPEC-001 is implementing, SPEC-002 waits at PREFLIGHT
+    expect(run.state).toBe(11); // fast-track table: SPEC-001 is implementing; SPEC-002 is written (WRITE, 10) and waits at PLAN
   });
 });
 

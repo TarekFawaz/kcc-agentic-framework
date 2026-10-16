@@ -170,6 +170,88 @@ details summary{cursor:pointer;color:var(--accent);font:600 .68rem var(--mono);l
 .md pre{background:var(--muted);border-left:2px solid var(--accent);padding:10px 12px;overflow:auto;font:.78rem/1.6 var(--mono)}
 .md table{margin:.6em 0;font-size:.86rem}.md th,.md td{border:1px solid var(--rule)}
 footer{padding:18px 28px;border-top:1px solid var(--rule);color:var(--muted-foreground);font:.7rem var(--mono);letter-spacing:.06em;display:flex;gap:14px;flex-wrap:wrap}
+
+/* parallel runs, Now strip, timeline and lifecycle flowchart */
+.flowbox{overflow-x:auto;padding:2px 0 4px}
+svg.flow,svg.tl{display:block;height:auto;font-family:var(--sans)}
+.flows{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,820px),1fr));gap:14px}
+.flows .card{margin:0}
+.flowhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.flowhead h3{margin:0;font:500 1.1rem/1.25 var(--serif)}
+.flowstatus{margin:6px 0 4px;font-size:.84rem}
+.opengate{margin:6px 0;padding:7px 10px;border:1px solid var(--warn);border-left-width:3px;border-radius:3px;background:color-mix(in oklab,var(--warn) 9%,var(--surface))}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font:500 .72rem/1.3 var(--mono);color:var(--muted-foreground);margin:2px 0 8px}
+.legend .sw{display:inline-block;width:18px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--muted-foreground)}
+.sw.b-strong{background:var(--emphasis)}.sw.b-balanced{background:var(--accent)}.sw.b-fast{background:var(--info)}.sw.b-unknown{background:var(--muted-foreground)}.sw.b-cont{background:var(--muted-foreground);opacity:.5;height:5px}
+.sw.hatch{background:repeating-linear-gradient(135deg,var(--warn) 0 2px,transparent 2px 5px);border:1px solid var(--warn)}
+.sw.runs{background:var(--accent);outline:1.5px dashed var(--foreground);outline-offset:0}
+.sw.stale{background:color-mix(in oklab,var(--accent) 35%,transparent);outline:1.5px dashed var(--emphasis);outline-offset:0}
+.sw.edge{height:3px;background:var(--accent)}.sw.edgef{height:2px;background:var(--rule)}.sw.edgel{height:3px;background:repeating-linear-gradient(90deg,var(--emphasis) 0 5px,transparent 5px 8px)}
+.sw.dia{width:11px;height:11px;transform:rotate(45deg);background:color-mix(in oklab,var(--warn) 25%,var(--surface));border:1.5px solid var(--warn);border-radius:1px}
+.sw.ringc{width:16px;height:10px;background:color-mix(in oklab,var(--emphasis) 16%,var(--surface));border:2px solid var(--emphasis);border-radius:3px}
+.tier{font:600 .62rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:2px;border:1px solid var(--rule);color:var(--muted-foreground)}
+.tier.strong{color:var(--emphasis);border-color:var(--emphasis)}.tier.balanced{color:var(--accent);border-color:var(--accent)}.tier.fast{color:var(--info);border-color:var(--info)}
+tr.stalerow td{opacity:.78}
+#tlrange{padding:4px 8px}
+/* flowchart */
+.fe{fill:none;stroke:var(--rule);stroke-width:1.4}
+.fe.t{stroke:var(--accent);stroke-width:2.2}
+.fe.fail.t{stroke:var(--danger)}
+.fe.gate{stroke-dasharray:3 3}
+.fe.live{stroke:var(--emphasis);stroke-width:2.8;stroke-dasharray:7 5;animation:kccdash 1s linear infinite}
+@keyframes kccdash{to{stroke-dashoffset:-24}}
+@keyframes kccring{0%{stroke-opacity:.95;stroke-width:1.5}100%{stroke-opacity:0;stroke-width:6}}
+.mkT{fill:var(--accent)}.mkF{fill:var(--rule)}
+.fc{font:600 9.5px var(--mono);fill:var(--foreground);paint-order:stroke;stroke:var(--surface);stroke-width:3.5px;stroke-linejoin:round}
+.fn .box{fill:var(--muted);stroke:var(--rule);stroke-width:1.3}
+.fn .nm{font:600 11px var(--mono);fill:var(--muted-foreground)}
+.fn .nid{font:600 8px var(--mono);fill:var(--muted-foreground)}
+.fn .bd{font:500 8.5px var(--mono);fill:var(--muted-foreground)}
+.fn.idle{opacity:.72}
+.fn.part .box{stroke:var(--emphasis);stroke-dasharray:4 3}
+.fn.done .box{fill:color-mix(in oklab,var(--ok) 13%,var(--surface));stroke:var(--ok)}
+.fn.done .nm{fill:var(--ok)}
+.fn.skip .box{stroke:var(--muted-foreground);stroke-dasharray:2 3}
+.fn.cur .box{fill:color-mix(in oklab,var(--emphasis) 16%,var(--surface));stroke:var(--emphasis);stroke-width:2.6}
+.fn.cur .nm{fill:var(--foreground)}
+.fn .halo{fill:none;stroke:var(--emphasis);stroke-width:1.5;stroke-opacity:.0}
+.fn.cur .halo{stroke-opacity:.55}
+.fn.cur.live .halo{animation:kccring 1.6s ease-out infinite}
+.fn.cur.stop .box,.fn.cur.stop .halo{stroke:var(--danger)}.fn.cur.stop .now{fill:var(--danger)}
+.fn.cur.stale .box{stroke-dasharray:5 3}
+.fn.cur.wait .box{stroke:var(--warn)}
+.fn .now{font:700 7.5px var(--mono);letter-spacing:.08em;fill:var(--emphasis)}
+.fn.term .box{stroke-dasharray:0}
+.fg .dm{fill:var(--surface);stroke:var(--rule);stroke-width:1.4}
+.fg.t .dm{fill:color-mix(in oklab,var(--warn) 20%,var(--surface));stroke:var(--warn);stroke-width:2}
+.fg.open .dm{fill:var(--warn);stroke:var(--foreground);stroke-width:2}
+.fg .ring{fill:none;stroke:var(--warn);stroke-width:1.5;animation:kccring 1.6s ease-out infinite}
+.fg .gn{font:700 9px var(--mono);fill:var(--foreground)}
+.gl,.fg .gl{font:600 8px var(--mono);fill:var(--muted-foreground)}
+.fg.t .gl,.fg.open .gl{fill:var(--foreground)}
+svg g:focus{outline:none}
+svg .fn:focus .box,svg .fn:focus-visible .box{stroke:var(--foreground);stroke-width:3}
+svg .fg:focus .dm{stroke:var(--foreground);stroke-width:3}
+svg .bar:focus .bk{stroke:var(--foreground);stroke-width:2}
+/* timeline */
+svg.tl .grid{stroke:var(--rule);stroke-width:1}
+.axl{font:500 9.5px var(--mono);fill:var(--muted-foreground)}
+.gh{fill:color-mix(in oklab,var(--accent) 9%,var(--surface))}
+.ght{font:600 10.5px var(--mono);fill:var(--foreground)}
+.rl{font:500 10px var(--mono);fill:var(--foreground)}
+.bar .bk{stroke:none}
+.b-strong .bk{fill:var(--emphasis)}.b-balanced .bk{fill:var(--accent)}.b-fast .bk{fill:var(--info)}.b-unknown .bk{fill:var(--muted-foreground)}
+.b-cont .bk{fill:var(--muted-foreground);opacity:.5}
+.bar .bt{font:600 9px var(--mono);fill:var(--background)}
+.bar.run .bk{stroke:var(--foreground);stroke-width:1.4;stroke-dasharray:5 3;animation:kccdash 1s linear infinite}
+.bar.stale .bk{fill-opacity:.35;stroke:var(--emphasis);stroke-width:1.2;stroke-dasharray:3 2}
+.bn{font:600 9.5px var(--mono);fill:var(--emphasis)}.bn.st{fill:var(--danger)}
+.bar.gate .bk{stroke:var(--warn);stroke-width:1}
+.hatchbg{fill:color-mix(in oklab,var(--warn) 8%,var(--surface))}.hatchline{stroke:var(--warn);stroke-width:2.2}
+.cc{fill:var(--muted-foreground);opacity:.5}.cc.c2{fill:var(--accent);opacity:.75}.cc.c3,.cc.c4{fill:var(--emphasis);opacity:.9}
+.ccn{font:700 9px var(--mono);fill:var(--foreground)}
+.nowline{stroke:var(--emphasis);stroke-width:1.2;stroke-dasharray:4 3}.nowt{fill:var(--emphasis);font-weight:700}
+@media (prefers-reduced-motion:reduce){.fe.live,.bar.run .bk,.fn.cur.live .halo,.fg .ring{animation:none!important}.fn.cur .halo{stroke-opacity:.8;stroke-width:3}.fe.live{stroke-dasharray:none}}
 </style>
 </head>
 <body>
@@ -216,9 +298,9 @@ var D=null;
 try{D=JSON.parse(document.getElementById('kcc-data').textContent);}catch(e){D=null;}
 var view=document.getElementById('view');
 if(!D){view.innerHTML='<p class="empty">This is the dashboard template. Run <code>.KCC/tools/build-dashboard</code> to fill it with data.</p>';return;}
-['ideas','specs','roadmaps','events','checkpoints','sessions','decisions','humanDecisions','adrs','states','notes','agents','profiles','runLogs'].forEach(function(k){if(!Array.isArray(D[k]))D[k]=[];});
+['ideas','specs','roadmaps','events','checkpoints','sessions','decisions','humanDecisions','adrs','states','notes','agents','profiles','runLogs','laneEvents'].forEach(function(k){if(!Array.isArray(D[k]))D[k]=[];});
 D.memory=D.memory||{total:0};
-D.events.forEach(function(e){if(typeof e.payload==='string'&&/^[\[{]/.test(e.payload)){try{e.payload=JSON.parse(e.payload);}catch(x){}}});
+D.events.concat(D.laneEvents).forEach(function(e){if(typeof e.payload==='string'&&/^[\[{]/.test(e.payload)){try{e.payload=JSON.parse(e.payload);}catch(x){}}});
 /* After the shared states the driver stops at --until 9 and the lane scheduler builds the specs, so run.json can say
    "stopped" for hours while lanes work. A lane whose own run is running and whose files changed in the last 30
    minutes means the run is running, at the earliest lane stage. */
@@ -424,9 +506,11 @@ function stageTimes(D, now){
   var rows={},order=[];
   (D.states||[]).forEach(function(s){rows[s.id]={id:s.id,name:s.name,scope:s.scope,skipped:!!s.skipped,agentMs:0,humanMs:0,attempts:0,waiting:'',openSince:null,openKind:''};order.push(rows[s.id]);});
   var run=D.run||{},curId=Number(run.state),running=/running/.test(run.status||''),paused=/paused|suspended/.test(run.status||'');
-  var last={};
+  var last={},wallIv={};
+  /* Dispatches of one stage that overlap (a planner per spec, side by side) count once: wall-clock, not the sum. */
   (D.runLogs||[]).forEach(function(l){var r=rows[l.state];if(!r)return;var a=toMs(l.started),b=toMs(l.ended);if(a==null)return;
-    r.attempts++;r.agentMs+=Math.max(0,(b==null?a:b)-a);last[l.state]={a:a,b:b==null?a:b};});
+    r.attempts++;(wallIv[l.state]=wallIv[l.state]||[]).push([a,b==null?a:b]);last[l.state]={a:a,b:b==null?a:b};});
+  Object.keys(wallIv).forEach(function(k){rows[k].agentMs+=ivSum(wallIv[k]);});
   var chat=!(D.runLogs||[]).length,E=chat?eventSpans(D,now):null;
   var gates=chat?E.gates:gateSpans(D,now);
   if(chat)order.forEach(function(r){var ms=(E.run[r.id]||0)+(E.wall[r.id]||0);if(ms>0){r.agentMs+=ms;r.attempts=Math.max(r.attempts,E.attempts[r.id]||1);}r.humanMs+=E.human[r.id]||0;});
@@ -458,6 +542,473 @@ function stageTimes(D, now){
 }
 function fmtHMS(ms){ms=Math.max(0,Math.round((Number(ms)||0)/1000));var h=Math.floor(ms/3600),m=Math.floor(ms%3600/60),s=ms%60;return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
 /*stage-timing:end*/
+/*parallel-view:start*/
+/* Parallel agent runs and the lifecycle flowchart: pure functions of the data block and `now` (ms), no DOM.
+   Runs, from the most precise source down: start/end events of a dispatch (when the driver records them), agent
+   transcripts (Claude Code), dispatch logs (coordination/run/logs/state-*.log, lanes included) and, for a chat-driven
+   run with none of those, the spans between milestone events. The edges of the flowchart are the order of those
+   dispatches and of the completion events; nothing is drawn as taken that the files do not show. A run is "open" only
+   when the run that owns it says running, and "stale" when nothing has been written for STALE_MS. */
+var STALE_MS=10*60000, OPEN_ACT_MS=90000, SUB_OPEN_MS=120000;
+var START_KIND=/^(agent-run|agent|dispatch|run-state|state)-(started|start)$/;
+var END_KIND=/^(agent-run|agent|dispatch|run-state|state)-(ended|end|finished|failed|stopped)$/;
+var AGENT_STAGES={'idea-interrogator':['IDEA'],'technical-interrogator':['TECH','BRIEFS'],'infrastructure-planner':['SPECIALISTS','BRIEFS'],'ux-ui-designer':['SPECIALISTS','BRIEFS'],'security-analyst':['SPECIALISTS','BRIEFS'],'architect':['ARCH'],'architecture-critic':['ARCH-GATE','ARCH'],'spec-writer':['SPECS'],'planner':['PLAN'],'implementer':['IMPLEMENT'],'verifier':['TEST','REVIEW']};
+function pnum(v){if(v===''||v==null)return -1;var n=Number(v);return isFinite(n)?n:-1;}
+function pload(e){var p=e.payload;if(typeof p==='string'&&/^[\[{]/.test(p)){try{p=JSON.parse(p);}catch(x){}}return (p&&typeof p==='object')?p:{};}
+function specOf(e){return /^SPEC-/.test(e.spec||'')?e.spec:'';}
+function stateMaps(D){var byId={},byName={},order=[];(D.states||[]).forEach(function(s,i){byId[s.id]=s;byName[String(s.name).toUpperCase()]=s;order.push(s);});return {byId:byId,byName:byName,order:order};}
+function evStateId(e,M){var p=pload(e),n=pnum(p.state);if(n>=0)return n;var nm=p.state_name&&M.byName[String(p.state_name).toUpperCase()];if(nm)return nm.id;return evState(e);}
+/* A completion event: the driver's "state N done" (it carries `skipped`) or a milestone kind of the chat flow. */
+function completionOf(e,M){var p=pload(e);
+  if(Object.prototype.hasOwnProperty.call(EV_DONE,e.kind||'')||e.kind==='run-state-completed'||(p.skipped!==undefined&&pnum(p.state)>=0))return evStateId(e,M);
+  return -1;}
+function allEvents(D){
+  var l=(D.events||[]).concat(D.laneEvents||[]).map(function(e,i){return {e:e,i:i,t:toMs(e.ts)};});
+  l.sort(function(a,b){return (a.t==null?0:a.t)-(b.t==null?0:b.t)||a.i-b.i;});
+  return l.map(function(o){return o.e;});}
+function tierOf(model,tmap){if(!model)return 'unknown';if(tmap[model])return tmap[model];if(/opus/i.test(model))return 'strong';if(/sonnet/i.test(model))return 'balanced';if(/haiku/i.test(model))return 'fast';return 'unknown';}
+function agentStageId(agent,desc,M){var c=AGENT_STAGES[agent];if(!c)return -1;if(agent==='verifier'&&/review/i.test(desc||''))c=['REVIEW','TEST'];
+  for(var i=0;i<c.length;i++)if(M.byName[c[i]])return M.byName[c[i]].id;return -1;}
+function parseAttempts(str,state,spec){var best=0;String(str||'').split(/\s+/).forEach(function(tok){var m=/^([^=]+)=(\d+)$/.exec(tok);if(!m)return;var k=m[1].split(':');if(Number(k[0])!==state)return;
+  if(k[1]&&/^SPEC-/.test(k[1])&&spec&&k[1]!==spec)return;best=Math.max(best,Number(m[2]));});return best;}
+
+/* ---- human gates, paired by gate_id ---- */
+function gateList(D,EV,M){
+  var gstate=function(v){var n=pnum(v);if(n>=0)return n;var s=v&&M&&M.byName[String(v).toUpperCase()];return s?s.id:-1;};
+  var out=[],byId={};
+  EV.forEach(function(e){var p=pload(e),t=toMs(e.ts);if(t==null)return;
+    if(e.kind==='human-gate-triggered'){
+      var g={id:p.gate_id||'',name:p.gate||p.kind||'gate',kind:p.kind||'',state:gstate(p.state),spec:specOf(e),start:t,end:null,question:p.reason||'',answers:p.allowed_answers||[],answer:'',open:true,lane:e.lane||''};
+      out.push(g);if(g.id)byId[g.id]=g;}
+    else if(e.kind==='human-gate-decision'){
+      var g2=(p.gate_id&&byId[p.gate_id])||null;
+      if(!g2)for(var i=0;i<out.length;i++)if(out[i].open&&out[i].spec===specOf(e)&&(!p.gate_id||!out[i].id)){g2=out[i];break;}
+      if(g2){g2.end=t;g2.answer=p.answer||'';g2.open=false;}
+      else if(p.answer!==undefined||p.gate_id){out.push({id:p.gate_id||'',name:p.gate||'gate',kind:'',state:gstate(p.state),spec:specOf(e),start:t,end:t,question:'',answers:[],answer:p.answer||'',open:false,lane:e.lane||''});}}});
+  /* A gate nobody answered but the work went on (a later dispatch or completion in its scope) is not open any more. */
+  out.forEach(function(g){if(!g.open)return;
+    for(var i=0;i<EV.length;i++){var e=EV[i],t=toMs(e.ts);if(t==null||t<=g.start)continue;if(specOf(e)!==g.spec&&g.spec!=='')continue;
+      if(/^(human-gate|checkpoint-created|lane-|session-closed|limit-reached)/.test(e.kind||''))continue;
+      if(g.spec===''&&specOf(e))continue;
+      g.open=false;g.end=t;g.answer='(no decision event; work went on)';g.orphan=true;break;}});
+  return out;}
+
+/* ---- the runs ---- */
+function buildRuns(D,now){
+  var M=stateMaps(D),EV=allEvents(D),runs=[],tmap={},used={};
+  EV.forEach(function(e){if(e.kind==='model-selected'){var p=pload(e);if(p.model&&p.tier)tmap[p.model]=p.tier;}});
+  var logs=[];(D.runLogs||[]).forEach(function(l,i){var a=toMs(l.started),b=toMs(l.ended);if(a==null)return;
+    logs.push({id:'log:'+(l.file||i),src:'log',kind:'log',agent:l.agent||'',mode:'direct',spec:l.spec||'',state:Number(l.state),wave:l.wave||'',attempt:l.attempt||'',start:a,end:Math.max(a,b==null?a:b),model:l.model||'',effort:l.effort||'',cost:null,file:l.file||''});});
+  var sess=[],subs=[];
+  (D.agents||[]).forEach(function(a){var s=toMs(a.started),e=toMs(a.ended);if(s==null)return;var st=pnum(a.state);
+    var r={id:'tr:'+a.id,tid:a.id,src:'transcript',kind:a.kind,parent:a.parent||'',agent:a.agent||'',mode:a.mode||'',desc:a.description||'',spec:a.spec||'',state:st,wave:a.wave||'',attempt:'',start:s,end:Math.max(s,e==null?s:e),model:a.model||'',effort:a.effort||'',cost:(a.kind==='session'&&a.costUSD!=null)?a.costUSD:null,tokens:a.tokens||{}};
+    if(a.kind==='session'){if(st<0)return;sess.push(r);}else subs.push(r);});
+  /* a transcript session is the dispatch its log describes: same state, spec, wave, started within 4 minutes */
+  sess.forEach(function(s){for(var i=0;i<logs.length;i++){var l=logs[i];if(used[l.id])continue;
+    if(l.state===s.state&&l.spec===s.spec&&String(l.wave)===String(s.wave)&&Math.abs(l.start-s.start)<=240000){used[l.id]=1;s.attempt=l.attempt;s.file=l.file;if(!s.agent||s.agent==='main session')s.agent=l.agent||s.agent;break;}}});
+  sess.forEach(function(s){if(!s.agent||s.agent==='main session')s.agent='orchestrator';});
+  logs.forEach(function(l){if(!used[l.id])runs.push(l);});
+  sess.forEach(function(s){runs.push(s);});
+  /* subagents inherit the stage of their session; a chat run's subagents get it from the agent type */
+  var sessById={};sess.forEach(function(s){sessById[s.tid]=s;});
+  subs.forEach(function(r){var p=sessById[r.parent];if(r.state<0&&p){r.state=p.state;}if(r.state<0&&r.agent==='spec-writer'&&r.spec&&M.byName.WRITE)r.state=M.byName.WRITE.id;
+    if(r.state<0)r.state=agentStageId(r.agent,r.desc,M);if(!r.spec&&p)r.spec=p.spec;runs.push(r);});
+  /* dispatch start/end events, when the driver writes them: exact bounds, replacing the coarser ones of the same dispatch */
+  var openEv={},evRuns=[];
+  EV.forEach(function(e){var t=toMs(e.ts);if(t==null)return;var isS=START_KIND.test(e.kind||''),isE=END_KIND.test(e.kind||'');if(!isS&&!isE)return;
+    var p=pload(e),st=evStateId(e,M),sp=specOf(e),ag=p.agent||e.from||'',key=[sp,st,p.wave==null?'':p.wave,ag,p.run_id||''].join('|');
+    if(isS){var r={id:'ev:'+(e.id||t),src:'event',kind:'event',agent:ag,mode:'direct',spec:sp,state:st,wave:String(p.wave==null?'':p.wave),attempt:p.attempt!=null?String(p.attempt):'',start:t,end:t,model:p.model||'',effort:p.effort||'',cost:null,evOpen:true};openEv[key]=r;evRuns.push(r);}
+    else{var o=openEv[key];if(!o)return;o.end=Math.max(o.start,t);o.evOpen=false;o.failed=/failed|stopped/.test(e.kind||'');delete openEv[key];}});
+  evRuns.forEach(function(r){var hit=null;runs.forEach(function(x){if(hit||x.kind==='subagent'||x.src==='event')return;if(x.spec===r.spec&&x.state===r.state&&String(x.wave)===String(r.wave)&&x.start<=(r.evOpen?now:r.end)+60000&&x.end>=r.start-60000)hit=x;});
+    if(hit){hit.start=r.start;hit.end=r.evOpen?Math.max(hit.end,r.start):r.end;hit.src='event';hit.evOpen=r.evOpen;if(r.agent&&!hit.agent)hit.agent=r.agent;if(r.failed)hit.failed=true;}else runs.push(r);});
+  /* Dispatches whose log is gone: a log is named by state, spec, wave and attempt, so a rerun overwrites the earlier one.
+     The model-selected event of every dispatch is still in the backchannel; it gives the start, the agent, model and effort.
+     The stage is inferred from the agent and the order (a verifier after a finished TEST is the REVIEW); the end is the next
+     event of that spec, so it is an estimate and is marked as one. */
+  (function(){
+    var sel=[],bySpec={};
+    EV.forEach(function(e){if(e.kind!=='model-selected')return;var t=toMs(e.ts);if(t==null)return;var sp0=specOf(e);
+      var covered=runs.some(function(x){return x.kind!=='subagent'&&x.spec===sp0&&Math.abs(x.start-t)<=25000;});
+      if(!covered){var o={e:e,t:t,p:pload(e),sp:sp0};sel.push(o);(bySpec[sp0]=bySpec[sp0]||[]).push(o);}});
+    if(!sel.length)return;
+    var guess=function(p,e,lastS,lastDone){var item=String(p.item||''),ag=p.agent||e.from||'',T=M.byName.TEST,R=M.byName.REVIEW,X=M.byName.FIX||M.byName.IMPLEMENT,I=M.byName.IMPLEMENT;
+      if(/^wave/.test(item))return I?I.id:-1;
+      if(ag==='implementer'&&item==='spec')return X?X.id:-1;
+      if(ag==='verifier'){if(R&&T&&lastS===T.id&&lastDone)return R.id;return T?T.id:(R?R.id:-1);}
+      return agentStageId(ag,item,M);};
+    Object.keys(bySpec).forEach(function(sp){
+      var items=[];
+      runs.forEach(function(x){if(x.kind!=='subagent'&&x.spec===sp&&x.state>=0)items.push({t:x.start,k:'run',state:x.state});});
+      EV.forEach(function(e){var st=completionOf(e,M);if(st<0)return;var s=M.byId[st];if(!s||(s.scope==='run')!==(sp===''))return;if(sp!==''&&e.spec!==sp)return;if(sp===''&&specOf(e))return;var t=toMs(e.ts);if(t!=null)items.push({t:t,k:'done',state:st});});
+      bySpec[sp].forEach(function(o){items.push({t:o.t,k:'sel',o:o});});
+      items.sort(function(a,b){return a.t-b.t;});
+      var lastS=-1,lastDone=false;
+      items.forEach(function(it,ix){
+        if(it.k==='run'){lastS=it.state;lastDone=false;return;}
+        if(it.k==='done'){lastS=it.state;lastDone=true;return;}
+        var o=it.o,st=guess(o.p,o.e,lastS,lastDone);if(st<0)return;
+        var nxt=items[ix+1],item=String(o.p.item||''),wv=/^wave (S+)/.exec(item);
+        runs.push({id:'sel:'+(o.e.id||o.t),src:'selected',kind:'selected',agent:o.p.agent||o.e.from||'',mode:'direct',spec:sp,state:st,wave:wv?wv[1]:'',attempt:'',start:o.t,end:nxt?Math.max(o.t+1000,nxt.t-1000):o.t+1000,model:o.p.model||'',effort:o.p.effort||'',cost:null,approxEnd:true});
+        lastS=st;lastDone=false;});});
+  })();
+  /* a chat-driven run has no dispatch records: the span from the previous milestone to each completion event */
+  if(!runs.length){var lastRun=null,lastSpec={},seenRun={};
+    EV.forEach(function(e){var t=toMs(e.ts);if(t==null)return;var st=completionOf(e,M),sp=specOf(e);if(lastRun==null)lastRun=t;
+      if(st<0){if(sp&&lastSpec[sp]==null&&/started/.test(e.kind||''))lastSpec[sp]=t;return;}
+      var sc=M.byId[st]?M.byId[st].scope:(st>=10?'spec':'run');if(pload(e).skipped===true)return;
+      if(sc!=='run'&&sp){var from=lastSpec[sp]!=null?lastSpec[sp]:lastRun;runs.push({id:'dv:'+(e.id||t),src:'derived',kind:'derived',agent:e.from||'',mode:'direct',spec:sp,state:st,wave:'',attempt:'',start:from,end:Math.max(from,t),model:'',effort:'',cost:null});lastSpec[sp]=t;}
+      else if(sc==='run'&&!seenRun[st]){seenRun[st]=1;runs.push({id:'dv:'+(e.id||t),src:'derived',kind:'derived',agent:e.from||'',mode:'direct',spec:'',state:st,wave:'',attempt:'',start:lastRun,end:Math.max(lastRun,t),model:'',effort:'',cost:null});lastRun=t;}});}
+  runs.sort(function(a,b){return a.start-b.start||a.end-b.end;});
+  var kids={};runs.forEach(function(r){if(r.kind==='subagent')kids[r.parent]=(kids[r.parent]||0)+1;});
+  runs.forEach(function(r){r.tier=tierOf(r.model,tmap);r.container=r.kind==='session'&&!!kids[r.tid];r.leaf=!r.container;r.open=false;r.stale=false;r.cut=false;});
+  return {M:M,EV:EV,runs:runs,tmap:tmap,gates:gateList(D,EV,M)};}
+
+/* ---- where each scope stands: the run (''), and every spec ---- */
+function lastActivityOf(rb,sp,base){
+  var t=base||0;
+  rb.EV.forEach(function(e){var s=toMs(e.ts);if(s!=null&&(sp===''||specOf(e)===sp)&&s>t)t=s;});
+  rb.runs.forEach(function(r){if((sp===''||r.spec===sp)&&r.end>t)t=r.end;});
+  return t;}
+function specIds(D,rb){var m={};(D.specs||[]).forEach(function(s){m[s.id]=1;});(D.lanes||[]).forEach(function(l){if(l.spec)m[l.spec]=1;});rb.runs.forEach(function(r){if(r.spec)m[r.spec]=1;});rb.EV.forEach(function(e){if(specOf(e))m[specOf(e)]=1;});return Object.keys(m).sort();}
+function scopeCtx(D,rb,sp,now){
+  var run=D.run||{},lane=null,c;
+  (D.lanes||[]).forEach(function(l){if(sp&&l.spec===sp)lane=l;});
+  if(sp===''){c={source:'run',status:run.status||'',state:pnum(run.state),wave:run.wave||'',reason:run.reason||'',attempts:run.attempts||'',gateId:run.gate_id||'',updated:toMs(run.updated)||0};}
+  else if(lane&&lane.runStatus){c={source:'lane',status:lane.runStatus,state:pnum(lane.runState),wave:lane.runWave||'',reason:lane.runReason||'',attempts:lane.runAttempts||'',gateId:lane.runGateId||'',updated:Math.max(toMs(lane.runUpdated)||0,toMs(lane.updated)||0)};}
+  else if(run.currentSpec===sp&&run.status){c={source:'run',status:run.status,state:pnum(run.state),wave:run.wave||'',reason:run.reason||'',attempts:run.attempts||'',gateId:run.gate_id||'',updated:toMs(run.updated)||0};}
+  else c={source:'events',status:'',state:-1,wave:'',reason:'',attempts:'',gateId:'',updated:0};
+  c.status=String(c.status||'').toLowerCase();if(c.status==='failed'||c.status==='aborted')c.status='stopped';
+  c.last=lastActivityOf(rb,sp,c.updated);
+  /* a gate that is open for this scope beats "running": the work is waiting for a person */
+  var og=null;rb.gates.forEach(function(g){if(g.open&&(sp===''?g.spec==='':g.spec===sp))og=g;});
+  c.openGate=og;
+  if(og&&(c.status==='running'||c.status==='paused'||c.status===''))c.status='paused';
+  if(c.status==='running'&&now-c.last>STALE_MS){c.stale=true;}
+  return c;}
+/* open / stale / interrupted flags on the runs, from the scope each belongs to */
+function markOpen(D,rb,now){
+  var ctx={'':scopeCtx(D,rb,'',now)};specIds(D,rb).forEach(function(sp){ctx[sp]=scopeCtx(D,rb,sp,now);});
+  var M=rb.M,byTid={};rb.runs.forEach(function(r){if(r.tid)byTid[r.tid]=r;});
+  var latest={};rb.runs.forEach(function(r){if(r.kind==='subagent')return;var k=r.spec+'|'+r.state;if(latest[k]==null||r.start>latest[k])latest[k]=r.start;});
+  function doneAfter(r){for(var i=0;i<rb.EV.length;i++){var e=rb.EV[i],t=toMs(e.ts);if(t==null||t<r.start-1000)continue;if(completionOf(e,M)===r.state&&(specOf(e)===r.spec||(r.spec===''&&(!specOf(e)||(M.byId[r.state]&&M.byId[r.state].scope==='run')))))return true;}return false;}
+  rb.runs.forEach(function(r){if(r.kind==='subagent')return;
+    var c=ctx[r.spec]||ctx[''],isLast=latest[r.spec+'|'+r.state]===r.start,fin=doneAfter(r);r.finished=fin;
+    var byCtx=isLast&&!fin&&c.status==='running'&&c.state===r.state&&(!r.wave||!c.wave||String(r.wave)===String(c.wave));
+    var byEvent=r.src==='event'&&r.evOpen===true;
+    var byAct=!fin&&r.src==='transcript'&&now-r.end<OPEN_ACT_MS&&isLast;
+    if(byCtx||byEvent||byAct){var last=Math.max(c.last,r.end);r.act=last;
+      if(now-last>STALE_MS){r.stale=true;r.end=Math.max(r.end,last);}else{r.open=true;r.end=Math.max(r.end,now);}}
+    else if(isLast&&!fin&&(c.status==='stopped'||c.status==='paused'||c.status==='idle')&&c.state===r.state)r.cut=true;});
+  rb.runs.forEach(function(r){if(r.kind!=='subagent')return;var p=byTid[r.parent];
+    r.act=r.end;
+    if(p){if(p.open&&now-r.end<SUB_OPEN_MS){r.open=true;r.end=Math.max(r.end,now);}else if(p.stale&&now-r.end<SUB_OPEN_MS+STALE_MS){r.stale=true;}}
+    else if(now-r.end<SUB_OPEN_MS){r.open=true;r.end=Math.max(r.end,now);}});
+  rb.ctx=ctx;return rb;}
+function effEnd(r,now){return r.open?Math.max(r.end,now):r.end;}
+
+/* ---- concurrency: how many agents work at the same moment ---- */
+function leafRuns(rb){return rb.runs.filter(function(r){return r.leaf&&r.state>=0;});}
+function concurrencySegments(list,now){
+  var ev=[];list.forEach(function(r){var a=r.start,b=effEnd(r,now);if(b<=a)b=a+1000;ev.push([a,1],[b,-1]);});
+  ev.sort(function(x,y){return x[0]-y[0]||x[1]-y[1];});
+  var segs=[],n=0,peak=0;
+  for(var i=0;i<ev.length;i++){n+=ev[i][1];if(n>peak)peak=n;var nx=ev[i+1];if(nx&&nx[0]>ev[i][0]&&n>0)segs.push({a:ev[i][0],b:nx[0],n:n});}
+  return {segs:segs,peak:peak};}
+function stageStats(rb,now){
+  var by={};
+  leafRuns(rb).forEach(function(r){var s=by[r.state]=by[r.state]||{runs:0,sum:0,iv:[],cost:0,hasCost:false,specs:{}};var b=effEnd(r,now);s.runs++;s.sum+=Math.max(0,b-r.start);s.iv.push([r.start,b]);if(r.spec)s.specs[r.spec]=1;});
+  rb.runs.forEach(function(r){if(r.kind==='session'&&r.cost!=null&&r.state>=0&&by[r.state]){by[r.state].cost+=r.cost;by[r.state].hasCost=true;}});
+  Object.keys(by).forEach(function(k){var s=by[k];s.wall=ivSum(s.iv);s.peak=concurrencySegments(s.iv.map(function(p){return {start:p[0],end:p[1],open:false};}),now).peak;s.speedup=s.wall>0?s.sum/s.wall:1;s.nspecs=Object.keys(s.specs).length;});
+  return by;}
+
+/* ---- the flowchart model: nodes from the state table, edges taken from the order of dispatches ---- */
+function visitSeq(rb,sp){
+  var M=rb.M,items=[],ord=0;
+  rb.runs.forEach(function(r){if(r.kind==='subagent'||r.state<0||(r.spec||'')!==sp)return;var s=M.byId[r.state];if(!s||((s.scope==='run')!==(sp==='')))return;
+    items.push({t:r.start,state:r.state,wave:String(r.wave||''),attempt:String(r.attempt||''),src:'run',o:ord++});});
+  rb.EV.forEach(function(e){var st=completionOf(e,M);if(st<0)return;var s=M.byId[st];if(!s)return;if((s.scope==='run')!==(sp===''))return;
+    if(sp!==''&&e.spec!==sp)return;var t=toMs(e.ts);if(t==null)return;var p=pload(e);
+    items.push({t:t,state:st,wave:String(p.wave==null?'':p.wave),src:'event',skipped:p.skipped===true,o:ord++});});
+  /* at the same instant a completion comes before the next dispatch */
+  items.sort(function(a,b){return a.t-b.t||((a.src==='event'?0:1)-(b.src==='event'?0:1))||a.o-b.o;});
+  var seq=[];
+  items.forEach(function(it){var last=seq[seq.length-1];
+    if(it.src==='event'){if(last&&last.state===it.state&&last.doneT==null){last.doneT=it.t;last.skipped=it.skipped;return;}
+      /* the same completion again with nothing between (one spec-created per spec) is not a second visit */
+      if(last&&last.state===it.state&&last.doneT!=null&&last.wave===it.wave&&sp==='')return;
+      seq.push({state:it.state,t:it.t,wave:it.wave,src:'event',doneT:it.t,skipped:it.skipped});}
+    else{if(last&&last.src==='run'&&last.state===it.state&&last.wave===it.wave&&last.attempt===it.attempt&&it.t-last.t<240000)return;
+      seq.push({state:it.state,t:it.t,wave:it.wave,attempt:it.attempt,src:'run',doneT:null});}});
+  return seq;}
+function traversals(seq,M){
+  var E={},nodes={};
+  seq.forEach(function(v,i){var n=nodes[v.state]=nodes[v.state]||{visits:0,fails:0,retries:0,waves:0,done:false,skipped:false,lastT:0};
+    n.visits++;n.lastT=v.t;n.done=v.doneT!=null;n.skipped=!!v.skipped&&v.doneT!=null;
+    if(i===0)return;var p=seq[i-1],a=p.state,b=v.state,key;
+    if(a===b){if(String(p.wave)!==String(v.wave)){key=a+'>'+b+':wave';n.waves++;}else{key=a+'>'+b+':retry';n.retries++;}}
+    else{key=a+'>'+b;var s=M.byId[a];if(s&&s.goto===b)nodes[a].fails++;}
+    E[key]=(E[key]||0)+1;});
+  return {E:E,nodes:nodes};}
+function gateCounts(rb,sp){var G={};
+  rb.gates.forEach(function(g){if((sp===''?g.spec!=='':g.spec!==sp))return;if(sp===''&&g.spec!=='')return;
+    var k=g.name+'@'+g.state;var x=G[k]=G[k]||{name:g.name,kind:g.kind,state:g.state,n:0,open:false,list:[]};x.n++;if(g.open)x.open=true;x.list.push(g);});
+  return G;}
+function flowScopes(D,rb,now){
+  var M=rb.M,order=M.order.filter(function(s){return !s.skipped;});
+  var pre=[],specS=[],post=[],seenSpec=false;
+  order.forEach(function(s){if(s.scope==='run'){(seenSpec?post:pre).push(s);}else{seenSpec=true;specS.push(s);}});
+  var out={pre:pre,specStates:specS,post:post,shared:null,specs:[],maxAtt:D.maxAttempts||3};
+  if(!order.length)return out;
+  var cs=rb.ctx[''],seq0=visitSeq(rb,''),t0=traversals(seq0,M);
+  /* post states (CLOSE) are run-scope but come after the specs: split the shared sequence */
+  var sharedSeq=seq0.filter(function(v){var s=M.byId[v.state];return pre.indexOf(s)>=0;}),postSeq=seq0.filter(function(v){var s=M.byId[v.state];return post.indexOf(s)>=0;});
+  var tp=traversals(sharedSeq,M),tpost=traversals(postSeq,M);
+  var curShared=-1,sharedStatus='';
+  if(cs.state>=0&&pre.some(function(s){return s.id===cs.state;})&&/running|paused|stopped/.test(cs.status)){curShared=cs.state;sharedStatus=cs.status;}
+  out.shared={nodes:pre,E:tp.E,N:tp.nodes,gates:gateCounts(rb,''),cur:curShared,status:sharedStatus,ctx:cs,seq:sharedSeq,post:post,postN:tpost.nodes,closed:!!(tpost.nodes[post.length?post[post.length-1].id:-1])};
+  specIds(D,rb).forEach(function(sp){
+    var seq=visitSeq(rb,sp),t=traversals(seq,M),c=rb.ctx[sp],spec=null;(D.specs||[]).forEach(function(s){if(s.id===sp)spec=s;});
+    var ids=specS.map(function(s){return s.id;}),last=seq[seq.length-1],cur=-1,prev=-1,status=c.status,why=c.reason;
+    var done=!!(spec&&approved(spec));
+    if(c.source==='lane'||c.source==='run'){if(ids.indexOf(c.state)>=0)cur=c.state;}
+    if(c.openGate&&ids.indexOf(c.openGate.state)>=0)cur=c.openGate.state;
+    if(cur<0&&last){ // no driver record for this scope: the last dispatch, or what follows its completion
+      if(last.doneT==null)cur=last.state;else{var ix=ids.indexOf(last.state);cur=(ix>=0&&ix+1<ids.length)?ids[ix+1]:last.state;}
+      if(!status)status=last.doneT==null?'unknown':'idle';}
+    if(done){status='done';cur=-1;}
+    // the previous visit before the current one gives the arrow the work is on
+    if(cur>=0){for(var i=seq.length-1;i>=0;i--){if(seq[i].state===cur){prev=i>0?seq[i-1].state:-1;break;}}
+      if(prev<0&&last&&last.state!==cur)prev=last.state;
+      if(prev<0&&seq.length&&seq[seq.length-1].state===cur&&seq.length>1)prev=seq[seq.length-2].state;}
+    var live=(status==='running'&&!c.stale);
+    out.specs.push({id:sp,title:spec?(spec.title||''):'',nodes:specS,E:t.E,N:t.nodes,gates:gateCounts(rb,sp),cur:cur,prev:prev,status:status,stale:!!c.stale,live:live,why:why,ctx:c,seq:seq,done:done,
+      att:cur>=0?parseAttempts(c.attempts,cur,sp):0,wave:c.wave||''});});
+  return out;}
+
+/* ---- drawing: pure string builders (SVG), escaped ---- */
+var GATE_STATIC={PREFLIGHT:'toolchain',TEST:'quality-deferred-on-exit-3',FIX:'ruling',REPO:'repo-bootstrap',ROI:'roi-gate',CONFIRM:'confirm','BUDGET-0':'budget','BUDGET-P':'budget','BUDGET-I':'budget',WINDOWS:'windows',ASK:'prohibited-assumption'};
+var GATE_LABEL={'toolchain':'toolchain','quality-deferred-on-exit-3':'deferred tool','ruling':'ruling','loop':'loop CR-3','repo-bootstrap':'repo','roi-gate':'ROI','confirm':'confirm','budget':'budget','budget-cap':'budget cap','windows':'windows','prohibited-assumption':'assumption'};
+var FLOW_NW=88,FLOW_NH=48,FLOW_STEP=112,FLOW_X0=72,FLOW_CY=112;
+function fx(i){return FLOW_X0+i*FLOW_STEP+FLOW_NW/2;}
+function pathArc(xs,xt,yb,d){return 'M'+xs+','+yb+' C'+xs+','+(yb+d)+' '+xt+','+(yb+d)+' '+xt+','+(yb+4);}
+/* One flowchart: ch = {nodes, E, N, gates, cur, prev, live, status, stale, att, wave, term:[post states], termDone}. */
+function flowSVG(ch,o){
+  o=o||{};var nodes=ch.nodes.concat(ch.term||[]),pos={},maxAtt=o.maxAtt||3;
+  nodes.forEach(function(s,k){pos[s.id]=k;});
+  var cy=FLOW_CY,top=cy-FLOW_NH/2,bot=cy+FLOW_NH/2,edges='',labels='',maxD=0,E=ch.E||{},i;
+  var W=FLOW_X0+nodes.length*FLOW_STEP+8;
+  var nameOf=function(id){return nodes[pos[id]]?nodes[pos[id]].name:String(id);};
+  var modelKeys={},arcOut={},arcIn={},arcs=[];
+  var curKey='';
+  if(ch.cur>=0){curKey=(ch.prev>=0&&ch.prev!==ch.cur)?ch.prev+'>'+ch.cur:(E[ch.cur+'>'+ch.cur+':retry']?ch.cur+'>'+ch.cur+':retry':ch.cur+'>'+ch.cur+':wave');}
+  var isLive=function(key){return !!(ch.live&&ch.cur>=0&&curKey===key);};
+  var push=function(key,from,to,kind,tip){if(modelKeys[key])return;modelKeys[key]=1;arcs.push({key:key,from:from,to:to,kind:kind,tip:tip});};
+  for(i=0;i<nodes.length-1;i++)push(nodes[i].id+'>'+nodes[i+1].id,nodes[i].id,nodes[i+1].id,'next',nameOf(nodes[i].id)+' to '+nameOf(nodes[i+1].id));
+  nodes.forEach(function(s){if(s.goto!=null&&pos[s.goto]!=null)push(s.id+'>'+s.goto,s.id,s.goto,'fail','exit check fails: '+s.name+' goes back to '+nameOf(s.goto));});
+  Object.keys(E).forEach(function(k){var m=/^(\d+)>(\d+)$/.exec(k);if(!m)return;var a=Number(m[1]),b=Number(m[2]);if(pos[a]!=null&&pos[b]!=null)push(k,a,b,'other',nameOf(a)+' to '+nameOf(b)+' (not in the state table order)');});
+  arcs.forEach(function(a){a.arc=!(pos[a.to]-pos[a.from]===1);if(a.arc){arcOut[a.from]=(arcOut[a.from]||0)+1;arcIn[a.to]=(arcIn[a.to]||0)+1;}});
+  var outK={},inK={};
+  arcs.forEach(function(a){var n=E[a.key]||0,cls='fe'+(n?' t':'')+(isLive(a.key)?' live':'')+' '+a.kind,mk=n?'kccAhT':'kccAhF',tip=a.tip+(n?': taken '+n+'x':': not taken');
+    if(!a.arc){var xa=fx(pos[a.from])+FLOW_NW/2,xb=fx(pos[a.to])-FLOW_NW/2-5;
+      edges+='<path class="'+cls+'" d="M'+xa+','+cy+' L'+xb+','+cy+'" marker-end="url(#'+mk+')"><title>'+esc(tip)+'</title></path>';
+      if(n)labels+='<text class="fc" x="'+((xa+xb)/2)+'" y="'+(cy-6)+'" text-anchor="middle">&times;'+n+'</text>';return;}
+    var ia=(outK[a.from]=(outK[a.from]||0)+1)-1,ib=(inK[a.to]=(inK[a.to]||0)+1)-1;
+    var xs=fx(pos[a.from])+(ia-((arcOut[a.from]||1)-1)/2)*14,xt=fx(pos[a.to])+(ib-((arcIn[a.to]||1)-1)/2)*14,hops=Math.abs(pos[a.to]-pos[a.from]);
+    var dep=30+14*hops+8*ia;if(dep>110)dep=110;if(dep>maxD)maxD=dep;
+    edges+='<path class="'+cls+'" d="'+pathArc(xs,xt,bot,dep)+'" marker-end="url(#'+mk+')"><title>'+esc(tip)+'</title></path>';
+    if(n)labels+='<text class="fc" x="'+((xs+xt)/2)+'" y="'+(bot+dep*0.75+3)+'" text-anchor="middle">'+(a.kind==='fail'?'fail ':'')+'&times;'+n+'</text>';});
+  /* self loops: next wave (waves of one state) and retry (the same step again) */
+  nodes.forEach(function(s){var x=fx(pos[s.id]),nw=E[s.id+'>'+s.id+':wave']||0,nr=E[s.id+'>'+s.id+':retry']||0;
+    if(s.scope==='wave'||nw){
+      edges+='<path class="fe'+(nw?' t':'')+(isLive(s.id+'>'+s.id+':wave')?' live':'')+'" d="M'+(x-34)+','+top+' C'+(x-46)+','+(top-30)+' '+(x-10)+','+(top-30)+' '+(x-14)+','+(top-4)+'" marker-end="url(#'+(nw?'kccAhT':'kccAhF')+')"><title>'+esc(s.name+': next wave'+(nw?', taken '+nw+'x':', not taken'))+'</title></path>';
+      if(nw)labels+='<text class="fc" x="'+(x-26)+'" y="'+(top-22)+'" text-anchor="middle">waves &times;'+nw+'</text>';}
+    if(nr){
+      edges+='<path class="fe t'+(isLive(s.id+'>'+s.id+':retry')?' live':'')+'" d="M'+(x+14)+','+top+' C'+(x+10)+','+(top-30)+' '+(x+46)+','+(top-30)+' '+(x+34)+','+(top-4)+'" marker-end="url(#kccAhT)"><title>'+esc(s.name+': same step again, '+nr+'x')+'</title></path>';
+      labels+='<text class="fc" x="'+(x+30)+'" y="'+(top-22)+'" text-anchor="middle">retry &times;'+nr+'</text>';}});
+  /* human gates: diamonds above the state where they opened; the known ones are faint until they open */
+  var gmap={};Object.keys(ch.gates||{}).forEach(function(k){gmap[k]=ch.gates[k];});
+  nodes.forEach(function(s){var gn=GATE_STATIC[s.name];if(gn&&!gmap[gn+'@'+s.id])gmap[gn+'@'+s.id]={name:gn,state:s.id,n:0,open:false,list:[],kind:''};});
+  var perNode={},gates='',gy=40;
+  Object.keys(gmap).forEach(function(k){var g=gmap[k];if(pos[g.state]==null)return;(perNode[g.state]=perNode[g.state]||[]).push(g);});
+  Object.keys(perNode).forEach(function(sid){var list=perNode[sid];list.forEach(function(g,k){
+    var gx=fx(pos[sid])+(k-(list.length-1)/2)*42,cls='fg'+(g.n?' t':'')+(g.open?' open':''),q=g.list.length?g.list[g.list.length-1]:null;
+    var tip=(GATE_LABEL[g.name]||g.name)+' gate at '+nameOf(Number(sid))+(g.n?': opened '+g.n+'x'+(g.open&&q&&q.question?'. Open question: '+q.question:''):': never opened');
+    gates+='<g class="'+cls+'" tabindex="0" role="img" aria-label="'+esc(tip)+'"><title>'+esc(tip)+'</title>'+(g.open?'<path class="ring" d="M'+gx+','+(gy-23)+' L'+(gx+23)+','+gy+' L'+gx+','+(gy+23)+' L'+(gx-23)+','+gy+' Z"/>':'')+
+      '<path class="dm" d="M'+gx+','+(gy-16)+' L'+(gx+16)+','+gy+' L'+gx+','+(gy+16)+' L'+(gx-16)+','+gy+' Z"/><text x="'+gx+'" y="'+(gy+3.5)+'" text-anchor="middle" class="gn">'+(g.open?'?':(g.n?g.n:''))+'</text><text x="'+gx+'" y="'+(gy-26)+'" text-anchor="middle" class="gl">'+esc(GATE_LABEL[g.name]||String(g.name).slice(0,12))+'</text></g>';
+    edges+='<path class="fe gate'+(g.n?' t':'')+'" d="M'+gx+','+(gy+16)+' L'+fx(pos[sid])+','+(top-1)+'"/>';});});
+  /* the nodes */
+  var ns='';
+  nodes.forEach(function(s){var x=fx(pos[s.id])-FLOW_NW/2,N=(ch.N&&ch.N[s.id])||null,isCur=ch.cur===s.id,term=!!(ch.term&&ch.term.indexOf(s)>=0);
+    var cls='fn'+(term?' term':'')+(N&&N.done&&!isCur?(N.skipped?' skip':' done'):'')+(!N&&!isCur?' idle':'')+(N&&!N.done&&!isCur?' part':'')+(isCur?' cur '+(ch.live?'live':ch.status==='paused'?'wait':ch.status==='stopped'?'stop':ch.stale?'stale':'static'):'');
+    if(term&&ch.termDone)cls+=' done';
+    var l2=[],l3=[];if(N&&N.skipped&&!isCur)l2.push('skipped');if(N){if(N.visits>1)l2.push('x'+N.visits);if(N.retries)l2.push('retry '+N.retries);if(N.fails)l3.push('fail '+N.fails);}
+    if(isCur&&ch.att>0)l3.push('att '+ch.att+'/'+maxAtt);
+    if(isCur&&ch.wave&&s.scope==='wave')l2.push('wave '+ch.wave);
+    var mark=N&&N.done&&!isCur&&!N.skipped?' ✓':'';
+    var tip=s.id+' '+s.name+': '+(isCur?'current ('+(ch.status||'')+(ch.stale?', stale':'')+')':N?(N.done?(N.skipped?'skipped':'done'):'started, not finished'):'not reached')+(N?', '+N.visits+' visit'+(N.visits>1?'s':'')+(N.fails?', failed '+N.fails+'x':''):'');
+    var tag=isCur?(ch.live?'NOW':ch.status==='paused'?'WAITING':ch.status==='stopped'?'STOPPED':ch.stale?'STALE':'HERE'):'';
+    ns+='<g class="'+cls+'" tabindex="0" role="img" aria-label="'+esc(tip)+'"><title>'+esc(tip)+'</title>'+(isCur?'<rect class="halo" x="'+(x-5)+'" y="'+(top-5)+'" width="'+(FLOW_NW+10)+'" height="'+(FLOW_NH+10)+'" rx="'+(term?27:8)+'"/>':'')+
+      '<rect class="box" x="'+x+'" y="'+top+'" width="'+FLOW_NW+'" height="'+FLOW_NH+'" rx="'+(term?24:5)+'"/>'+
+      '<text class="nid" x="'+(x+6)+'" y="'+(top+11)+'">'+s.id+'</text>'+(tag?'<text class="now" x="'+(x+FLOW_NW-6)+'" y="'+(top+11)+'" text-anchor="end">'+tag+'</text>':'')+
+      '<text class="nm" x="'+(x+FLOW_NW/2)+'" y="'+(cy-1)+'" text-anchor="middle">'+esc(s.name+mark)+'</text>'+
+      (l2.length?'<text class="bd" x="'+(x+FLOW_NW/2)+'" y="'+(cy+11)+'" text-anchor="middle">'+esc(l2.join(' · '))+'</text>':'')+
+      (l3.length?'<text class="bd" x="'+(x+FLOW_NW/2)+'" y="'+(cy+21)+'" text-anchor="middle">'+esc(l3.join(' · '))+'</text>':'')+'</g>';});
+  /* entry arrow */
+  var ent=ch.entry>0;
+  edges+='<path class="fe'+(ent?' t':'')+(ch.live&&ch.cur===nodes[0].id&&ch.prev<0?' live':'')+'" d="M6,'+cy+' L'+(fx(0)-FLOW_NW/2-5)+','+cy+'" marker-end="url(#'+(ent?'kccAhT':'kccAhF')+')"><title>'+esc((o.entryLabel||'entry')+(ent?': taken':': not taken'))+'</title></path><text class="gl" x="6" y="'+(cy-30)+'">'+esc(o.entryLabel||'')+'</text>';
+  var H=bot+Math.max(maxD,24)+30;
+  return '<svg class="flow" viewBox="0 0 '+W+' '+H+'" width="100%" role="group" aria-label="'+esc(o.label||'Lifecycle flowchart')+'" preserveAspectRatio="xMinYMin meet" style="min-width:'+Math.min(W,720)+'px">'+edges+gates+ns+labels+'</svg>';}
+/* The same chart as table rows: for screen readers and for reading the exact counts. */
+function transitionRows(ch,M){
+  var rows=[],E=ch.E||{},nm=function(id){return M.byId[id]?M.byId[id].name:String(id);};
+  Object.keys(E).sort().forEach(function(k){var m=/^(\d+)>(\d+)(?::(wave|retry))?$/.exec(k);if(!m)return;var a=Number(m[1]),b=Number(m[2]),kind=m[3]||((M.byId[a]&&M.byId[a].goto===b)?'fail (loop back)':'next');
+    rows.push({from:nm(a),to:nm(b),kind:kind==='wave'?'next wave':kind==='retry'?'retry':kind,n:E[k]});});
+  Object.keys(ch.gates||{}).forEach(function(k){var g=ch.gates[k];g.list.forEach(function(x){rows.push({from:nm(g.state),to:'gate '+(GATE_LABEL[g.name]||g.name)+(x.id?' '+x.id:''),kind:x.open?'gate (open)':'gate'+(x.answer?' -> '+x.answer:''),n:1});});});
+  return rows;}
+
+/* ---- the swimlane timeline (Gantt) ---- */
+function niceStep(span){var steps=[1,2,5,10,15,30,60,120,180,360,720,1440,2880],i;for(i=0;i<steps.length;i++)if(span/(steps[i]*60000)<=10)return steps[i]*60000;return 2880*60000;}
+function tickLabel(t,withDate){var d=new Date(t).toISOString();return (withDate?d.slice(5,10)+' ':'')+d.slice(11,16);}
+function timelineSVG(rb,now,range){
+  var M=rb.M,runs=rb.runs.filter(function(r){return r.state>=0&&(r.kind!=='subagent'||true);}),gates=rb.gates.filter(function(g){return g.state>=0;});
+  if(!runs.length&&!gates.length)return {svg:'',rows:[],peak:0,t0:0,t1:0,stats:{}};
+  var t1=0,t0=Infinity;
+  runs.forEach(function(r){var b=effEnd(r,now);if(r.start<t0)t0=r.start;if(b>t1)t1=b;});
+  gates.forEach(function(g){var b=g.open?now:(g.end||g.start);if(g.start<t0)t0=g.start;if(b>t1)t1=b;});
+  if(range&&range>0&&t1-t0>range)t0=t1-range;
+  var span=Math.max(60000,t1-t0),pad=span*0.01;t0-=pad;t1+=pad;span=t1-t0;
+  runs=runs.filter(function(r){return effEnd(r,now)>=t0;});gates=gates.filter(function(g){return (g.open?now:(g.end||g.start))>=t0;});
+  var LW=232,W=1180,PW=W-LW-96,RH=17,HH=21,x=function(t){return LW+(Math.max(t0,Math.min(t1,t))-t0)/span*PW;};
+  var stats=stageStats(rb,now),leaf=runs.filter(function(r){return r.leaf;}),conc=concurrencySegments(leaf,now),peak=conc.peak;
+  /* groups: stage, then spec */
+  var order=M.order.map(function(s){return s.id;}),groups={};
+  runs.forEach(function(r){(groups[r.state]=groups[r.state]||{runs:[],gates:[]}).runs.push(r);});
+  gates.forEach(function(g){(groups[g.state]=groups[g.state]||{runs:[],gates:[]}).gates.push(g);});
+  var gids=Object.keys(groups).map(Number).sort(function(a,b){var ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?999+a:ia)-(ib<0?999+b:ib);});
+  var rows=[],y=64,body='',trackTop=64,count=0,MAXROWS=170;
+  var tcol={strong:'b-strong',balanced:'b-balanced',fast:'b-fast',unknown:'b-unknown'};
+  gids.forEach(function(sid){var gr=groups[sid],st=M.byId[sid],stt=stats[sid];
+    gr.runs.sort(function(a,b){return (a.spec<b.spec?-1:a.spec>b.spec?1:0)||a.start-b.start;});
+    var head=(st?st.id+' '+st.name:'state '+sid)+(stt?'  -  '+stt.runs+' run'+(stt.runs>1?'s':'')+' - peak '+stt.peak+' parallel - wall '+fmtHMS(stt.wall)+' - sum '+fmtHMS(stt.sum)+' - x'+stt.speedup.toFixed(1):'');
+    body+='<g><rect class="gh" x="0" y="'+y+'" width="'+W+'" height="'+HH+'"/><text class="ght" x="8" y="'+(y+14)+'">'+esc(head)+'</text></g>';y+=HH;
+    gr.runs.forEach(function(r){if(count>=MAXROWS)return;count++;
+      var a=x(r.start),b=x(effEnd(r,now)),w=Math.max(3,b-a),cls=(r.container?'b-cont':(tcol[r.tier]||'b-unknown'))+(r.open?' run':'')+(r.stale?' stale':'')+(r.finished===false&&r.cut?' cut':'');
+      var lab=(r.spec?r.spec+' ':'')+(r.kind==='subagent'?'↳ ':'')+(r.agent||'agent')+(r.wave?' w'+r.wave:'')+(r.attempt&&r.attempt!=='1'&&r.attempt!=='0'&&r.src!=='transcript'?' #'+r.attempt:'');
+      var dur=Math.max(0,effEnd(r,now)-r.start);
+      var tip=(r.agent||'agent')+(r.spec?' on '+r.spec:'')+' - '+(st?st.name:'state '+r.state)+(r.wave?' wave '+r.wave:'')+' - '+tickLabel(r.start,true)+' to '+(r.open?'now':tickLabel(r.end,true))+' UTC ('+fmtDur(dur)+') - '+(r.model?modelShort(r.model):'model unknown')+(r.effort?' / '+r.effort:'')+' - tier '+r.tier+(r.open?' - running now':r.stale?' - stale: no activity recently':r.cut?' - interrupted':'')+' - source: '+r.src;
+      rows.push({run:r,label:lab,tip:tip});
+      body+='<g class="bar '+cls+'" tabindex="0" role="img" aria-label="'+esc(tip)+'"><title>'+esc(tip)+'</title><text class="rl" x="'+(LW-8)+'" y="'+(y+12)+'" text-anchor="end">'+esc(lab.length>34?lab.slice(0,33)+'…':lab)+'</text>'+
+        '<rect class="bk" x="'+a+'" y="'+(y+(r.container?6:2))+'" width="'+w+'" height="'+(r.container?5:RH-4)+'" rx="2"/>'+
+        (w>64&&!r.container?'<text class="bt" x="'+(a+5)+'" y="'+(y+12)+'">'+esc(fmtDur(dur))+'</text>':'')+
+        (r.open?'<text class="bn" x="'+(b+4)+'" y="'+(y+12)+'">▶ running</text>':r.stale?'<text class="bn st" x="'+(b+4)+'" y="'+(y+12)+'">? stale</text>':r.cut?'<text class="bn st" x="'+(b+3)+'" y="'+(y+12)+'">×</text>':'')+'</g>';y+=RH;});
+    gr.gates.sort(function(a,b){return a.start-b.start;}).forEach(function(g){
+      var a=x(g.start),b=x(g.open?now:(g.end||g.start)),w=Math.max(3,b-a),dur=(g.open?now:(g.end||g.start))-g.start;
+      var lab=(g.spec?g.spec+' ':'')+'human: '+(g.id||'gate')+' '+(GATE_LABEL[g.name]||g.name);
+      var tip='Human gate '+(g.id||'')+' ('+(GATE_LABEL[g.name]||g.name)+(g.spec?', '+g.spec:'')+') - '+(g.open?'OPEN since '+tickLabel(g.start,true)+' UTC; waiting for a person. '+(g.question||''):'waited '+fmtDur(dur)+(g.answer?', answered '+g.answer:''));
+      rows.push({gate:g,label:lab,tip:tip});
+      body+='<g class="bar gate'+(g.open?' run':'')+'" tabindex="0" role="img" aria-label="'+esc(tip)+'"><title>'+esc(tip)+'</title><text class="rl" x="'+(LW-8)+'" y="'+(y+12)+'" text-anchor="end">'+esc(lab.length>34?lab.slice(0,33)+'…':lab)+'</text>'+
+        '<rect class="bk" x="'+a+'" y="'+(y+2)+'" width="'+w+'" height="'+(RH-4)+'" rx="2" fill="url(#kccHatch)"/>'+(g.open?'<text class="bn" x="'+(b+4)+'" y="'+(y+12)+'">waiting for you</text>':'')+'</g>';y+=RH;});
+    y+=4;});
+  var H=y+30;
+  /* concurrency strip + axis */
+  var strip='<text class="axl" x="8" y="14">agents at the same time</text><text class="axl" x="8" y="27">peak '+peak+'</text>';
+  conc.segs.forEach(function(s){var a=x(s.a),b=x(s.b),h=Math.max(2,26*s.n/Math.max(1,peak));
+    strip+='<rect class="cc c'+Math.min(s.n,4)+'" x="'+a+'" y="'+(30-h)+'" width="'+Math.max(1,b-a)+'" height="'+h+'"><title>'+s.n+' agent'+(s.n>1?'s':'')+' running '+tickLabel(s.a)+' to '+tickLabel(s.b)+' UTC</title></rect>';
+    if(s.n>1&&b-a>16)strip+='<text class="ccn" x="'+((a+b)/2)+'" y="'+(30-h-2)+'" text-anchor="middle">'+s.n+'</text>';});
+  var step=niceStep(span),tk='',first=Math.ceil(t0/step)*step,lastDay='';
+  for(var t=first;t<=t1;t+=step){var d=new Date(t).toISOString().slice(0,10),xx=x(t);tk+='<line class="grid" x1="'+xx+'" y1="38" x2="'+xx+'" y2="'+(H-22)+'"/><text class="axl" x="'+xx+'" y="50" text-anchor="middle">'+tickLabel(t,d!==lastDay)+'</text>';lastDay=d;}
+  var nowx=x(now),nowl=(now>=t0&&now<=t1&&leaf.some(function(r){return r.open;}))?'<line class="nowline" x1="'+nowx+'" y1="34" x2="'+nowx+'" y2="'+(H-22)+'"/><text class="axl nowt" x="'+nowx+'" y="'+(H-8)+'" text-anchor="middle">now</text>':'';
+  var svg='<svg class="tl" viewBox="0 0 '+W+' '+H+'" width="100%" role="group" aria-label="Timeline of agent runs per stage and spec; the strip on top counts agents working at the same moment" preserveAspectRatio="xMinYMin meet" style="min-width:760px">'+
+    '<line class="grid" x1="'+LW+'" y1="38" x2="'+LW+'" y2="'+(H-22)+'"/>'+tk+strip+body+nowl+'<text class="axl" x="'+W+'" y="14" text-anchor="end">times in UTC</text></svg>';
+  return {svg:svg,rows:rows,peak:peak,t0:t0,t1:t1,stats:stats,truncated:count>=MAXROWS};}
+/*parallel-view:end*/
+/* ---- parallel runs + lifecycle flowchart: the cards (use the pure functions above) ---- */
+var NOW_OVERRIDE=(function(){var m=(location.search.match(/[?&]now=([^&]+)/)||[])[1],t=m?Date.parse(decodeURIComponent(m)):NaN;return isNaN(t)?null:t;})();
+var PVC=null;
+function pv(){
+  if(!PVC){var now=NOW_OVERRIDE!=null?NOW_OVERRIDE:Date.now(),rb=markOpen(D,buildRuns(D,now),now);
+    PVC={now:now,rb:rb,stats:stageStats(rb,now),F:flowScopes(D,rb,now)};}
+  return PVC;}
+function ageText(ms){ms=Math.max(0,ms);var s=Math.round(ms/1000);if(s<90)return s+'s';var m=Math.round(s/60);if(m<90)return m+' min';return (Math.round(m/6)/10)+' h';}
+function stateName(id){var s=(D.states||[]).filter(function(x){return x.id===id;})[0];return s?s.name:String(id);}
+function tierPill(t){return '<span class="tier '+esc(t)+'">'+esc(t)+'</span>';}
+function legendPV(){return '<div class="legend" aria-label="Legend"><span><i class="sw b-strong"></i>strong tier</span><span><i class="sw b-balanced"></i>balanced</span><span><i class="sw b-fast"></i>fast</span><span><i class="sw b-unknown"></i>tier unknown</span><span><i class="sw b-cont"></i>orchestrator session</span><span><i class="sw hatch"></i>waiting for a human</span><span><i class="sw runs"></i>running now (moving outline)</span><span><i class="sw stale"></i>stale: no recent activity</span></div>';}
+var PV_DEFS='<div class="pvdefs" style="height:0;overflow:hidden"><svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs><marker id="kccAhT" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mkT" d="M0,0 L10,5 L0,10 z"/></marker><marker id="kccAhF" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="mkF" d="M0,0 L10,5 L0,10 z"/></marker><pattern id="kccHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hatchbg" width="6" height="6"/><line class="hatchline" x1="0" y1="0" x2="0" y2="6"/></pattern></defs></svg></div>';
+
+/* Now: every agent running at this moment, from the same runs as the timeline */
+function nowCard(){
+  var P=pv(),rb=P.rb,now=P.now,run=D.run||{};
+  var open=rb.runs.filter(function(r){return r.leaf&&r.open;}),stale=rb.runs.filter(function(r){return r.leaf&&r.stale&&!r.open;}),gates=rb.gates.filter(function(g){return g.open;});
+  var h='<div class="card" id="nowcard"><h2>Now'+(open.length?' <span class="pill ok">'+open.length+' agent'+(open.length>1?'s':'')+' running</span>':'')+(stale.length?' <span class="pill warn">'+stale.length+' stale</span>':'')+(gates.length?' <span class="pill warn">'+gates.length+' waiting for a human</span>':'')+'</h2>';
+  var rowsH=function(list,isStale){return list.map(function(r){var st=stateName(r.state),since=r.start,act=r.act||r.end;
+      return '<tr class="'+(isStale?'stalerow':'')+'"><td>'+(r.kind==='subagent'?'<span class="muted">&#8627;</span> ':'')+'<b>'+esc(r.agent||'agent')+'</b></td><td>'+(r.spec?esc(r.spec):'<span class="muted">run-wide</span>')+'</td><td>'+esc(st)+(r.wave?' <span class="muted">wave '+esc(r.wave)+'</span>':'')+(r.attempt&&r.attempt!=='1'&&r.attempt!=='0'?' <span class="muted">attempt '+esc(r.attempt)+'</span>':'')+'</td><td class="mono">'+esc(modelShort(r.model)||'-')+(r.effort?' <span class="muted">/ '+esc(r.effort)+'</span>':'')+' '+tierPill(r.tier)+'</td><td class="mono">'+
+        (isStale?fmtHMS(Math.max(0,act-since))+' <span class="muted">(last seen)</span>':'<span class="tm tick" data-base="0" data-since="'+since+'">'+fmtHMS(now-since)+'</span>')+'</td><td class="mono">'+esc(ageText(now-act))+' ago'+(isStale?' '+pill('stale','warn'):'')+'</td></tr>';}).join('');};
+  if(open.length||stale.length){
+    h+='<div class="scroll"><table><tr><th>Agent</th><th>Spec</th><th>Stage</th><th>Model / effort</th><th>Elapsed</th><th>Last activity</th></tr>'+rowsH(open.sort(function(a,b){return a.start-b.start;}),false)+rowsH(stale,true)+'</table></div>';
+    if(stale.length)h+='<p class="muted" style="margin:8px 0 0">Stale: the run file still says running, but no log, transcript or event was written for more than '+Math.round(STALE_MS/60000)+' minutes. The run may have been stopped; it is not counted as running.</p>';}
+  else{
+    var why=/stopped|aborted/.test(run.status||'')?'the run is stopped'+(run.reason?': '+run.reason:''):/paused|suspended/.test(run.status||'')?'the run is paused'+(run.reason?': '+run.reason:''):/done/.test(run.status||'')?'the run is done':run.status?'the run is '+run.status+(run.reason?': '+run.reason:''):'there is no run record';
+    h+='<p class="empty" style="padding-top:2px">No agent is running now ('+esc(why)+').</p>';}
+  if(gates.length)h+='<p class="eyebrow" style="margin:12px 0 4px">Waiting for a human</p><div class="scroll"><table><tr><th>Gate</th><th>Where</th><th>Question</th><th>Open for</th></tr>'+gates.map(function(g){
+    return '<tr><td><b>'+esc(g.id||'gate')+'</b> '+pill(GATE_LABEL[g.name]||g.name,'warn')+'</td><td>'+(g.spec?esc(g.spec)+' ':'')+esc(g.state>=0?stateName(g.state):'')+'</td><td>'+esc(g.question||'')+(g.answers&&g.answers.length?'<div class="muted mono">answers: '+esc(g.answers.join(' / '))+'</div>':'')+'</td><td class="mono"><span class="tm tick" data-base="0" data-since="'+g.start+'">'+fmtHMS(now-g.start)+'</span></td></tr>';}).join('')+'</table></div>';
+  return h+'</div>';}
+
+/* Timeline (Gantt) */
+var TL_RANGES=[['0','whole run'],['21600000','last 6 h'],['3600000','last hour'],['900000','last 15 min']];
+function timelineCard(){
+  var P=pv(),rangeV=lsGet('kcc-tl-range','0'),T=timelineSVG(P.rb,P.now,Number(rangeV)||0);
+  var h='<div class="card" id="tlcard"><h2>Parallel timeline</h2>';
+  if(!T.svg){return h+'<p class="empty">No agent runs with a start time yet. Runs appear here from agent transcripts, dispatch logs (coordination/run/logs) and start/end events.</p></div>';}
+  h+='<div class="controls" style="margin-bottom:6px"><label class="muted">Window <select id="tlrange" aria-label="Timeline window">'+TL_RANGES.map(function(r){return '<option value="'+r[0]+'"'+(r[0]===rangeV?' selected':'')+'>'+r[1]+'</option>';}).join('')+'</select></label>'+
+     '<span class="muted">Peak '+T.peak+' agent'+(T.peak===1?'':'s')+' at the same time. One row per agent run, grouped by stage; the strip on top counts the agents active at each moment.</span></div>'+legendPV()+
+     '<div class="flowbox"><div id="tlsvg">'+T.svg+'</div></div>'+(T.truncated?'<p class="muted">Showing the first 170 runs; narrow the window to see the rest.</p>':'')+
+     '<details style="margin-top:8px"><summary>Runs as a table ('+T.rows.length+')</summary><div class="scroll"><table><tr><th>Stage</th><th>Spec</th><th>Agent</th><th>Start (UTC)</th><th>End</th><th>Duration</th><th>Model / effort</th><th>Tier</th><th>State</th><th>Source</th></tr>'+T.rows.map(function(x){
+       if(x.run){var r=x.run;return '<tr><td>'+esc(stateName(r.state))+'</td><td>'+esc(r.spec||'-')+'</td><td>'+esc((r.kind==='subagent'?'(sub) ':'')+(r.agent||'agent')+(r.wave?' w'+r.wave:''))+'</td><td class="mono">'+esc(tickLabel(r.start,true))+'</td><td class="mono">'+(r.open?'now':esc(tickLabel(r.end,true)))+'</td><td class="mono">'+esc(fmtDur(effEnd(r,P.now)-r.start))+'</td><td class="mono">'+esc(modelShort(r.model)||'-')+(r.effort?' / '+esc(r.effort):'')+'</td><td>'+esc(r.tier)+'</td><td>'+(r.open?'running now':r.stale?'stale':r.cut?'interrupted':'finished')+'</td><td>'+esc(r.src)+'</td></tr>';}
+       var g=x.gate;return '<tr><td>'+esc(stateName(g.state))+'</td><td>'+esc(g.spec||'-')+'</td><td>human gate '+esc(g.id||'')+'</td><td class="mono">'+esc(tickLabel(g.start,true))+'</td><td class="mono">'+(g.open?'open':esc(tickLabel(g.end||g.start,true)))+'</td><td class="mono">'+esc(fmtDur((g.open?P.now:(g.end||g.start))-g.start))+'</td><td>-</td><td>-</td><td>'+(g.open?'waiting for a human':'answered '+esc(g.answer||''))+'</td><td>event</td></tr>';}).join('')+'</table></div></details>';
+  return h+'</div>';}
+function wireTimeline(){var s=$('tlrange');if(!s)return;s.onchange=function(){lsSet('kcc-tl-range',s.value);var T=timelineSVG(pv().rb,pv().now,Number(s.value)||0);$('tlsvg').innerHTML=T.svg;};}
+
+/* Flowchart: the shared states once, then one chart per spec */
+function prevVisit(seq,cur){for(var i=seq.length-1;i>=0;i--){if(seq[i].state===cur)return i>0?seq[i-1].state:-1;}return seq.length?seq[seq.length-1].state:-1;}
+function scopeStatusHtml(label,c,info){
+  var st=info.status||'',txt='';
+  if(info.done)return pill('approved','ok')+' <span class="muted">review verdict APPROVED</span>';
+  if(info.sharedDone)return pill('complete','ok')+' <span class="muted">every run-wide state before the specs is done; the specs run per spec below</span>';
+  if(info.live)txt=pill('running','ok')+' '+(info.cur>=0?'<span class="mono">'+esc(stateName(info.cur))+(info.wave?' wave '+esc(info.wave):'')+(info.att>0?' - attempt '+info.att+'/'+info.maxAtt:'')+'</span>':'');
+  else if(info.stale)txt=pill('stale','warn')+' <span class="muted">the run file says running, but nothing was written for '+esc(ageText(pv().now-c.last))+'; it may have stopped</span>';
+  else if(st==='paused')txt=pill('waiting for a human','warn')+' '+(c.openGate?'<span class="muted"><b>'+esc(c.openGate.id)+'</b> '+esc(c.openGate.question||'')+'</span>':esc(c.reason||''));
+  else if(st==='stopped'||st==='aborted')txt=pill('stopped','bad')+' <span class="muted">'+esc(c.reason||'no reason recorded')+'</span>';
+  else if(st==='done')txt=pill('done','ok');
+  else if(st==='idle'||st==='unknown'||!st)txt=pill(info.cur>=0||info.visits?'not running':'no record','')+' <span class="muted">'+(info.cur>=0||info.visits?'the files show progress up to here; no run is working on it':'no dispatch or event for this scope yet')+'</span>';
+  else txt=pill(st,'')+' <span class="muted">'+esc(c.reason||'')+'</span>';
+  var srcTxt=c.source==='lane'?'lane run.json':c.source==='run'?'run.json':'backchannel events and logs';
+  return txt+' <span class="muted mono" style="float:right" title="Where the status comes from">'+srcTxt+'</span>';}
+function chartCard(title,sub,ch,statusHtml,P,M,label){
+  var rows=transitionRows(ch,M),opts={label:label,entryLabel:ch.entryLabel,maxAtt:D.maxAttempts||3};
+  var og=[];Object.keys(ch.gates||{}).forEach(function(k){ch.gates[k].list.forEach(function(g){if(g.open)og.push(g);});});
+  return '<div class="card flowc"><div class="flowhead"><h3>'+title+'</h3>'+(sub?'<span class="muted">'+sub+'</span>':'')+'</div><div class="flowstatus">'+statusHtml+'</div>'+
+    '<div class="flowbox">'+flowSVG(ch,opts)+'</div>'+
+    (og.length?og.map(function(g){return '<p class="opengate"><b>Open gate '+esc(g.id||'')+'</b> ('+esc(GATE_LABEL[g.name]||g.name)+'): '+esc(g.question||'waiting for a human decision')+(g.answers&&g.answers.length?' <span class="muted mono">answers: '+esc(g.answers.join(' / '))+'</span>':'')+'</p>';}).join(''):'')+
+    '<details><summary>Transitions as a table ('+rows.length+')</summary>'+(rows.length?'<div class="scroll"><table><tr><th>From</th><th>To</th><th>Kind</th><th>Taken</th></tr>'+rows.map(function(r){return '<tr><td>'+esc(r.from)+'</td><td>'+esc(r.to)+'</td><td>'+esc(r.kind)+'</td><td class="mono">'+r.n+'x</td></tr>';}).join('')+'</table></div>':'<p class="empty">No transition has been taken yet.</p>')+'</details></div>';}
+function flowCard(){
+  var P=pv(),F=P.F,M=P.rb.M;
+  if(!F.pre.length&&!F.specStates.length)return '<div class="card"><h2>Lifecycle flowchart</h2><p class="empty">No state table found (.KCC/kernel/auto-states*.json), so the flowchart cannot be drawn.</p></div>';
+  var h='<div class="card"><h2>Lifecycle flowchart</h2><div class="legend" aria-label="Legend"><span><i class="sw edge"></i>edge taken (count)</span><span><i class="sw edgef"></i>not taken yet</span><span><i class="sw edgel"></i>edge the work is on now</span><span><i class="sw dia"></i>human gate (diamond; ? = open)</span><span><i class="sw ringc"></i>current state (ring + NOW label)</span></div>'+
+    '<p class="muted" style="margin:6px 0 0">States, order and loop-back edges come from the state table the run uses; counts come from the dispatch logs and backchannel events. Gates appear as diamonds above the state where they opened; the CR-3 loop gate opens after '+(D.maxAttempts||3)+' failed exit checks at any state.</p></div>';
+  var sh=F.shared;
+  if(sh&&sh.nodes.length){
+    var cs=sh.ctx,live=sh.cur>=0&&cs.status==='running'&&!cs.stale,sch={nodes:sh.nodes,E:sh.E,N:sh.N,gates:sh.gates,cur:sh.cur,prev:sh.cur>=0?prevVisit(sh.seq,sh.cur):-1,live:live,status:cs.status,stale:!!cs.stale,att:sh.cur>=0?parseAttempts(cs.attempts,sh.cur,''):0,wave:'',entry:sh.seq.length,entryLabel:'start'};
+    h+=chartCard('Shared states','run-wide, once',sch,scopeStatusHtml('run',cs,{visits:sh.seq.length,sharedDone:sh.cur<0&&sh.nodes.length>0&&!!(sh.N[sh.nodes[sh.nodes.length-1].id]&&sh.N[sh.nodes[sh.nodes.length-1].id].done),status:cs.status,live:live,stale:!!cs.stale,cur:sh.cur,att:sch.att,maxAtt:F.maxAtt,wave:''}),P,M,'Shared lifecycle states')
+      .replace('<div class="card flowc">','<div class="card flowc" id="flow-shared">');}
+  if(F.specs.length){
+    h+='<div class="flows">'+F.specs.map(function(sp){
+      var term=F.post;
+      var E={};Object.keys(sp.E).forEach(function(k){E[k]=sp.E[k];});
+      if(term.length&&sp.nodes.length&&sp.done&&F.shared&&F.shared.closed)E[sp.nodes[sp.nodes.length-1].id+'>'+term[0].id]=1;
+      var ch={nodes:sp.nodes,term:term,termDone:!!(sp.done&&F.shared&&F.shared.closed),E:E,N:sp.N,gates:sp.gates,cur:sp.cur,prev:sp.prev,live:sp.live,status:sp.status,stale:sp.stale,att:sp.att,wave:sp.wave,entry:sp.seq.length,entryLabel:'from SPECS'};
+      var c=sp.ctx;
+      return chartCard(esc(sp.id),esc(sp.title||''),ch,scopeStatusHtml(sp.id,c,{visits:sp.seq.length,status:sp.status,live:sp.live,stale:sp.stale,cur:sp.cur,att:sp.att,maxAtt:F.maxAtt,wave:sp.wave,done:sp.done}),P,M,sp.id+' lifecycle');}).join('')+'</div>';}
+  return h;}
 function whoTag(w,extra){return w?'<span class="who '+w+'">'+(w==='human'?'Human':'Agent')+(extra||'')+'</span>':'';}
 function pipeline(){
   if(!D.states.length)return '';var r=D.run||{},curId=Number(r.state);
@@ -471,11 +1022,15 @@ function pipeline(){
     return '<div class="step '+c+'" title="'+esc(tip)+'"><b>'+esc(x.id)+'</b>'+esc(x.name)+
       (x.skipped?'<span class="tm muted">skipped</span>':'<span class="tm'+(x.openSince!=null?' tick':'')+'"'+(x.openSince!=null?' data-base="'+x.baseMs+'" data-since="'+x.openSince+'"':'')+'>'+(timed||c==='done'?fmtHMS(x.totalMs):'--:--:--')+'</span>'+who)+'</div>';}).join('');
   var rowsT=T.rows.filter(function(x){return !x.skipped&&(x.totalMs>0||x.attempts||x.waiting);});
-  var table=rowsT.length?'<div class="scroll" style="margin-top:6px"><table><tr><th>Stage</th><th>Dispatches</th><th>Agent</th><th>Human</th><th>Total</th><th>Waiting on</th></tr>'+rowsT.map(function(x){
+  var table=rowsT.length?'<div class="scroll" style="margin-top:6px"><table><tr><th>Stage</th><th>Dispatches</th><th>Agent (wall)</th><th>Human</th><th>Total</th><th>Waiting on</th><th title="Agent runs of the stage">Runs</th><th title="Most agents working at the same moment">Peak parallel</th><th title="Every agent run added up, as if one after the other">Sum of agent time</th><th title="Sum of agent time divided by wall-clock time">Speed-up</th><th>Cost</th></tr>'+rowsT.map(function(x){
     var ag=x.agentMs+(x.openKind==='agent'?x.openMs:0),hu=x.humanMs+(x.openKind==='human'?x.openMs:0);
-    return '<tr><td><b>'+esc(x.id)+'</b> '+esc(x.name)+'</td><td>'+x.attempts+'</td><td class="mono">'+fmtHMS(ag)+'</td><td class="mono">'+fmtHMS(hu)+'</td><td class="mono"><b>'+fmtHMS(x.totalMs)+'</b></td><td>'+(x.waiting?whoTag(x.waiting,' now'):'<span class="muted">-</span>')+'</td></tr>';}).join('')+
-    '<tr><td><b>Total</b></td><td></td><td class="mono"><b>'+fmtHMS(T.totals.agentMs)+'</b></td><td class="mono"><b>'+fmtHMS(T.totals.humanMs)+'</b></td><td class="mono"><b>'+fmtHMS(T.totals.totalMs)+'</b></td><td class="muted">'+(T.totals.totalMs?Math.round(100*T.totals.humanMs/T.totals.totalMs)+'% on humans':'')+'</td></tr></table>'+bar(T.totals.totalMs?Math.round(100*T.totals.agentMs/T.totals.totalMs):0)+'<p class="muted" style="margin:6px 0 0">Bar: share of the time spent on agents. Agent time is each harness session; human time runs from a gate being opened to its answer. Specs that ran a stage in parallel count once (wall-clock time); each spec has its own times on the Specs page.</p></div>':'';
+    return '<tr><td><b>'+esc(x.id)+'</b> '+esc(x.name)+'</td><td>'+x.attempts+'</td><td class="mono">'+fmtHMS(ag)+'</td><td class="mono">'+fmtHMS(hu)+'</td><td class="mono"><b>'+fmtHMS(x.totalMs)+'</b></td><td>'+(x.waiting?whoTag(x.waiting,' now'):'<span class="muted">-</span>')+'</td>'+pvCells(x.id)+'</tr>';}).join('')+
+    '<tr><td><b>Total</b></td><td></td><td class="mono"><b>'+fmtHMS(T.totals.agentMs)+'</b></td><td class="mono"><b>'+fmtHMS(T.totals.humanMs)+'</b></td><td class="mono"><b>'+fmtHMS(T.totals.totalMs)+'</b></td><td class="muted">'+(T.totals.totalMs?Math.round(100*T.totals.humanMs/T.totals.totalMs)+'% on humans':'')+'</td>'+pvTotals()+'</tr></table>'+bar(T.totals.totalMs?Math.round(100*T.totals.agentMs/T.totals.totalMs):0)+'<p class="muted" style="margin:6px 0 0">Bar: share of the time spent on agents. Agent time is each harness session; human time runs from a gate being opened to its answer. Specs that ran a stage in parallel count once in the Agent (wall) column; Sum of agent time adds every run, so Speed-up = sum / wall. Each spec has its own times on the Specs page; the timeline below shows the runs side by side.</p></div>':'';
   return '<div class="card"><h2>Lifecycle pipeline</h2><div class="steps">'+chips+'</div>'+table+'</div>';}
+function pvCells(id){var s=pv().stats[id];if(!s)return '<td class="muted">-</td><td class="muted">-</td><td class="muted">-</td><td class="muted">-</td><td class="muted">-</td>';
+  return '<td class="mono">'+s.runs+'</td><td class="mono">'+s.peak+(s.peak>1?' '+pill('parallel','ok'):'')+'</td><td class="mono">'+fmtHMS(s.sum)+'</td><td class="mono">'+(s.runs>1&&s.wall>0?'x'+s.speedup.toFixed(1):'-')+'</td><td class="mono">'+(s.hasCost?usd(s.cost):'-')+'</td>';}
+function pvTotals(){var st=pv().stats,sum=0,wall=0,cost=0,hc=false,runs=0,peak=0;Object.keys(st).forEach(function(k){var v=st[k];sum+=v.sum;wall+=v.wall;runs+=v.runs;if(v.peak>peak)peak=v.peak;if(v.hasCost){cost+=v.cost;hc=true;}});
+  return '<td class="mono"><b>'+runs+'</b></td><td class="mono"><b>'+peak+'</b></td><td class="mono"><b>'+fmtHMS(sum)+'</b></td><td class="mono"><b>'+(wall>0&&sum>wall*1.05?'x'+(sum/wall).toFixed(1):'-')+'</b></td><td class="mono"><b>'+(hc?usd(cost):'-')+'</b></td>';}
 function startTicker(){
   setInterval(function(){var now=Date.now();Array.prototype.forEach.call(document.querySelectorAll('.tm.tick'),function(el){el.textContent=fmtHMS(Number(el.getAttribute('data-base'))+Math.max(0,now-Number(el.getAttribute('data-since'))));});},1000);}
 function specRow(s){var p=specProgress(s),b=openBugs(s).length;
@@ -501,7 +1056,7 @@ function lanesCard(){
   return '<div class="card"><h2>Development lanes</h2><div class="scroll"><table><tr><th>Lane</th><th>Spec</th><th>Kind</th><th>Stage</th><th>Source files</th><th>Last change</th></tr>'+L.map(function(l){var u=Date.parse(l.updated||''),sn=(D.states||[]).filter(function(s){return String(s.id)===String(l.runState);})[0];
     return '<tr><td class="mono"><b>'+esc(l.name)+'</b></td><td>'+(l.spec?'<a href="#/specs/'+esc(l.spec)+'">'+esc(l.spec)+'</a>':'-')+'</td><td>'+esc(l.kind==='worktrees'?'git worktree':'kcc lane')+'</td><td>'+(l.runState?esc((sn?sn.name:l.runState)+(l.runWave?' wave '+l.runWave:'')+(l.runStatus?' ('+l.runStatus+')':'')):'-')+'</td><td class="mono">'+esc(l.files)+'</td><td class="mono">'+(isNaN(u)?'-':(Math.max(0,Math.round((gen-u)/60000))+' min ago'))+'</td></tr>';}).join('')+'</table></div></div>';}
 function vOverview(){
-  var h=pipeline()+workingNow()+lanesCard();
+  var h=PV_DEFS+nowCard()+pipeline()+timelineCard()+flowCard()+lanesCard();
   setTimeout(function(){var c=document.querySelector('.step.cur,.step.bad'),box=c&&c.parentNode;if(box)box.scrollLeft=Math.max(0,c.offsetLeft-box.clientWidth/2);},0);
   var attn=[];
   if(D.run&&/stopped|aborted|paused|suspended|idle/.test(D.run.status||''))attn.push(pill(D.run.status,/idle/.test(D.run.status)?'warn':'bad')+' '+esc(D.run.reason||'The run is not progressing.'));
@@ -510,7 +1065,7 @@ function vOverview(){
     '<div><div class="card"><h2>Needs attention</h2>'+(attn.length?attn.map(function(a){return '<p style="margin:6px 0">'+a+'</p>';}).join(''):'<p class="empty">Nothing is blocked.</p>')+'</div>'+
     '<div class="card"><h2>Latest activity</h2>'+(D.events.length?D.events.slice(-8).reverse().map(function(e){return '<div style="padding:5px 0;border-bottom:1px solid var(--rule)"><span class="mono muted">'+esc(hhmm(e.ts))+'</span> <b class="mono" style="color:var(--accent)">'+esc(e.kind)+'</b> '+(e.spec?'<span class="muted">'+esc(e.spec)+'</span>':'')+'<div class="pay">'+esc(ptxt(e.payload))+'</div></div>';}).join(''):'<p class="empty">No events yet.</p>')+'</div></div></div>';
   if(D.ideas.length)h+='<div class="card"><h2>Ideas</h2><div class="scroll"><table><tr><th>Idea</th><th>Status</th><th>Artifacts</th></tr>'+D.ideas.map(function(i){return '<tr><td><b>'+esc(i.id||i.folder)+'</b><div class="muted">'+esc(i.title||i.slug||'')+'</div></td><td>'+pill(i.status)+'</td><td>'+(i.files||[]).map(function(f){return '<code>'+esc(f)+'</code> ';}).join('')+'</td></tr>';}).join('')+'</table></div></div>';
-  view.innerHTML=h;wireSpecRows(view);}
+  view.innerHTML=h;wireSpecRows(view);wireTimeline();}
 
 function evForSpec(id){return D.events.filter(function(e){return e.spec===id;});}
 function decisionsForSpec(s){
@@ -548,7 +1103,7 @@ function vSpecs(){
   h+='<div class="card"><h3>Stories &amp; enablers</h3>'+(itemsOf(s).length?'<div class="scroll"><table><tr><th>Item</th><th>Status</th><th>Wave</th><th>Depends on</th><th>Dialect</th></tr>'+itemsOf(s).map(function(i){return '<tr><td><b>'+esc(i.key)+'</b><div class="muted">'+esc(i.title||'')+'</div></td><td>'+(isDone(i.status)?pill(i.status):itemBuilt(s,i)?pill('built','ok')+' '+pill(i.status||'',''):itemBuilding(s,i)?pill('building','warn')+' '+pill(i.status||'',''):pill(i.status))+'</td><td>'+esc(i.wave||'')+'</td><td>'+esc(i.dependsOn||'')+'</td><td>'+esc(i.dialect||'')+'</td></tr>';}).join('')+'</table></div>':'<p class="empty">No backlog items.</p>')+'</div>';
   if(s.acs.length)h+='<div class="card"><h3>Acceptance criteria</h3>'+s.acs.map(function(a){return '<div class="ac"><span class="id">'+esc(a.id)+'</span><span>'+(a.done?'&#10003; ':'')+esc(a.text)+'</span></div>';}).join('')+'</div>';
   var ob=s.bugs||[];
-  h+='<div class="card"><h3>Bugs</h3>'+(ob.length?'<div class="scroll"><table><tr><th>Bug</th><th>Severity</th><th>Status</th><th>Found by</th><th>Against</th></tr>'+ob.map(function(b){return '<tr><td><b>'+esc(b.key)+'</b><div class="muted">'+esc(b.title||'')+'</div></td><td>'+pill(b.severity||'minor',/blocker|major/i.test(b.severity||'')?'bad':'warn')+'</td><td>'+pill(b.status)+'</td><td>'+esc(b.source||'')+'</td><td>'+esc(b.ref||'')+'</td></tr>';}).join('')+'</table></div>':'<p class="empty">No bugs recorded for this spec.</p>')+'</div>';
+  h+='<div class="card"><h3>Bugs</h3>'+(ob.length?'<div class="scroll"><table><tr><th>Bug</th><th>Severity</th><th>Status</th><th>Found by</th><th>Against</th></tr>'+ob.map(function(b){return '<tr><td><b>'+esc(b.key)+'</b><div class="muted">'+esc(b.title||'')+'</div></td><td>'+pill(b.severity||'minor',/blocker|major/i.test(b.severity||'')?'bad':'warn')+'</td><td>'+pill(/^blocked/i.test(b.status||'')?'blocked - needs ruling':b.status)+'</td><td>'+esc(b.source||'')+'</td><td>'+esc(b.ref||'')+'</td></tr>';}).join('')+'</table></div>':'<p class="empty">No bugs recorded for this spec.</p>')+'</div>';
   var ds=decisionsForSpec(s),evd=D.events.filter(function(e){return DECISION_KINDS.test(e.kind||'')&&(e.spec===s.id||!e.spec);});
   var adr=(s.adrRefs||[]).map(function(r){return D.adrs.find(function(a){return a.id===r;})||{id:r};});
   h+='<div class="card"><h3>Decisions behind this spec</h3>';
@@ -660,7 +1215,7 @@ function vBugs(){
   var rows=[];D.specs.forEach(function(s){(s.bugs||[]).forEach(function(b){rows.push({s:s,b:b});});});
   if(!rows.length){view.innerHTML='<div class="card"><h2>Bugs</h2><p class="empty">No bugs recorded. Bugs appear here when the verifier or <code>/bug-report</code> adds a <code>Backlog/Bug-*.md</code> item.</p></div>';return;}
   var order={blocker:0,major:1,minor:2},rk=function(x){var o=order[(x.b.severity||'').toLowerCase()];return (o==null?3:o)+(/^(fixed|closed|verified|wontfix|done|resolved)/i.test(x.b.status||'')?10:0);};rows.sort(function(a,b){return rk(a)-rk(b);});
-  view.innerHTML='<div class="card"><h2>Bugs ('+rows.length+')</h2><div class="scroll"><table><tr><th>Bug</th><th>Spec</th><th>Severity</th><th>Status</th><th>Found by</th><th>Against</th><th>Regression test</th></tr>'+rows.map(function(r){var b=r.b;return '<tr class="click" data-spec="'+esc(r.s.id)+'"><td><b>'+esc(b.key)+'</b><div class="muted">'+esc(b.title||'')+'</div></td><td>'+esc(r.s.id)+'</td><td>'+pill(b.severity||'minor',/blocker|major/i.test(b.severity||'')?'bad':'warn')+'</td><td>'+pill(b.status)+'</td><td>'+esc(b.source||'')+'</td><td>'+esc(b.ref||'')+'</td><td>'+esc(b.test||'')+'</td></tr>';}).join('')+'</table></div></div>';
+  view.innerHTML='<div class="card"><h2>Bugs ('+rows.length+')</h2><div class="scroll"><table><tr><th>Bug</th><th>Spec</th><th>Severity</th><th>Status</th><th>Found by</th><th>Against</th><th>Regression test</th></tr>'+rows.map(function(r){var b=r.b;return '<tr class="click" data-spec="'+esc(r.s.id)+'"><td><b>'+esc(b.key)+'</b><div class="muted">'+esc(b.title||'')+'</div></td><td>'+esc(r.s.id)+'</td><td>'+pill(b.severity||'minor',/blocker|major/i.test(b.severity||'')?'bad':'warn')+'</td><td>'+pill(/^blocked/i.test(b.status||'')?'blocked - needs ruling':b.status)+'</td><td>'+esc(b.source||'')+'</td><td>'+esc(b.ref||'')+'</td><td>'+esc(b.test||'')+'</td></tr>';}).join('')+'</table></div></div>';
   wireSpecRows(view);}
 
 function render(){parseHash();renderTabs();({overview:vOverview,specs:vSpecs,roadmap:vRoadmap,activity:vActivity,agents:vAgents,traces:vTraces,bugs:vBugs})[cur.view]();}

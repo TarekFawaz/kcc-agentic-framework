@@ -65,7 +65,7 @@ describe("dashboard generator", () => {
     expect(d.run.currentSpec).toBe("SPEC-001");
     expect(d.humanDecisions[0].decision).toBe("approve");
     expect(d.states.some((x: any) => x.name === "ROI")).toBe(false); // a fast-track run uses the fast-track table, which has no ROI state
-    expect(d.states.map((x: any) => x.id)).toEqual([0, 1, 4, 5, 6, 9, 14, 15, 19, 16, 17, 18]);
+    expect(d.states.map((x: any) => x.id)).toEqual([0, 1, 4, 5, 6, 9, 10, 11, 14, 15, 19, 16, 17, 18]);
     expect(existsSync(join(root, "dashboard", "index.html"))).toBe(true);
   });
 });

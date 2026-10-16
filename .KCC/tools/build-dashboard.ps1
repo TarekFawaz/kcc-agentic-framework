@@ -160,7 +160,9 @@ $data = [ordered]@{
     ideas          = @()
     specs          = @()
     roadmaps       = @()
+    maxAttempts    = 3
     events         = @()
+    laneEvents     = @()
     checkpoints    = @()
     sessions       = @()
     decisions      = @()
@@ -210,9 +212,12 @@ if ($stText) {
                 }
             }
             if (($s.PSObject.Properties.Name -contains 'only_in') -and ((Run-Val 'scenario') -ne '') -and (@($s.only_in) -notcontains (Run-Val 'scenario'))) { $skipped = $true }
-            $list += [ordered]@{ id = [int]$s.id; name = [string]$s.name; scope = [string]$s.scope; skipped = $skipped }
+            # goto = on_fail_goto: where a failed exit check sends the spec (the loop-back edge of the lifecycle flowchart)
+            $gt = $null; if ($s.PSObject.Properties.Name -contains 'on_fail_goto') { $gt = [int]$s.on_fail_goto }
+            $list += [ordered]@{ id = [int]$s.id; name = [string]$s.name; scope = [string]$s.scope; skipped = $skipped; goto = $gt }
         }
         $data.states = $list
+        if ($sm.PSObject.Properties.Name -contains 'max_attempts') { $data.maxAttempts = [int]$sm.max_attempts }
     } catch { $data.notes += 'kernel/auto-states.json could not be parsed.' }
 }
 
@@ -401,6 +406,7 @@ if ($runObj) {
         status = (Run-Val 'status'); state = $stNum; wave = (Run-Val 'wave'); scenario = (Run-Val 'scenario'); harness = (Run-Val 'harness')
         fasttrack = $fast; parallel = $par; depthlevel = (Run-Val 'depthlevel'); reason = (Run-Val 'reason'); updated = (Run-Val 'updated')
         created = (Run-Val 'created'); input = (Run-Val 'input'); idea = (Run-Val 'idea'); currentSpec = $curSpec; gate_name = (Run-Val 'gate_name')
+        attempts = (Run-Val 'attempts'); gate_id = (Run-Val 'gate_id'); gate_state = (Run-Val 'gate_state'); gate_spec = (Run-Val 'gate_spec')
     }
 }
 
@@ -439,6 +445,42 @@ if (Test-Path -LiteralPath $bcPath) {
     $data.events = $evs
 } else { $data.notes += 'No coordination/backchannel.jsonl yet.' }
 
+# A kcc lane (.kcc-lanes/SPEC-x) logs to its own coordination/backchannel.jsonl; the live sync copies those events into the
+# workspace file only while `kcc run` is alive. Events of a lane that the workspace file does not hold (same ts, kind, spec)
+# are listed here with the lane's name, so the lifecycle flowchart and the timeline see what the lane did.
+function Raw-Field2([string]$Line, [string[]]$Keys) {
+    foreach ($k in $Keys) {
+        $m = [regex]::Match($Line, '"' + $k + '"\s*:\s*"((?:[^"\\]|\\.)*)"')
+        if ($m.Success) { return [regex]::Unescape($m.Groups[1].Value) }
+    }
+    return ''
+}
+$mainKeys = @{}
+if (Test-Path -LiteralPath $bcPath) {
+    foreach ($ml in @(Get-Content -LiteralPath $bcPath -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })) {
+        $mpi = $ml.IndexOf('"payload"'); $mh = $ml; if ($mpi -ge 0) { $mh = $ml.Substring(0, $mpi) }
+        $mainKeys[((Raw-Field2 $mh @('ts', 'timestamp')) + '|' + (Raw-Field2 $mh @('kind', 'event')) + '|' + (Raw-Field2 $mh @('spec')))] = 1
+    }
+}
+$laneEvs = @()
+foreach ($ldn in @('.kcc-lanes', '.worktrees')) {
+    $lpd = Join-Path $RepoRoot $ldn
+    if (-not (Test-Path -LiteralPath $lpd)) { continue }
+    foreach ($lrd in @(Get-ChildItem -LiteralPath $lpd -Directory -ErrorAction SilentlyContinue)) {
+        $lbc = Join-Path $lrd.FullName 'coordination/backchannel.jsonl'
+        if (-not (Test-Path -LiteralPath $lbc)) { continue }
+        foreach ($ll in @(Get-Content -LiteralPath $lbc -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })) {
+            $lpi = $ll.IndexOf('"payload"'); $lh = $ll; if ($lpi -ge 0) { $lh = $ll.Substring(0, $lpi) }
+            $lts = Raw-Field2 $lh @('ts', 'timestamp'); $lkd = Raw-Field2 $lh @('kind', 'event'); $lsp = Raw-Field2 $lh @('spec')
+            if ($mainKeys.ContainsKey($lts + '|' + $lkd + '|' + $lsp)) { continue }
+            $lraw = ''
+            if ($lpi -ge 0) { $lc = $ll.IndexOf(':', $lpi); $le = $ll.LastIndexOf('}'); if ($lc -ge 0 -and $le -gt $lc) { $lraw = $ll.Substring($lc + 1, $le - $lc - 1).Trim() } }
+            $laneEvs += [ordered]@{ id = (Raw-Field2 $lh @('id')); ts = $lts; kind = $lkd; from = (Raw-Field2 $lh @('from', 'agent')); to = (Raw-Field2 $lh @('to')); spec = $lsp; lane = $lrd.Name; payload = $lraw }
+        }
+    }
+}
+$data.laneEvents = $laneEvs
+
 # ---- stage of a chat-driven run ----------------------------------------------------
 # The `auto` skill in a chat session records progress as backchannel events but does not keep the
 # driver's run.json `state`; without this the pipeline would sit on REPO for the whole run.
@@ -455,7 +497,7 @@ if ((-not $runObj -or -not (Run-Val 'state')) -and @($data.events).Count -gt 0) 
         if ($k -eq 'specialist-brief-created') { if ([string]$e.from -match 'technical') { $id = 3 } else { $id = 4 } }
         elseif ($doneMap.ContainsKey($k)) { $id = $doneMap[$k] }
         if ($k -eq 'session-closed') { $closed = $true }
-        if ($k -eq 'spec-created' -and $sp -and -not $specDone.ContainsKey($sp)) { $specDone[$sp] = 9 }
+        if ($k -eq 'spec-created' -and $sp -and -not $specDone.ContainsKey($sp)) { $specDone[$sp] = $(if (@($data.states | Where-Object { $_.name -eq 'WRITE' }).Count -gt 0) { 10 } else { 9 }) }
         if ($id -ge 0 -and $id -lt 10) { if ($id -gt $done) { $done = $id } }
         elseif ($id -ge 10 -and $sp) { if (-not $specDone.ContainsKey($sp) -or $id -gt $specDone[$sp]) { $specDone[$sp] = $id } }
         elseif ($id -eq 18) { $done = 18 }
@@ -476,7 +518,7 @@ if ((-not $runObj -or -not (Run-Val 'state')) -and @($data.events).Count -gt 0) 
     } else { $cur = & $nextAfter $done; if ($done -ge 18) { $cur = 18 } }
     $status = 'running'; if ($closed) { $status = 'done' }
     if ($data.run) { $data.run.state = $cur; if (-not $data.run.status) { $data.run.status = $status } }
-    else { $data.run = [ordered]@{ status = $status; state = $cur; wave = ''; scenario = (Run-Val 'scenario'); harness = 'chat'; fasttrack = $fast; parallel = $par; depthlevel = (Run-Val 'depthlevel'); reason = ''; updated = ''; created = ''; input = ''; idea = (Run-Val 'idea'); currentSpec = ''; gate_name = '' } }
+    else { $data.run = [ordered]@{ status = $status; state = $cur; wave = ''; scenario = (Run-Val 'scenario'); harness = 'chat'; fasttrack = $fast; parallel = $par; depthlevel = (Run-Val 'depthlevel'); reason = ''; updated = ''; created = ''; input = ''; idea = (Run-Val 'idea'); currentSpec = ''; gate_name = ''; attempts = ''; gate_id = ''; gate_state = ''; gate_spec = '' } }
     $data.notes += 'Stage derived from backchannel events (chat-driven run).'
     $script:derivedRun = $true
 }
@@ -737,8 +779,12 @@ foreach ($root1 in $logDirs) {
         $first = Read-FirstLine $lf.FullName
         $hm = [regex]::Match($first, '^# kcc-run (\S+)')
         $sp = $lm.Groups[2].Value; if ($sp -eq 'run') { $sp = '' }
+        # line 2 of the log is the harness command: it names the agent, model and effort of this dispatch
+        $h2 = ''; try { $r2 = Open-SharedReader $lf.FullName; try { [void]$r2.ReadLine(); $h2 = [string]$r2.ReadLine() } finally { $r2.Dispose() } } catch { $h2 = '' }
+        if ($h2.Length -gt 600) { $h2 = $h2.Substring(0, 600) }
+        $ha = [regex]::Match($h2, '--agent (\S+)').Groups[1].Value; $hmod = [regex]::Match($h2, '--model (\S+)').Groups[1].Value; $hef = [regex]::Match($h2, '--effort (\S+)').Groups[1].Value
         $runLogs += [ordered]@{
-            state = [int]$lm.Groups[1].Value; spec = $sp; wave = $lm.Groups[3].Value; attempt = $lm.Groups[4].Value
+            state = [int]$lm.Groups[1].Value; spec = $sp; wave = $lm.Groups[3].Value; attempt = $lm.Groups[4].Value; agent = $ha; model = $hmod; effort = $hef
             started = $(if ($hm.Success) { $hm.Groups[1].Value } else { '' })
             ended = $lf.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); file = ($relBase + 'coordination/run/logs/' + $lf.Name)
         }
@@ -758,9 +804,12 @@ foreach ($ld in @('.worktrees', '.kcc-lanes')) {
         $sm = [regex]::Match($d.Name, 'SPEC-[0-9A-Za-z]+')
         # A kcc lane runs its own kcc-run: its state, wave and status say which stage the spec is in.
         $lr = $null; $lrp = Join-Path $d.FullName 'coordination/run/run.json'
-        if (Test-Path -LiteralPath $lrp) { try { $lr = [System.IO.File]::ReadAllText($lrp) | ConvertFrom-Json } catch { $lr = $null } }
+        $lrt = ''
+        if (Test-Path -LiteralPath $lrp) { try { $lrt = [System.IO.File]::ReadAllText($lrp); $lr = $lrt | ConvertFrom-Json } catch { $lr = $null } }
         $lanes += [ordered]@{ name = $d.Name; kind = $ld.TrimStart('.'); spec = $sm.Value; files = $files.Count; updated = $last.ToString('yyyy-MM-ddTHH:mm:ssZ')
-            runState = $(if ($lr) { [string]$lr.state } else { '' }); runWave = $(if ($lr) { [string]$lr.wave } else { '' }); runStatus = $(if ($lr) { [string]$lr.status } else { '' }) }
+            runState = $(if ($lr) { [string]$lr.state } else { '' }); runWave = $(if ($lr) { [string]$lr.wave } else { '' }); runStatus = $(if ($lr) { [string]$lr.status } else { '' })
+            runReason = $(if ($lr) { [string]$lr.reason } else { '' }); runAttempts = $(if ($lr) { [string]$lr.attempts } else { '' }); runGateId = $(if ($lr) { [string]$lr.gate_id } else { '' })
+            runGateName = $(if ($lr) { [string]$lr.gate_name } else { '' }); runGateState = $(if ($lr) { [string]$lr.gate_state } else { '' }); runUpdated = $(if ($lrt -match '"updated"\s*:\s*"([^"]*)"') { $Matches[1] } else { '' }) }
     }
 }
 $data['lanes'] = $lanes
