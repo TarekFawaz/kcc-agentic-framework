@@ -105,7 +105,8 @@
     "pre_approved_usd": 0
   },
   "dashboard": {
-    "auto_open": "ask"
+    "auto_open": "ask",
+    "serve": true
   },
   "notices": {
     "model_tiers_v2": true

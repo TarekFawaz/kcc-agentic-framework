@@ -120,6 +120,8 @@ function copyTree(from: string, to: string): void {
 }
 
 export interface MergeResult {
+  /** path -> content hash now in the workspace (null: removed); lets a repeated merge advance its base. */
+  hashes?: Record<string, string | null>;
   applied: string[];
   deleted: string[];
   conflicts: string[];
@@ -181,7 +183,7 @@ export function syncOwned(main: string, lane: string, owned: string[]): number {
  * workspace changed since the lane was cut is a conflict and keeps the main copy.
  */
 export function mergeLane(main: string, lane: string, base: Record<string, string>, owned: string[] = []): MergeResult {
-  const res: MergeResult = { applied: [], deleted: [], conflicts: [], sharedSkipped: [], events: 0 };
+  const res: MergeResult = { applied: [], deleted: [], conflicts: [], sharedSkipped: [], events: 0, hashes: {} };
   const now = snapshot(lane);
   const paths = new Set([...Object.keys(base), ...Object.keys(now)]);
   for (const rel of [...paths].sort()) {
@@ -199,10 +201,12 @@ export function mergeLane(main: string, lane: string, base: Record<string, strin
     if (after === undefined) {
       rmSync(mainFile, { force: true });
       res.deleted.push(rel);
+      res.hashes![rel] = null;
     } else {
       mkdirSync(dirname(mainFile), { recursive: true });
       copyFileSync(join(lane, rel), mainFile);
       res.applied.push(rel);
+      res.hashes![rel] = after ?? null;
     }
   }
   res.events = syncBackchannel(main, lane);
@@ -247,6 +251,39 @@ export function mirrorRun(root: string, state: Record<string, { status: string; 
   } catch {
     /* the run file is rewritten by the driver as well; a clash is retried at the next tick */
   }
+}
+
+/**
+ * A spec built in a lane is not in the workspace until it merges, so for hours `src/` was empty and the dashboard showed
+ * a spec's old bugs and test results. This brings the lane's work into the workspace as it happens: the same merge the lane
+ * gets at the end (files the workspace changed meanwhile are left alone and reported), repeated while it runs.
+ */
+export function liveSyncLane(root: string, lane: string, spec: string): MergeResult | undefined {
+  const base = readJson<{ base?: Record<string, string> }>(join(lane, ".kcc-lane", "base.json"))?.base;
+  if (!base) return undefined;
+  try {
+    const res = mergeLane(root, lane, base, ownedPaths(root, spec));
+    // What was merged is now the lane's new base: a later edit of the same file is the lane's change, not a clash.
+    const metaFile = join(lane, ".kcc-lane", "base.json");
+    const meta = readJson<{ base?: Record<string, string> }>(metaFile) ?? {};
+    const next = { ...(meta.base ?? {}) };
+    for (const [rel, h] of Object.entries(res.hashes ?? {})) {
+      if (h === null) delete next[rel];
+      else next[rel] = h;
+    }
+    const cur = readJson<Record<string, unknown>>(metaFile) ?? {};
+    writeJson(metaFile, { ...cur, base: next });
+    return res;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every lane under .kcc-lanes/, for callers that do not hold the scheduler's state (the live dashboard). */
+export function liveSyncAllLanes(root: string): void {
+  const dir = join(root, ".kcc-lanes");
+  if (!existsSync(dir)) return;
+  for (const e of readdirSync(dir, { withFileTypes: true })) if (e.isDirectory()) liveSyncLane(root, join(dir, e.name), e.name);
 }
 
 export function lanesFile(root: string): string {
@@ -420,7 +457,8 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         emit(root, "lane-blocked", spec, { exit: code, reason: lane.reason });
         log(`kcc: ${spec} stopped: ${lane.reason}`);
       } else {
-        const m = mergeLane(root, dir, base, owned);
+        // Live syncs advanced the lane's base while it ran; merge against that, not the base it started with.
+        const m = mergeLane(root, dir, readJson<{ base?: Record<string, string> }>(join(dir, ".kcc-lane", "base.json"))?.base ?? base, owned);
         if (m.conflicts.length) {
           lane.status = "failed";
           lane.reason = `merge conflict: ${m.conflicts.join(", ")}`;
@@ -445,8 +483,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
       for (const spec of running.keys()) {
         const lane = state[spec];
         if (!lane) continue;
-        syncOwned(root, lane.dir, ownedPaths(root, spec));
-        syncBackchannel(root, lane.dir);
+        liveSyncLane(root, lane.dir, spec);
       }
       mirrorRun(root, state, running.keys());
       if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });

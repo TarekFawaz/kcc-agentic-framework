@@ -311,11 +311,27 @@ var q=(location.search.match(/theme=(light|dark)/)||[])[1];
 var themeMode=q||lsGet('kcc-theme','system');applyTheme(themeMode);
 $('theme').onclick=function(){themeMode=themeMode==='system'?'light':themeMode==='light'?'dark':'system';lsSet('kcc-theme',themeMode);applyTheme(themeMode);};
 var runningNow=!!(D.run&&/running/.test(D.run.status||''));
-var liveOn=lsGet('kcc-live',runningNow?'1':'0')==='1',timer=null;
+/* Served by `kcc run` / `kcc dashboard --serve` (http): the page is rebuilt from the files on every request, so Live is
+   on by default and reloads every 5 s. Opened as a file it only shows what was last generated. */
+var served=/^https?:/.test(location.protocol);
+var liveOn=lsGet('kcc-live',(runningNow||served)?'1':'0')==='1',timer=null;
+function saveScroll(){lsSet('kcc-scroll-'+location.hash,String(window.scrollY));}
+function banner(msg,bad){var b=$('stale');if(!b){b=document.createElement('div');b.id='stale';b.setAttribute('role','status');b.style.cssText='margin:10px 16px 0;padding:8px 12px;border:1px solid var(--line,#888);border-radius:6px;font-size:13px';var v=$('view');v.parentNode.insertBefore(b,v);}
+  b.style.display=msg?'block':'none';b.textContent=msg||'';b.style.borderColor=bad?'#c0392b':'';}
 function setLive(on){liveOn=on;lsSet('kcc-live',on?'1':'0');$('live').setAttribute('aria-pressed',on?'true':'false');$('live').classList.toggle('live',on);
-  clearTimeout(timer);if(on)timer=setTimeout(function(){lsSet('kcc-scroll-'+location.hash,String(window.scrollY));location.reload();},runningNow?10000:30000);}
+  clearTimeout(timer);if(!on)return;
+  timer=setTimeout(function(){
+    if(!served){saveScroll();location.reload();return;}
+    fetch(location.href,{cache:'no-store'}).then(function(r){if(r.ok){saveScroll();location.reload();}else{banner('The dashboard server answered '+r.status+'. Showing the last data.',true);setLive(true);}})
+      .catch(function(){banner('The dashboard server has stopped (the kcc run that served it ended). Showing the last data; this page is not updating.',true);setLive(true);});
+  },served?5000:(runningNow?10000:30000));}
 $('live').onclick=function(){setLive(!liveOn);};$('reload').onclick=function(){location.reload();};setLive(liveOn);
-function tickStamp(){$('stamp').textContent='updated '+(ago(D.generatedAt)||D.generatedAt);}tickStamp();setInterval(tickStamp,5000);
+function tickStamp(){var g=Date.parse(D.generatedAt||''),age=isNaN(g)?0:Date.now()-g;
+  $('stamp').textContent='updated '+(ago(D.generatedAt)||D.generatedAt);
+  /* A page that says "running" but has not been regenerated for minutes is lying; say so instead of looking alive. */
+  if(runningNow&&!served&&age>90000)banner('This page was generated '+Math.round(age/60000)+' min ago and the run is marked running, so it is probably not updating. Run: kcc dashboard --serve (a live page), or kcc dashboard (rebuild once).',true);
+  else if(runningNow&&served&&age>60000)banner('The server has not rebuilt this page for '+Math.round(age/60000)+' min: the build is failing. Check .KCC/tools/build-dashboard.',true);
+  else if($('stale')&&served&&age<60000&&$('stale').textContent.indexOf('stopped')<0)banner('');}tickStamp();setInterval(tickStamp,5000);
 
 /* ---------- headline ---------- */
 function renderRun(){

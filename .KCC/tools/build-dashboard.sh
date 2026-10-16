@@ -651,8 +651,10 @@ if [[ "${KCC_DASH_PARENT:-}" != "1" ]]; then
   fi
 fi
 if [[ "$OPEN" -eq 1 ]]; then
-  if [[ -n "${KCC_OPEN_LOG:-}" ]]; then printf '%s\n' "$OUT_FILE" >> "$KCC_OPEN_LOG"   # automation hook: record instead of launching
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$OUT_FILE" >/dev/null 2>&1 &
-  elif command -v open >/dev/null 2>&1; then open "$OUT_FILE" >/dev/null 2>&1 &
+  # KCC_DASHBOARD_URL: `kcc run` serves a live page; open that instead of the file so the page stays current.
+  OPEN_TARGET="${KCC_DASHBOARD_URL:-$OUT_FILE}"
+  if [[ -n "${KCC_OPEN_LOG:-}" ]]; then printf '%s\n' "$OPEN_TARGET" >> "$KCC_OPEN_LOG"   # automation hook: record instead of launching
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$OPEN_TARGET" >/dev/null 2>&1 &
+  elif command -v open >/dev/null 2>&1; then open "$OPEN_TARGET" >/dev/null 2>&1 &
   else echo "Open not supported on this host; file is at $OUT_FILE"; fi
 fi

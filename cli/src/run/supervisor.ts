@@ -5,6 +5,7 @@ import { UsageError, workspace } from "../args";
 import { readJson, writeJson } from "../fsutil";
 import { isWindows, runTool } from "../platform";
 import { readSettings } from "../settings";
+import { startDashboardServer, type DashServer } from "../commands/dashboard";
 import { findRoadmap, laneDir, scheduleSpecs } from "./lanes";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
@@ -145,7 +146,39 @@ async function superviseWrapped(root: string, command: string[], p: Policy, wait
   }
 }
 
+/**
+ * The live dashboard of a run: served for as long as `kcc run` lives, rebuilt from the files on each request. The page
+ * therefore cannot go stale the way a generated file does when the process that regenerates it stops.
+ */
+function serveRunDashboard(argv: string[]): DashServer | undefined {
+  if (["--dry-run", "--help", "-h", "--wrap"].some((f) => argv.includes(f)) || process.env.KCC_NO_DASH_SERVER === "1") return undefined;
+  const i = argv.indexOf("--dir");
+  let root: string;
+  try {
+    root = workspace(i >= 0 ? argv[i + 1] : undefined);
+  } catch {
+    return undefined;
+  }
+  const dash = (readSettings(root) as { dashboard?: { serve?: unknown } } | undefined)?.dashboard;
+  if (dash?.serve === false) return undefined;
+  const server = startDashboardServer(root);
+  if (server) {
+    process.env.KCC_DASHBOARD_URL = server.url;
+    console.log(`kcc: live dashboard ${server.url} (rebuilt from the workspace files on every request; it ends with this command)`);
+  }
+  return server;
+}
+
 export async function run(argv: string[]): Promise<number> {
+  const server = serveRunDashboard(argv);
+  try {
+    return await runInner(argv);
+  } finally {
+    server?.stop();
+  }
+}
+
+async function runInner(argv: string[]): Promise<number> {
   // Own flags are taken out by hand: everything else belongs to kcc-run or the wrapped command.
   const sep = argv.indexOf("--");
   const own = sep >= 0 ? argv.slice(0, sep) : argv;

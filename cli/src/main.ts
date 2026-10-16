@@ -44,6 +44,9 @@ Check
                       verdict against a budget (default skeleton 45 min, whole app 180); exit 1 on a miss.
   dashboard [--check]  Rebuild dashboard/index.html and prove it compiles; --check also renders it
                       headless (Chrome or Edge) and fails on a blank page.
+  dashboard --serve [--port N]
+                      A live page on http://127.0.0.1:<port>/ rebuilt from the files on every request, so it
+                      cannot go stale. kcc run serves it for the length of the run.
   validate [--mode cell|repo]
                       Run the framework validator.
   limits [--json]     Show usage, the last limit hit, and the next resume.
@@ -119,7 +122,7 @@ async function main(argv: string[]): Promise<number> {
       return runTool(root, "sync-adapters", ["--harness", harness, "--repo-root", root]).status;
     }
     case "dashboard":
-      return dashboard(rest);
+      return await dashboard(rest);
     case "models":
       return models(rest);
     case "report":

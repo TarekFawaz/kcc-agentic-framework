@@ -2,7 +2,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createLane, groupByOrder, laneDir, mergeLane, mirrorRun, parseRoadmap, readySpecs, scheduleSpecs, snapshot } from "../src/run/lanes";
+import { createLane, groupByOrder, laneDir, liveSyncLane, mergeLane, mirrorRun, parseRoadmap, readySpecs, scheduleSpecs, snapshot } from "../src/run/lanes";
 import { applyPayload } from "../src/lock";
 import { isWindows } from "../src/platform";
 
@@ -193,5 +193,28 @@ describe("the run shows what the lanes are doing", () => {
     run = JSON.parse(read(main, "coordination/run/run.json"));
     expect(run).toMatchObject({ status: "stopped", reason: "specs need attention: SPEC-001" });
     expect(() => mirrorRun(join(temp, "no-run"), state, ["SPEC-001"])).not.toThrow();
+  });
+});
+
+describe("a lane's work reaches the workspace while it runs", () => {
+  test("src and the spec's results appear before the lane ends; a later edit of a synced file still syncs; a file the workspace changed is left alone", () => {
+    const main = join(temp, "live-main");
+    put(main, "README.md", "x");
+    put(main, "specs/IDEA-001-x-Specs/SPEC-001-a/SPEC-001-a.md", "spec");
+    const { dir: lane } = createLane(main, "SPEC-001", false);
+    const sync = () => liveSyncLane(main, lane, "SPEC-001");
+    put(lane, "src/IDEA-001-x/api/app.ts", "v1");
+    put(lane, "TestResults/IDEA-001/SPEC-001/test-run-summary.md", "| T-001 | PASS |");
+    sync();
+    expect(read(main, "src/IDEA-001-x/api/app.ts")).toBe("v1"); // visible in the workspace mid-run
+    expect(read(main, "TestResults/IDEA-001/SPEC-001/test-run-summary.md")).toContain("PASS");
+    put(lane, "src/IDEA-001-x/api/app.ts", "v2");
+    sync();
+    expect(read(main, "src/IDEA-001-x/api/app.ts")).toBe("v2"); // the base advanced, so this is not a clash
+    put(main, "README.md", "changed in the workspace");
+    put(lane, "README.md", "changed in the lane");
+    const r = sync();
+    expect(r?.conflicts).toContain("README.md");
+    expect(read(main, "README.md")).toBe("changed in the workspace");
   });
 });

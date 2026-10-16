@@ -785,5 +785,7 @@ if ($parentRoot -and (Test-Path -LiteralPath (Join-Path $parentRoot 'coordinatio
 }
 if ($Open) {
     # KCC_OPEN_LOG: automation hook. Record the path instead of launching a browser.
-    if ($env:KCC_OPEN_LOG) { Add-Content -LiteralPath $env:KCC_OPEN_LOG -Value $outFile } else { Start-Process $outFile }
+    # KCC_DASHBOARD_URL: `kcc run` serves a live page; open that instead of the file so the page stays current.
+    $openTarget = $outFile; if ($env:KCC_DASHBOARD_URL) { $openTarget = $env:KCC_DASHBOARD_URL }
+    if ($env:KCC_OPEN_LOG) { Add-Content -LiteralPath $env:KCC_OPEN_LOG -Value $openTarget } else { Start-Process $openTarget }
 }
