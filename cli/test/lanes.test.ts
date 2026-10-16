@@ -163,3 +163,16 @@ describe("dependency scheduling", () => {
     expect(existsSync(laneDir(main, "SPEC-002"))).toBe(true); // kept, so its gate can be answered
   });
 });
+
+describe("a lane that is busy does not crash the scheduler's snapshot", () => {
+  // Round 8: vite/vitest write vitest.config.ts.timestamp-<n>-<hex>.mjs and delete it a moment later. The snapshot read
+  // it, got ENOENT, and the whole `kcc run` died while the lane it supervised kept running, orphaned.
+  test("transient bundler files are not part of a snapshot, and a missing folder is not an error", () => {
+    const lane = join(temp, "busy-lane");
+    put(lane, "src/api/app.ts", "export {};");
+    put(lane, "src/api/vitest.config.ts.timestamp-1792143875985-65fde6ce734db.mjs", "x");
+    const s = snapshot(lane);
+    expect(Object.keys(s)).toEqual(["src/api/app.ts"]);
+    expect(snapshot(join(temp, "no-such-lane"))).toEqual({});
+  });
+});

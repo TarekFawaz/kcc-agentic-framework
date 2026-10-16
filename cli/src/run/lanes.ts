@@ -69,18 +69,31 @@ function skipped(rel: string): boolean {
   return SKIP_PREFIXES.some((p) => rel.startsWith(p));
 }
 
-/** path (posix, relative) -> hash, for every file a lane may change. */
+/** A running lane creates and deletes files under us (vite writes vitest.config.ts.timestamp-*.mjs and removes it). */
+const TRANSIENT = /\.timestamp-\d+-[0-9a-f]+\.(mjs|cjs|js)$/;
+
+/** path (posix, relative) -> hash, for every file a lane may change. A file that vanishes mid-walk is skipped. */
 export function snapshot(root: string): Record<string, string> {
   const out: Record<string, string> = {};
   const walk = (dir: string): void => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
       const full = join(dir, e.name);
       const rel = relative(root, full).split(sep).join("/");
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name) || skipped(rel + "/")) continue;
         walk(full);
-      } else if (e.isFile() && !skipped(rel)) {
-        out[rel] = contentHash(readFileSync(full));
+      } else if (e.isFile() && !skipped(rel) && !TRANSIENT.test(e.name)) {
+        try {
+          out[rel] = contentHash(readFileSync(full));
+        } catch {
+          /* deleted or locked while we looked: it is not part of this snapshot */
+        }
       }
     }
   };
@@ -150,10 +163,14 @@ export function syncOwned(main: string, lane: string, owned: string[]): number {
   for (const [rel, hash] of Object.entries(now)) {
     if (!owned.some((p) => rel.startsWith(p))) continue;
     const mainFile = join(main, rel);
-    if (existsSync(mainFile) && contentHash(readFileSync(mainFile)) === hash) continue;
-    mkdirSync(dirname(mainFile), { recursive: true });
-    copyFileSync(join(lane, rel), mainFile);
-    n++;
+    try {
+      if (existsSync(mainFile) && contentHash(readFileSync(mainFile)) === hash) continue;
+      mkdirSync(dirname(mainFile), { recursive: true });
+      copyFileSync(join(lane, rel), mainFile);
+      n++;
+    } catch {
+      /* the lane changed the file under us; the next sync picks it up */
+    }
   }
   return n;
 }
@@ -394,13 +411,18 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
 
   const tick = async (): Promise<void> => {
     await Bun.sleep((o.syncSeconds ?? 20) * 1000);
-    for (const spec of running.keys()) {
-      const lane = state[spec];
-      if (!lane) continue;
-      syncOwned(root, lane.dir, ownedPaths(root, spec));
-      syncBackchannel(root, lane.dir);
+    // The sync is a convenience copy; an error in it must never take the scheduler (and the lanes it supervises) down.
+    try {
+      for (const spec of running.keys()) {
+        const lane = state[spec];
+        if (!lane) continue;
+        syncOwned(root, lane.dir, ownedPaths(root, spec));
+        syncBackchannel(root, lane.dir);
+      }
+      if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
+    } catch (e) {
+      log(`kcc: lane sync skipped this round: ${(e as Error).message}`);
     }
-    if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
   };
 
   for (;;) {
