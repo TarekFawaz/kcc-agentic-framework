@@ -9,6 +9,12 @@
     "deep": "DeepThinking: the most capable model at xhigh/max effort for a few named, bounded analysis tasks, only after the human has seen the cost (protocols/deep-thinking.md). Never a default and never chosen by the router."
   },
   "deep_tasks": ["architecture-tradeoff", "threat-model", "failure-root-cause", "cross-spec-consistency", "human-directed"],
+  "tier_cost_observed": {
+    "verified": "2026-10-16",
+    "source": "one `claude -p --output-format json` probe per model; costUSD of a call that only writes the session context to cache",
+    "usd_per_mtok_cache_write": { "claude-haiku-5-5": 8.0, "claude-sonnet-5-5": 8.0, "claude-fable-5-1": 20.0 },
+    "note": "Haiku 5.5 and Sonnet 5.5 cost the same per token, so the fast tier saves nothing on this account; the implementer runs on balanced for that reason. Re-probe before relying on it."
+  },
   "deep_cost_observed": {
     "verified": "2026-10-16",
     "source": "two `claude -p --model claude-fable-5-1 --effort max` probes, costUSD from the JSON result",

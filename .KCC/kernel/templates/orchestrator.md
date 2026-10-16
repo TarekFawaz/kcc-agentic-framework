@@ -68,13 +68,14 @@ Every delegation from a skill, `auto`, or another agent follows these rules.
    risk. Name the tier, model id (`kernel/models.json`), effort and reasons
    in the packet and emit `model-selected`. Pin the id, never the alias
    (`haiku` can be an older generation; the Agent tool accepts the id).
-   **Complexity rule (the one pre-approved class change).** The `implementer`
-   runs on the executor class (`fast-implementation`). Spawn it on `balanced`
-   for a backlog item whose `plan.md` Complexity is `high`/`extra-high` or
-   whose SZ-3/SZ-4 count is at its cap, or that is security-sensitive (auth, crypto, secrets, personal data, untrusted input), and on a retry after a FAIL once the
-   effort step is used. Pass `model` for that spawn and emit a backchannel
-   `model-escalated` event (agent, item, reason). Any move to
-   `strong-reasoning` still needs the gate.
+   **The implementer runs on `balanced`.** It used to run on the executor class
+   (Haiku on Claude); measured 2026-10-16, `claude-haiku-5-5` and `claude-sonnet-5-5`
+   cost the same per token (`models.json -> tier_cost_observed`), so the cheaper
+   class saved nothing and wrote weaker code (stale assertions, missing deliverables).
+   For a backlog item whose `plan.md` Complexity is `high`/`extra-high`, whose SZ-3/SZ-4
+   count is at its cap, or that is security-sensitive (auth, crypto, secrets, personal
+   data, untrusted input), and on a retry after a FAIL, raise the effort to `high`.
+   Any move to `strong-reasoning` still needs the gate.
 8. **Gates are scripts.** A delegate's work is done only when the state's
    exit-check tool passes (`.KCC/kernel/contracts/tool-contract.md`). Route
    violations to their `fix_owner`. Exit 3 (deferred) is never a pass.

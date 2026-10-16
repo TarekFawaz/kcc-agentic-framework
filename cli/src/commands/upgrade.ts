@@ -7,7 +7,7 @@ import { reapplyTailoring } from "./tailor";
 import { reportApply } from "./init";
 
 const MODEL_TIERS_NOTICE = [
-  "Model tiers changed: spec/plan/design agents run on the balanced class and the implementer on the executor class.",
+  "Model tiers changed: spec/plan/design agents run on the balanced class and the implementer on balanced too (Haiku cost the same per token and coded worse).",
   "To keep earlier tiers for an agent, add a line to .KCC/model-overrides, for example:",
   "  implementer = strong-reasoning high",
   "then run: kcc sync. Agent files you edited locally are listed as conflicts above and keep their own tier.",

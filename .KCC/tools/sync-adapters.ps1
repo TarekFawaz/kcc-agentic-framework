@@ -859,7 +859,7 @@ function New-OrchestratorJson {
                 'lazy reads: grep the heading, then read that section; never load .KCC/ wholesale',
                 'return <= 150-word summary + artifact paths + Confidence + ActualTokenUsage; no file echoes',
                 'fan out independent wave units in one message; barrier before the next wave',
-                'retry escalation: effort +1 step; a model-class change needs critical-human-gate or a token-guard re-estimate, except complexity rule: implementer runs on the executor class and may be spawned on balanced for high/extra-high or security-sensitive items or after a FAIL (emit model-escalated)',
+                'retry escalation: effort +1 step; a model-class change needs critical-human-gate or a token-guard re-estimate, except the implementer runs on balanced; high/extra-high or security-sensitive items and retries raise its effort',
                 'gates are scripts: done only when the state exit-check tool passes; exit 3 (deferred) is never a pass',
                 'continuity: at the soft usage threshold spawn nothing new; the hard threshold writes a restore point and suspends',
                 'meta-agents (butler, token-guard) stay on their fast/low profile',

@@ -63,7 +63,7 @@ in its frontmatter. **Validator enforces presence** - see
 Currently all capabilities default to `tarek.fawaz1983@gmail.com` until
 individual maintainers claim them via PR.
 
-### Lifecycle agents (6) - `model-class: balanced` (`implementer`: `fast-implementation`, the executor)
+### Lifecycle agents (6) - `model-class: balanced`
 
 | Capability | Current maintainer | Status |
 |---|---|---|

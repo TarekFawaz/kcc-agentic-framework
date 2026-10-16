@@ -21,10 +21,12 @@ Everything is additive: a run that uses none of the new flags behaves as before.
 - **Model tiers.** `spec-writer`, `planner`, `architect`, `idea-interrogator`,
   `technical-interrogator`, `ux-ui-designer`, `infrastructure-planner`, and
   `security-analyst` (effort stays `high`) now run on the `balanced` class
-  (Sonnet on Claude). The `implementer` is the executor on `fast-implementation`
-  (Haiku on Claude, effort `medium`). The orchestrator may spawn the implementer
-  on `balanced` for `high` / `extra-high` items or after a FAIL, and emits a
-  `model-escalated` event (`coordination/orchestrator.md`, spawn rule 7).
+  (Sonnet on Claude). The `implementer` also runs on `balanced` (effort `medium`,
+  `high` for `high` / `extra-high` or security-sensitive items and retries): it first ran on
+  the executor class (Haiku), but round 9 measured `claude-haiku-5-5` and `claude-sonnet-5-5`
+  at the same price per token ($8 per million cache-write tokens, probed 2026-10-16), so the
+  cheaper class saved nothing and wrote weaker code. Keep Haiku for an agent with
+  `.KCC/model-overrides` (`implementer = fast-implementation medium`).
   Claude IDs are now the 5.5 family. On Codex the executor class maps to
   `gpt-5-mini` instead of `gpt-5-nano`.
 - **`auto --fasttrack`.** Skips ROI, confirm, architecture review, all budget

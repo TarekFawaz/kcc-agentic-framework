@@ -36,7 +36,9 @@ spec `Backlog/` whose Status is `open` or `fixing`, plus any exit-check violatio
 the regression test named in its table first (red), fix the files under its `## Impacted Files`, make it green, set
 its Status to `fixed`. A violation that names no Bug (a test ID nothing references, a stale assertion) gets the same
 treatment: test first, then the fix. Touch no file the Bug items and violations do not name. Wave scope checks do not
-apply to this pass; the verifier re-tests afterwards.
+apply to this pass; the verifier re-tests afterwards. The Regression test cell must name a Test ID that `plan.md ->
+## Atomic test cases` already lists. A Bug no test can express (a missing document, a gate) says `n/a (<reason>)`;
+never invent a Test ID the plan does not have.
 
 ## Steps
 
