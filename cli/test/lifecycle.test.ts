@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
@@ -278,6 +278,29 @@ describe("a wave that breaks a test fails at that wave (check-wave-scope -TestCo
       const text = payloadFiles().get(`kernel/${f}`)!.toString("utf8");
       expect(text).toContain('"-TestCommand", "auto"');
     }
+  });
+});
+
+describe("the plan says how each cited standard is verified (PLAN-006)", () => {
+  // Round 9: the architecture cited the API standard, the plan said the OpenAPI document is generated at runtime, and the
+  // verifier then filed Bug-004 because the standard requires it checked in.
+  test("a plan with no Standards coverage table gets a PLAN-006 warning (not an error); adding the table clears it", () => {
+    const root = workspace("standards-coverage");
+    expect(drv(root, [...FT, "--until", "9"]).status).toBe(0);
+    const plan = (): string => {
+      const dir = readdirSync(join(root, "specs")).find((d) => d.startsWith("IDEA-"))!;
+      const spec = readdirSync(join(root, "specs", dir)).find((d) => d.startsWith("SPEC-"))!;
+      return join(root, "specs", dir, spec, "plan.md");
+    };
+    const ids = () => {
+      const r = runTool(root, "check-run-conformance", ["--repo-root", root, "--scope", "plan", "--spec", "SPEC-001", "--json"], { capture: true });
+      return { rc: r.status, ids: [...r.stdout.matchAll(/"id"\s*:\s*"(PLAN-\d+)"/g)].map((m) => m[1]) };
+    };
+    const before = ids();
+    expect(before.ids).toContain("PLAN-006");
+    expect(before.rc).toBe(0);
+    appendFileSync(plan(), ["", "## Standards coverage", "", "| Standard | Verifier check | Covered by |", "|--|--|--|", "| none cited | n/a | n/a |", ""].join(String.fromCharCode(10)));
+    expect(ids().ids).not.toContain("PLAN-006");
   });
 });
 

@@ -111,7 +111,19 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
     unit test; cross-boundary also integration; perf/security only if that
     dialect is loaded. **SZ-4:** an item needing > 8 tests -> stop and return
     a split request to spec-writer. **Bug items:** first row is a regression
-    Test ID that must fail before the fix.
+    Test ID that must fail before the fix. **A Test ID is a test in a test
+    file** (the ID appears in its name, tag or comment). A build, typecheck,
+    lint, audit or compose check is a `Verification Steps` command, never a
+    row here; if an AC can only be shown by running one, the row describes a
+    test that spawns it and asserts the result.
+11b. **`## Standards coverage`.** Read the `Verifier conformance check` of
+    each standard the architecture cites (`api-standards.md` for any HTTP API,
+    `standards-catalog.md` rows for security, data, operations, supply chain)
+    and list `| Standard | Verifier check | Covered by (Test ID or Verification
+    Step) |`. A deliverable a standard requires (a checked-in OpenAPI
+    document, a migration, a lockfile) is a Test ID or a named file in an
+    item's Impacted Files, not left to runtime generation. Plan and standard
+    disagree: follow the standard and say so in Risk Flags.
 12. **Write `plan.md`** (`status: ready`, `version: 1.0.0`). Self-check:
     `.KCC/tools/check-run-conformance -Scope plan`; fix planner-owned errors.
     Below confidence threshold (95% default): do not proceed to
@@ -123,7 +135,7 @@ Template: read `.KCC/capabilities/agents/refs/planner-plan-template.md` ->
 *plan.md body* when writing `plan.md`. Sections, exactly named: Dependency
 Check, Architecture Gate Check, Backlog Coverage, Ordered Changes, Waves,
 Dialects Loaded, New Files, Risk Flags, Atomic test cases,
-Verification Steps, Scope, Confidence.
+Standards coverage, Verification Steps, Scope, Confidence.
 
 ## Fast track and depth
 

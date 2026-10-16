@@ -793,6 +793,10 @@ check_plan() {
     if ! has_heading "$plan" "Atomic test cases"; then
       violation "PLAN-003" "error" "planner" "$prel has no '## Atomic test cases' section." "$prel"
     fi
+    # The architecture cites standards with a verifier conformance check each; the plan says which Test ID or step covers it.
+    if [ -f "$REPO_ROOT/architecture/architecture.md" ] && ! has_heading "$plan" "Standards coverage"; then
+      violation "PLAN-006" "warning" "planner" "$prel has no '## Standards coverage' table: map each cited standard's verifier conformance check to a Test ID or a Verification Step (round 9: the plan said the OpenAPI document is generated at runtime, the API standard requires it checked in)." "$prel"
+    fi
     tests="$(plan_tests "$plan")"
     itemfiles=""
     while IFS="$TAB" read -r it_key it_type it_file; do

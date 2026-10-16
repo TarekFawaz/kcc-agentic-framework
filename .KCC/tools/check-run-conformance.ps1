@@ -30,7 +30,7 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
       token        - the latest trace session records an actual token row.
       idea         - IDEA-001..005: idea file sections, 7 artifacts, ROI confidence.
       specs        - SPEC-001..008, SPEC-LEGACY, SZ-2, SZ-3, SZ-5 (spec-layout v6).
-      plan         - PLAN-001..005, SZ-4 (waves, atomic tests, AC coverage).
+      plan         - PLAN-001..006, SZ-4 (waves, atomic tests, AC coverage; PLAN-006 warns when no Standards coverage table).
       review       - REV-001..005 (verdict, evidence, traceability, open bugs).
       bugs         - BUG-001..005 (bug table fields, enums, regression tests; n/a with a reason is a BUG-005 warning).
       deep         - DEEP-001..003 (every DeepThinking spawn was approved, within the cap and the task list).
@@ -862,6 +862,10 @@ function Invoke-PlanChecks {
         }
         if (-not (Test-Heading $plines 'Atomic test cases')) {
             Add-Violation 'PLAN-003' 'error' 'planner' ("{0} has no '## Atomic test cases' section." -f $prel) $prel
+        }
+        # The architecture cites standards with a verifier conformance check each; the plan says which Test ID or step covers it.
+        if ((Test-Path -LiteralPath (Join-Path (Join-Path $RepoRoot 'architecture') 'architecture.md')) -and -not (Test-Heading $plines 'Standards coverage')) {
+            Add-Violation 'PLAN-006' 'warning' 'planner' ("{0} has no '## Standards coverage' table: map each cited standard's verifier conformance check to a Test ID or a Verification Step (round 9: the plan said the OpenAPI document is generated at runtime, the API standard requires it checked in)." -f $prel) $prel
         }
         $tests = Get-PlanTests $plan
         $items = Get-Items $sp

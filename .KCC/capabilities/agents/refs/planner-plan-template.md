@@ -90,7 +90,18 @@ cross-idea infrastructure leaks}
 Every item AC appears at least once; <= 8 rows per item (SZ-4). Bug items get
 a failing regression Test ID first. Levels: `unit`, `integration`,
 `performance`, `security` (the last two only when that dialect is loaded).
-The Test ID must appear in the real test's name/annotation/tag.
+The Test ID must appear in the real test's name/annotation/tag. A Test ID is a
+test in a test file: builds, typechecks, lint, audits and compose checks are
+Verification Steps, or a test that spawns them.
+
+## Standards coverage
+
+| Standard | Verifier check | Covered by |
+|--|--|--|
+| api-standards | checked-in OpenAPI 3.x document, routes match it | T-027, T-028 |
+
+One row per standard the architecture cites. A required deliverable is a Test ID
+or a file in an item's Impacted Files; the plan follows the standard when they differ.
 
 ## Verification Steps
 {Concrete commands or checks mapped to epic criteria and backlog items; cite
