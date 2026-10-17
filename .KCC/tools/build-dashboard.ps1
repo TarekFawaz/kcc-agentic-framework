@@ -163,6 +163,7 @@ $data = [ordered]@{
     maxAttempts    = 3
     events         = @()
     laneEvents     = @()
+    needsAttention = @()
     checkpoints    = @()
     sessions       = @()
     decisions      = @()
@@ -374,7 +375,14 @@ if (Test-Path -LiteralPath $specsDir) {
             $rvt = Read-TextOrNull (Join-Path $sdir 'review.md')
             if ($rvt) {
                 $review.exists = $true
-                $vm = [regex]::Match($rvt, '(?i)\b(APPROVED|CHANGES_NEEDED|TOOLCHAIN_DEFERRED|BLOCKED)\b')
+                # The verdict is the review's own word: its frontmatter "verdict:", else the "Verdict" section, else the first one named anywhere
+                # (a review quotes earlier verdicts in its text). QUALITY_DEFERRED (TOOLCHAIN_DEFERRED is the older name) is its own state.
+                $vre = '(?i)\b(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|BLOCKED)\b'
+                $vm = $null
+                $fmv = Get-Frontmatter $rvt 'verdict'
+                if ($fmv) { $vm = [regex]::Match($fmv, $vre) }
+                if (-not $vm -or -not $vm.Success) { $vm = [regex]::Match(((Get-Section (Get-Lines $rvt) '^Verdict') -join "`n"), $vre) }
+                if (-not $vm.Success) { $vm = [regex]::Match($rvt, $vre) }
                 if ($vm.Success) { $review.verdict = $vm.Groups[1].Value.ToUpperInvariant() }
             }
             # test verdicts
@@ -813,6 +821,17 @@ foreach ($ld in @('.worktrees', '.kcc-lanes')) {
     }
 }
 $data['lanes'] = $lanes
+
+# ---- needs attention: coordination/NeedsAttention.md (a silent run decides by policy and records what a human should check) -------
+# One entry per file: the workspace's and each lane's. The page parses the text; here it is only read (first 600 lines, CR and control characters dropped).
+$naRoots = @($RepoRoot) + @(Get-LaneRoots | Sort-Object)
+foreach ($nr in $naRoots) {
+    $nf = Join-Path $nr 'coordination/NeedsAttention.md'
+    if (-not (Test-Path -LiteralPath $nf -PathType Leaf)) { continue }
+    $nlines = @(); try { $nrd = Open-SharedReader $nf; try { while ($null -ne ($nl = $nrd.ReadLine()) -and $nlines.Count -lt 600) { $nlines += $nl } } finally { $nrd.Dispose() } } catch { continue }
+    $ntxt = ([regex]::Replace(($nlines -join "`n"), '[\x00-\x08\x0B\x0C\x0E-\x1F]', '')).TrimEnd("`r", "`n")
+    $data.needsAttention += [ordered]@{ file = ($nf.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'); text = $ntxt }
+}
 
 # ---- fill the template ------------------------------------------------------------------------
 $tplPath = Join-Path $RepoRoot '.KCC/kernel/templates/dashboard.html'
