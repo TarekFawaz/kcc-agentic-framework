@@ -10,10 +10,15 @@ export function which(cmd: string): string | undefined {
   return r.stdout.split(/\r?\n/).find((l) => l.trim())?.trim();
 }
 
-/** Windows PowerShell 5.1 ships with the OS; pwsh is the fallback. */
+let powershellFound: { exe: string | undefined } | undefined;
+
+/** Windows PowerShell 5.1 ships with the OS; pwsh is the fallback. Looked up once: every `where` is a process of its own. */
 export function powershellExe(): string | undefined {
-  for (const c of ["powershell.exe", "pwsh.exe", "pwsh"]) if (which(c)) return c;
-  return undefined;
+  if (powershellFound) return powershellFound.exe;
+  let exe: string | undefined;
+  for (const c of ["powershell.exe", "pwsh.exe", "pwsh"]) if (which(c)) { exe = c; break; }
+  if (exe) powershellFound = { exe }; // not cached when nothing was found: PowerShell may be installed while the process runs
+  return exe;
 }
 
 /** `--repo-root` -> `-RepoRoot`. Values and positionals pass through. */

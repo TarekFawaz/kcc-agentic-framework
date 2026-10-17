@@ -140,7 +140,7 @@ $memoryDir = Join-Path $RepoRoot 'memory'
 # Settings (spec_sizing)
 # ---------------------------------------------------------------------------
 $MaxItems = 6; $MaxFiles = 5; $MaxTests = 8; $MaxSpecLines = 150
-$MaxBacklogLines = 80; $MaxPlanLines = 250; $MaxBriefLines = 100; $MaxSpecsFast = 5; $MaxDeep = 2
+$MaxBacklogLines = 80; $MaxPlanLines = 250; $MaxBriefLines = 100; $MaxSpecsFast = 8; $MaxDeep = 2
 # Checks the quality-gate tool implements; a plan's '## Gates coverage' row may say 'check:<ID>' (PLAN-007).
 # Keep in sync with check-run-conformance.sh (GATE_CHECKS) and quality-gate.* .
 $GateChecks = 'QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST QG-SBOM QG-IMAGE QG-STATIC'
@@ -844,8 +844,61 @@ function Invoke-SpecsChecks {
 # Required: a row for every QG-* id on the plan's 'Gates:' line and, when QG-PROD is cited, for every numbered
 # item of the QG-PROD checklist table in quality-gates.md (a row says 'QG-PROD-7'). 'Covered by' holds
 # Test IDs (T-007, T-024..T-029), 'check:<QG-ID>' or 'verifier:<step>', separated by commas.
+#
+# Guardrails (round 11: GR-012 "declared libraries are the ones used" had no test or check): every active GR-nnn id
+# in architecture/guardrails.md or the '## Guardrails' table of quality-gates.md / architecture.md also needs a row,
+# 'Covered by' the same forms, 'static-rules:<rule-id>' (a rule id in architecture/static-rules.tsv) or 'n/a:<reason>'.
+function Get-GuardrailIds {
+    $archDirLocal = Join-Path $RepoRoot 'architecture'
+    $lines = New-Object System.Collections.ArrayList
+    $gf = Join-Path $archDirLocal 'guardrails.md'
+    if (Test-Path -LiteralPath $gf) { foreach ($l in (Read-Lines $gf)) { [void]$lines.Add($l) } }
+    foreach ($f in 'quality-gates.md', 'architecture.md') {
+        $p = Join-Path $archDirLocal $f
+        if (Test-Path -LiteralPath $p) { foreach ($l in (Get-Section (Read-Lines $p) 'guardrails')) { [void]$lines.Add($l) } }
+    }
+    $ids = New-Object System.Collections.ArrayList
+    $si = -1
+    foreach ($l in $lines) {
+        if ($l -notmatch '^\s*\|') { $si = -1; continue }
+        if (Test-SeparatorRow $l) { continue }
+        $c = $l.Replace('\|', '/').Split('|')
+        if ($c.Count -lt 3) { continue }
+        $first = Get-CellTrim $c[1]
+        if ($first -notmatch '^GR-[0-9]+') {
+            if ($first.ToLower() -in 'id', 'guardrail', '#') {
+                $si = -1
+                for ($i = 0; $i -lt $c.Count; $i++) { if ((Get-CellTrim $c[$i]).ToLower() -eq 'status') { $si = $i } }
+            }
+            continue
+        }
+        $id = [regex]::Match($first, '^GR-[0-9]+').Value
+        if ($si -ge 0 -and $si -lt $c.Count -and (Get-CellTrim $c[$si]).ToLower() -match '(retired|superseded|withdrawn|deprecated|obsolete)') { continue }
+        if (-not $ids.Contains($id)) { [void]$ids.Add($id) }
+    }
+    return , ([string[]]$ids.ToArray())
+}
+
+function Get-StaticRuleIds {
+    $f = Join-Path (Join-Path $RepoRoot 'architecture') 'static-rules.tsv'
+    $ids = New-Object System.Collections.ArrayList
+    if (-not (Test-Path -LiteralPath $f)) { return , ([string[]]@()) }
+    foreach ($l in (Read-Lines $f)) {
+        if ($l.StartsWith('#')) { continue }
+        $c = $l.Split("`t")
+        if ($c.Count -lt 2 -or $c[0] -eq '' -or $c[0].ToLower() -eq 'id') { continue }
+        [void]$ids.Add($c[0].Trim())
+    }
+    return , ([string[]]$ids.ToArray())
+}
+
 function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests) {
     $out = New-Object System.Collections.ArrayList
+    $grs = Get-GuardrailIds
+    $srFile = Join-Path (Join-Path $RepoRoot 'architecture') 'static-rules.tsv'
+    $hasSr = Test-Path -LiteralPath $srFile
+    $srs = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($x in (Get-StaticRuleIds)) { [void]$srs.Add($x) }
     $cited = New-Object System.Collections.ArrayList
     foreach ($l in $planLines) {
         if ($l -match '^\s*([-*]\s+)?[*_]*gates\s*[*_]*\s*:') {
@@ -853,7 +906,7 @@ function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests
         }
     }
     $prod = New-Object System.Collections.ArrayList
-    if ($cited.Contains('QG-PROD')) {
+    if ((Test-Path -LiteralPath $qgFile) -and $cited.Contains('QG-PROD')) {
         $inside = $false
         foreach ($l in (Read-Lines $qgFile)) {
             if ($l -match '^#') { $inside = $l.Contains('QG-PROD'); continue }
@@ -864,7 +917,7 @@ function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests
         }
     }
     if (-not (Test-Heading $planLines 'Gates coverage')) {
-        [void]$out.Add("has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites to Test IDs, check:<QG-ID> or verifier:<step>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run).")
+        [void]$out.Add("has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites (and every architecture guardrail GR-nnn) to Test IDs, check:<QG-ID>, verifier:<step> or static-rules:<rule-id>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run).")
         return , ([string[]]$out.ToArray())
     }
     $tid = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -890,13 +943,16 @@ function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests
         $g = $cells[$gi]
         $cov = ''; if ($ci -lt $cells.Count) { $cov = Get-CellTrim $cells[$ci] }
         $ids = New-Object System.Collections.ArrayList
+        $nonGr = $false
+        foreach ($m in [regex]::Matches($g, '(?<![A-Za-z0-9_-])GR-[0-9]+')) { [void]$ids.Add($m.Value) }
+        $g = [regex]::Replace($g, '(?<![A-Za-z0-9_-])GR-[0-9]+', ' ')
         $pm = [regex]::Match($g, 'QG-PROD[-_ #./:]*([Ii]tem[ ]*)?([0-9]+)')
         while ($pm.Success) {
-            [void]$ids.Add('QG-PROD-' + [int]$pm.Groups[2].Value)
+            [void]$ids.Add('QG-PROD-' + [int]$pm.Groups[2].Value); $nonGr = $true
             $g = $g.Substring(0, $pm.Index) + ' ' + $g.Substring($pm.Index + $pm.Length)
             $pm = [regex]::Match($g, 'QG-PROD[-_ #./:]*([Ii]tem[ ]*)?([0-9]+)')
         }
-        foreach ($m in [regex]::Matches($g, 'QG-[A-Z0-9]+(-[A-Z0-9]+)*')) { [void]$ids.Add($m.Value) }
+        foreach ($m in [regex]::Matches($g, 'QG-[A-Z0-9]+(-[A-Z0-9]+)*')) { [void]$ids.Add($m.Value); $nonGr = $true }
         if ($ids.Count -eq 0) { continue }
         $why = ''
         if ($cov -eq '') { $why = 'empty Covered by' }
@@ -910,6 +966,20 @@ function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests
                 }
                 elseif ($p.Length -ge 9 -and $p.Substring(0, 9).ToLower() -eq 'verifier:') {
                     if ((Get-CellTrim $p.Substring(9)) -eq '') { $why = 'verifier: names no step' }
+                }
+                elseif ($p.Length -ge 13 -and $p.Substring(0, 13).ToLower() -eq 'static-rules:') {
+                    $tok = Get-CellTrim $p.Substring(13)
+                    if ($tok -eq '') { $why = 'static-rules: names no rule id' }
+                    elseif (-not $hasSr) { $why = 'static-rules: but architecture/static-rules.tsv does not exist' }
+                    else {
+                        foreach ($rk in ($tok -split '[ \t]+')) {
+                            if ($rk -ne '' -and -not $srs.Contains($rk)) { $why = ('unknown static rule "{0}" (not in architecture/static-rules.tsv)' -f $rk); break }
+                        }
+                    }
+                }
+                elseif ($p.Length -ge 4 -and $p.Substring(0, 4).ToLower() -eq 'n/a:') {
+                    if ($nonGr) { $why = 'n/a: is allowed only for a guardrail GR-nnn' }
+                    elseif ((Get-CellTrim $p.Substring(4)) -eq '') { $why = 'n/a: names no reason' }
                 }
                 else {
                     foreach ($tk in ($p -split '[ \t]+')) {
@@ -940,6 +1010,10 @@ function Get-GatesCoverageProblems([string[]]$planLines, [string]$qgFile, $tests
     foreach ($n in $prod) { if (-not $named.Contains("QG-PROD-$n")) { [void]$miss.Add("QG-PROD-$n") } }
     if ($miss.Count -gt 0) {
         [void]$out.Add(("## Gates coverage has no row for: {0}. Add one per gate the plan cites (and one per numbered QG-PROD checklist item as QG-PROD-<n>)." -f ($miss -join ', ')))
+    }
+    $gm = @($grs | Where-Object { -not $named.Contains($_) })
+    if ($gm.Count -gt 0) {
+        [void]$out.Add(("## Gates coverage has no row for guardrail(s): {0}. Add one per architecture guardrail (Covered by: Test ID, check:<ID>, verifier:<step>, static-rules:<rule-id> or n/a:<reason>). Round 11: GR-012 (declared libraries are used) had no test or check, so the code ignored the Decisions table." -f ($gm -join ', ')))
     }
     return , ([string[]]$out.ToArray())
 }
@@ -977,7 +1051,7 @@ function Invoke-PlanChecks {
         $tests = Get-PlanTests $plan
         # PLAN-007: every architecture gate the plan cites maps to a Test ID, a quality-gate check, or a verifier step.
         $qgFile = Join-Path (Join-Path $RepoRoot 'architecture') 'quality-gates.md'
-        if ((-not $sp.Legacy) -and (Test-Path -LiteralPath $qgFile)) {
+        if ((-not $sp.Legacy) -and ((Test-Path -LiteralPath $qgFile) -or (Get-GuardrailIds).Count -gt 0)) {
             foreach ($gmsg in (Get-GatesCoverageProblems $plines $qgFile $tests)) {
                 Add-Violation 'PLAN-007' 'error' 'planner' ("plan.md {0}" -f $gmsg) $prel
             }

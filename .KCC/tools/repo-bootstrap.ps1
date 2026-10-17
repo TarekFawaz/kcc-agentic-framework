@@ -288,6 +288,7 @@ coordination/run/
 coordination/gates/
 coordination/checkpoints/
 .kcc-lanes/
+.kcc-lane/
 coordination/lanes.json
 
 node_modules/

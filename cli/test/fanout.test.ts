@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPayload } from "../src/lock";
-import { fanoutSpecs, fanoutStates, laneDir, scheduleSpecs } from "../src/run/lanes";
+import { createLane, fanoutSpecs, fanoutStates, laneDir, scheduleSpecs } from "../src/run/lanes";
 import { payloadFiles } from "../src/payload";
 import { isWindows, runTool } from "../src/platform";
 
@@ -49,12 +49,14 @@ describe("the state table", () => {
   test("the full table fans out PLAN only (its BUDGET-P gate stays per spec)", () => {
     expect(table("auto-states.json").filter((x) => x.fanout).map((x) => x.name)).toEqual(["PLAN"]);
   });
-  test("the router gives the planner the balanced tier at high effort on the first attempt, and escalates only the retry", () => {
+  test("the router gives the planner the balanced tier at high effort on the first attempt; a retry keeps the tier and never goes above high (round 11)", () => {
     const root = join(temp, "route");
     applyPayload(root);
     const route = (attempt: string) => runTool(root, "kcc-route", ["--repo-root", root, "--agent", "planner", "--attempt", attempt, "--harness", "claude"], { capture: true }).stdout.split("\t");
     expect(route("1").slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
-    expect(route("2")[0]).toBe("strong");
+    const retry = route("2");
+    expect(retry.slice(0, 3)).toEqual(["balanced", "claude-sonnet-5-5", "high"]);
+    expect(retry[3]).toBe("agent default: balanced / high; attempt 2: effort stays high, tier unchanged for planning");
   });
   test("the scheduler reads the fan-out states from the table the run uses", () => {
     const root = join(temp, "route");
@@ -111,20 +113,77 @@ describe("kcc run schedules a fan-out state for all specs at the same time", () 
     expect(JSON.parse(read(m, "coordination/lanes.json"))).toEqual({}); // a fan-out state keeps no lane state of its own
   });
 
-  test("--max-parallel bounds the pool", async () => {
-    const m = main("sched-pool");
+  test("--max-parallel does not bound a fan-out state (all specs at once); --max-fanout N does", async () => {
+    const peakOf = async (name: string, extra: object): Promise<number> => {
+      const m = main(name);
+      let now = 0;
+      let peak = 0;
+      const code = await scheduleSpecs(m, {
+        ...opts({ maxParallel: 1, ...extra }), until: 11, independent: true, fanout: "PLAN",
+        runDriver: async () => {
+          peak = Math.max(peak, ++now);
+          await Bun.sleep(300);
+          now--;
+          return 0;
+        },
+      });
+      expect(code).toBe(0);
+      return peak;
+    };
+    expect(await peakOf("sched-nolimit", {})).toBe(3); // maxParallel 1 is ignored here
+    expect(await peakOf("sched-pool", { maxFanout: 2 })).toBe(2);
+  });
+
+  test("six specs: all six start before the first one ends, whatever --max-parallel says; the build lanes stay bounded by it", async () => {
+    const rows = [1, 2, 3, 4, 5, 6].map((n) => `| ${n} | SPEC-00${n} | s | None | A |`).join(String.fromCharCode(10));
+    const m6 = (name: string): string => {
+      const m = join(temp, name);
+      put(m, "specs/IDEA-001-demo-Specs/ROADMAP.md", `# Roadmap
+## Execution Plan
+| Order | Spec | Delivery | Depends on | Lane |
+|--|--|--|--|--|
+${rows}
+`);
+      for (let n = 1; n <= 6; n++) put(m, `specs/IDEA-001-demo-Specs/SPEC-00${n}-s/SPEC-00${n}-s.md`, "# stub");
+      return m;
+    };
+    const t: Record<string, [number, number]> = {};
+    const m = m6("sched-six");
+    expect(
+      await scheduleSpecs(m, {
+        ...opts({ maxParallel: 4 }), until: 11, independent: true, fanout: "WRITE",
+        runDriver: async (_d, args) => {
+          const spec = args[args.indexOf("--input") + 1]!;
+          const a = Date.now();
+          await Bun.sleep(900);
+          t[spec] = [a, Date.now()];
+          return 0;
+        },
+      }),
+    ).toBe(0);
+    const all = Object.values(t);
+    expect(all.length).toBe(6);
+    expect(Math.max(...all.map((x) => x[0]))).toBeLessThan(Math.min(...all.map((x) => x[1]))); // the sixth started before the first ended
+    // The build phase is bounded by --max-parallel: six independent specs (no Depends on), at most 2 at a time.
+    const m2 = join(temp, "sched-six-build");
+    put(m2, "specs/IDEA-001-demo-Specs/ROADMAP.md", `# Roadmap
+## Execution Plan
+| Order | Spec | Delivery | Depends on | Lane |
+|--|--|--|--|--|
+${rows}
+`);
+    for (let n = 1; n <= 6; n++) put(m2, `specs/IDEA-001-demo-Specs/SPEC-00${n}-s/SPEC-00${n}-s.md`, "# stub");
     let now = 0;
     let peak = 0;
-    const code = await scheduleSpecs(m, {
-      ...opts({ maxParallel: 2 }), until: 11, independent: true, fanout: "PLAN",
+    await scheduleSpecs(m2, {
+      ...opts({ maxParallel: 2 }),
       runDriver: async () => {
         peak = Math.max(peak, ++now);
-        await Bun.sleep(300);
+        await Bun.sleep(200);
         now--;
         return 0;
       },
     });
-    expect(code).toBe(0);
     expect(peak).toBe(2);
   });
 
@@ -271,18 +330,19 @@ describe("the bare driver does WRITE and PLAN spec by spec", () => {
 
 describe("a missing plan fails only that spec's PLAN step", () => {
   const root = workspace("noplan", 3);
-  test("SPEC-002 is retried (attempt count per spec) and then pauses at the loop gate; SPEC-001 is dispatched once, SPEC-003 never", () => {
+  test("SPEC-002 is retried (attempt count per spec) and then, silent, is parked as needs-attention (exit 7, no pause); SPEC-001 is dispatched once, SPEC-003 never", () => {
     sharedStates(root);
     expect(drv(root, ["--only", "10"]).status).toBe(0);
     writeFileSync(join(root, ".kcc-stub", "noplan"), "SPEC-002\n");
     const r = drv(root, ["--only", "11", "--max-attempts", "2"]);
-    expect(r.status).toBe(4);
+    expect(r.status).toBe(7);
     expect(r.stdout).toContain("PLAN-001");
     expect(r.stdout).toContain("state 11 PLAN SPEC-002");
     expect(dispatches(root, "11", "SPEC-001")).toBe(1);
     expect(dispatches(root, "11", "SPEC-002")).toBe(2);
     expect(dispatches(root, "11", "SPEC-003")).toBe(0);
-    expect(JSON.parse(read(root, "coordination/run/run.json")).attempts).toContain("11:SPEC-002=2");
+    expect(JSON.parse(read(root, "coordination/run/run.json")).attempts ?? "").not.toContain("11:SPEC-002"); // parked: the unit starts fresh on a resume
+    expect(read(root, "coordination/NeedsAttention.md")).toContain("## [open] SPEC-002 | loop | state 11 PLAN");
     expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-001"), "plan.md"))).toBe(true);
     expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-002"), "plan.md"))).toBe(false);
   });
@@ -328,7 +388,8 @@ describe("kcc run: a planner that writes no plan stops only its own lane", () =>
   test("the other plans are merged, SPEC-002 keeps its lane and pauses at the loop gate (retrying alone); answering it lets the next pass finish", async () => {
     sharedStates(root);
     writeFileSync(join(root, ".kcc-stub", "noplan"), "SPEC-002\n");
-    const flags = ["--fasttrack", "--silent", "--assume", "--max-attempts", "2"];
+    // Not silent: a run without --silent --assume keeps its blocking gates (the silent variant is tested below).
+    const flags = ["--fasttrack", "--max-attempts", "2"];
     const logs: string[] = [];
     const r = await fanoutSpecs(root, { passthrough: flags, maxParallel: 3, log: (l) => logs.push(l) });
     expect(r.code).toBe(4);
@@ -347,5 +408,149 @@ describe("kcc run: a planner that writes no plan stops only its own lane", () =>
     expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-002"), "plan.md"))).toBe(true);
     expect(existsSync(laneDir(root, "SPEC-002"))).toBe(false);
     expect(dispatches(root, "11", "SPEC-001")).toBe(1); // never run again
+  });
+});
+
+describe("kcc run --silent --assume: a planner that writes no plan parks only its own lane (exit 7), the others go on", () => {
+  const root = workspace("lanes-silent", 3);
+  test("no gate pauses; SPEC-002 is parked as needs-attention (kept in lanes.json and NeedsAttention.md), SPEC-001 and SPEC-003 are planned and merged", async () => {
+    sharedStates(root);
+    writeFileSync(join(root, ".kcc-stub", "noplan"), "SPEC-002\n");
+    const logs: string[] = [];
+    const r = await fanoutSpecs(root, { passthrough: ["--fasttrack", "--silent", "--assume", "--max-attempts", "2"], maxParallel: 3, log: (l) => logs.push(l) });
+    expect(r.code).toBe(7);
+    expect(r.attention).toEqual(["SPEC-002"]);
+    expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-001"), "plan.md"))).toBe(true);
+    expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-003"), "plan.md"))).toBe(true);
+    expect(existsSync(join(root, SPECDIR, specFolder(root, "SPEC-002"), "plan.md"))).toBe(false);
+    const lane = laneDir(root, "SPEC-002");
+    expect(existsSync(lane)).toBe(true);
+    const lj = JSON.parse(readFileSync(join(lane, "coordination", "run", "run.json"), "utf8"));
+    expect(lj.gate_id).toBe(""); // nothing waits for a human
+    expect(lj.status).toBe("stopped");
+    expect(lj.reason).toContain("needs attention");
+    expect(dispatches(lane, "11", "SPEC-002")).toBe(2);
+    expect(JSON.parse(read(root, "coordination/lanes.json"))["SPEC-002"]).toMatchObject({ status: "needs-attention", exit: 7 });
+    const na = read(root, "coordination/NeedsAttention.md");
+    expect(na).toContain("## [open] SPEC-002 | loop | state 11 PLAN");
+    expect(na).toContain("PLAN-001");
+    expect(na).toMatch(/- todo: .*kcc run --lane SPEC-002 --from 11/);
+    expect(logs.join("\n")).toContain("SPEC-002 needs attention");
+  });
+});
+
+describe("a lane that stops is synced into the workspace at once", () => {
+  const ROADMAP = `# Roadmap
+## Execution Plan
+| Order | Spec | Delivery | Depends on | Lane |
+|--|--|--|--|--|
+| 1 | SPEC-001 | a | None | A |
+| 2 | SPEC-002 | b | None | A |
+| 3 | SPEC-003 | c | SPEC-001 | A |
+`;
+  const mk = (name: string): string => {
+    const m = join(temp, name);
+    put(m, "specs/IDEA-001-demo-Specs/ROADMAP.md", ROADMAP);
+    for (const s of ["SPEC-001-a", "SPEC-002-b", "SPEC-003-c"]) put(m, `specs/IDEA-001-demo-Specs/${s}/${s}.md`, "# stub");
+    return m;
+  };
+  const SECTION = "## [open] SPEC-001 | loop | state 16 TEST | 2026-10-17T00:00:00Z\n\n- when: 2026-10-17T00:00:00Z\n- spec: SPEC-001\n- status: open\n\n";
+
+  test("parked under --silent --assume: its src/ is in the workspace, its NeedsAttention section was appended, the others merged, the run exits 7", async () => {
+    const m = mk("sched-parked");
+    const code = await scheduleSpecs(m, {
+      passthrough: ["--fasttrack", "--silent", "--assume"], maxParallel: 3, syncSeconds: 0.2, log: () => {},
+      runDriver: async (dir, args) => {
+        const spec = args[args.indexOf("--input") + 1]!;
+        put(dir, `src/IDEA-001-demo/${spec}.ts`, `export const ${spec.replace("-", "_")} = 1;`);
+        put(dir, `TestResults/IDEA-001-demo/${spec}/note.md`, "evidence");
+        if (spec !== "SPEC-001") return 0;
+        put(dir, "coordination/NeedsAttention.md", `# Needs attention\n\nheader\n\n${SECTION}`);
+        put(dir, "coordination/run/run.json", JSON.stringify({ state: "16", status: "stopped", reason: "needs attention: SPEC-001 loop at state 16 TEST" }));
+        return 7;
+      },
+    });
+    expect(code).toBe(7);
+    expect(existsSync(join(m, "src/IDEA-001-demo/SPEC-001.ts"))).toBe(true); // the parked lane's code is in the workspace
+    expect(existsSync(join(m, "src/IDEA-001-demo/SPEC-002.ts"))).toBe(true); // the merged lane's too
+    expect(existsSync(join(m, "src/IDEA-001-demo/SPEC-003.ts"))).toBe(false); // it waits for SPEC-001
+    expect(existsSync(join(m, "TestResults/IDEA-001-demo/SPEC-001/note.md"))).toBe(true);
+    expect(read(m, "coordination/NeedsAttention.md")).toContain(SECTION);
+    const lj = JSON.parse(read(m, "coordination/lanes.json"));
+    expect(lj["SPEC-001"]).toMatchObject({ status: "needs-attention", exit: 7 });
+    expect(lj["SPEC-001"].reason).toContain("needs attention");
+    expect(lj["SPEC-002"].status).toBe("merged");
+    expect(lj["SPEC-003"]).toMatchObject({ status: "needs-attention" });
+    expect(lj["SPEC-003"].reason).toContain("waits for SPEC-001");
+    expect(existsSync(laneDir(m, "SPEC-001"))).toBe(true); // kept for the human
+    expect(existsSync(laneDir(m, "SPEC-002"))).toBe(false);
+  });
+
+  test("a lane that pauses at a gate (exit 4, not silent) also leaves its src/ in the workspace; a file both sides changed is kept as the workspace copy and reported", async () => {
+    const m = mk("sched-gated");
+    put(m, "src/shared.ts", "workspace v1");
+    const code = await scheduleSpecs(m, {
+      passthrough: ["--fasttrack"], maxParallel: 3, syncSeconds: 0.2, log: () => {},
+      runDriver: async (dir, args) => {
+        const spec = args[args.indexOf("--input") + 1]!;
+        put(dir, `src/IDEA-001-demo/${spec}.ts`, "code");
+        if (spec !== "SPEC-002") return 0;
+        put(m, "src/shared.ts", "workspace v2"); // the workspace changes the file while the lane runs ...
+        put(dir, "src/shared.ts", "lane v2"); // ... and so does the lane
+        put(dir, "coordination/run/run.json", JSON.stringify({ state: "16", status: "paused", gate_id: "GATE-001", gate_name: "loop" }));
+        return 4;
+      },
+    });
+    expect(code).toBe(4);
+    expect(existsSync(join(m, "src/IDEA-001-demo/SPEC-002.ts"))).toBe(true);
+    expect(read(m, "src/shared.ts")).toBe("workspace v2");
+    expect(JSON.parse(read(m, "coordination/lanes.json"))["SPEC-002"].reason).toContain("merge conflict: src/shared.ts");
+  });
+
+  test("under --silent --assume a conflict on a stopped lane is an open NeedsAttention item, never dropped", async () => {
+    const m = mk("sched-conflict");
+    put(m, "src/shared.ts", "workspace v1");
+    await scheduleSpecs(m, {
+      passthrough: ["--fasttrack", "--silent", "--assume"], maxParallel: 3, syncSeconds: 0.2, log: () => {},
+      runDriver: async (dir, args) => {
+        const spec = args[args.indexOf("--input") + 1]!;
+        if (spec !== "SPEC-002") return 0;
+        put(m, "src/shared.ts", "workspace v2");
+        put(dir, "src/shared.ts", "lane v2");
+        return 7;
+      },
+    });
+    const na = read(m, "coordination/NeedsAttention.md");
+    expect(na).toContain("## [open] SPEC-002 | merge-conflict");
+    expect(na).toContain("src/shared.ts");
+  });
+
+  test("a lane's git ignores its own .kcc-lane/ marker folder: appended to the copied .gitignore only when it is missing", () => {
+    const a = mk("lane-ignore-a");
+    put(a, ".gitignore", "node_modules/\n");
+    const la = createLane(a, "SPEC-001", false).dir;
+    expect(read(la, ".gitignore")).toBe("node_modules/\n.kcc-lane/\n");
+    expect(spawnSync("git", ["status", "--porcelain"], { cwd: la, encoding: "utf8" }).stdout).not.toContain(".kcc-lane");
+    const b = mk("lane-ignore-b");
+    put(b, ".gitignore", "dist/\n.kcc-lane/\n");
+    expect(read(createLane(b, "SPEC-001", false).dir, ".gitignore")).toBe("dist/\n.kcc-lane/\n"); // not twice
+    const c = mk("lane-ignore-c"); // no .gitignore at all
+    expect(read(createLane(c, "SPEC-001", false).dir, ".gitignore")).toBe(".kcc-lane/\n");
+    expect(existsSync(join(c, ".gitignore"))).toBe(false); // the workspace's own files are not touched
+  });
+});
+
+describe("the split writes the per-idea index the planners read", () => {
+  test("SPECS without IDEA-NNN-slug-Specs.md fails SPEC-006 (a silent run parks it, exit 7); with it the state passes", () => {
+    const missing = workspace("noindex", 2);
+    writeFileSync(join(missing, ".kcc-stub", "noindex"), "x");
+    const r = drv(missing, [...FT, "--until", "9", "--max-attempts", "1"]);
+    expect(r.status).toBe(7);
+    expect(r.stdout).toContain("SPEC-006");
+    expect(existsSync(join(missing, SPECDIR, "IDEA-001-demo-Specs.md"))).toBe(false);
+    const ok = workspace("withindex", 2);
+    expect(drv(ok, [...FT, "--until", "9"]).status).toBe(0);
+    const idx = read(ok, `${SPECDIR}/IDEA-001-demo-Specs.md`);
+    expect(idx).toContain("ideation");
   });
 });

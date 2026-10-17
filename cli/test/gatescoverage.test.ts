@@ -58,7 +58,7 @@ const FULL_ROWS = [
 ];
 
 let n = 0;
-function workspace(plan: string, withGates = true): string {
+function workspace(plan: string, withGates = true, extra: Record<string, string> = {}): string {
   const root = join(temp, `w${++n}`);
   applyPayload(root);
   const put = (rel: string, text: string) => {
@@ -70,6 +70,7 @@ function workspace(plan: string, withGates = true): string {
   put(`${spec}/Backlog/Story-001-feature.md`, "# Story-001" + NL);
   put(`${spec}/plan.md`, plan);
   if (withGates) put("architecture/quality-gates.md", GATES);
+  for (const [rel, text] of Object.entries(extra)) put(rel, text);
   return root;
 }
 
@@ -83,6 +84,17 @@ const viaSh: (root: string) => Run = (root) => {
   const r = spawnSync("bash", [join(root, ".KCC", "tools", "check-run-conformance.sh"), ...args(root)], { cwd: root, encoding: "utf8" });
   return { status: r.status ?? 1, out: (r.stdout ?? "") + (r.stderr ?? "") };
 };
+const GUARDRAILS = [
+  "## Guardrails", "",
+  "| ID | Guardrail | Enforced by | Source |", "|--|--|--|--|",
+  "| GR-001 | No raw SQL outside infrastructure | SR-001 | D5 |",
+  "| GR-002 | Money is integer minor units | SR-003 | D7 |",
+  "| GR-012 | Declared libraries (Decisions table) are the ones used | QG-ARCH-CONFORMANCE | governance |", "",
+].join(NL);
+const TSV = (...c: string[]) => c.join(String.fromCharCode(9));
+const STATIC_RULES = ["# rules", TSV("id", "files", "forbidden", "allowed_in", "message"), TSV("SR-001", "[.]ts$", "prepare", "", "(GR-001)"), TSV("SR-003", "[.]ts$", "parseFloat", "", "(GR-002)"), ""].join(NL);
+const GR_ROWS = ["| GR-001 | static-rules:SR-001 |", "| GR-002 | static-rules:SR-003, T-003 |", "| GR-012 | verifier:every package in the Decisions table is imported by src and in the lockfile |"];
+const withGr = (extra: Record<string, string> = {}) => ({ "architecture/quality-gates.md": GATES + NL + GUARDRAILS, "architecture/static-rules.tsv": STATIC_RULES, ...extra });
 const plan007 = (out: string) => out.split(/\r?\n/).filter((l) => l.includes("PLAN-007"));
 
 for (const [label, run] of [["check-run-conformance.ps1", viaPs], ["check-run-conformance.sh", viaSh]] as const) {
@@ -134,6 +146,49 @@ for (const [label, run] of [["check-run-conformance.ps1", viaPs], ["check-run-co
     test("without architecture/quality-gates.md the rule does not apply", () => {
       const r = run(workspace(PLAN_HEAD, false));
       expect(plan007(r.out)).toEqual([]);
+    });
+
+    test("guardrails: a row per GR-nnn with Test ID, check:, verifier:, static-rules:<rule-id> or n/a:<reason> passes", () => {
+      const rows = [...FULL_ROWS, ...GR_ROWS];
+      expect(plan007(run(workspace(PLAN_HEAD + TABLE(rows), true, withGr())).out)).toEqual([]);
+      const grouped = [...FULL_ROWS, "| GR-001, GR-002 | check:QG-STATIC |", "| GR-012 | n/a: this spec adds no dependency |"];
+      expect(plan007(run(workspace(PLAN_HEAD + TABLE(grouped), true, withGr())).out)).toEqual([]);
+    });
+
+    test("guardrails: a guardrail without a row fails and is named (GR-012 in round 11)", () => {
+      const rows = [...FULL_ROWS, GR_ROWS[0]!, GR_ROWS[1]!];
+      const r = run(workspace(PLAN_HEAD + TABLE(rows), true, withGr()));
+      expect(r.status).toBe(1);
+      const v = plan007(r.out).join(NL);
+      expect(v).toContain("no row for guardrail(s): GR-012");
+      expect(v).not.toContain("GR-001,");
+    });
+
+    test("guardrails: an unknown static rule, static-rules: without the file, a bare static-rules:, and n/a: without a reason fail", () => {
+      const rows = [...FULL_ROWS, "| GR-001 | static-rules:SR-099 |", "| GR-002 | static-rules: |", "| GR-012 | n/a: |"];
+      const v1 = plan007(run(workspace(PLAN_HEAD + TABLE(rows), true, withGr())).out).join(NL);
+      expect(v1).toContain('GR-001: unknown static rule "SR-099"');
+      expect(v1).toContain("GR-002: static-rules: names no rule id");
+      expect(v1).toContain("GR-012: n/a: names no reason");
+      const noFile = withGr();
+      delete (noFile as Record<string, string>)["architecture/static-rules.tsv"];
+      const v2 = plan007(run(workspace(PLAN_HEAD + TABLE([...FULL_ROWS, ...GR_ROWS]), true, noFile)).out).join(NL);
+      expect(v2).toContain("static-rules: but architecture/static-rules.tsv does not exist");
+    });
+
+    test("guardrails: n/a: is refused on a quality gate row, and a retired guardrail is not required", () => {
+      const rows = FULL_ROWS.map((x) => x.replace("| QG-A11Y | T-004..T-005, verifier:visual review of the dark theme |", "| QG-A11Y | n/a: no ui |")).concat(GR_ROWS);
+      expect(plan007(run(workspace(PLAN_HEAD + TABLE(rows), true, withGr())).out).join(NL)).toContain("QG-A11Y: n/a: is allowed only for a guardrail");
+      const guardrails = ["# Guardrails", "", "| ID | Guardrail | Applies to | Source ADR | Status |", "|--|--|--|--|--|",
+        "| GR-001 | No raw SQL | all | ADR-1 | active |", "| GR-002 | Old rule | all | ADR-2 | retired |", ""].join(NL);
+      const r = run(workspace(PLAN_HEAD + TABLE([...FULL_ROWS, "| GR-001 | T-003 |"]), true, { "architecture/guardrails.md": guardrails }));
+      expect(plan007(r.out)).toEqual([]);
+    });
+
+    test("guardrails without quality-gates.md still need a Gates coverage table", () => {
+      const r = run(workspace(PLAN_HEAD, false, { "architecture/guardrails.md": "| ID | Guardrail |" + NL + "|--|--|" + NL + "| GR-001 | No raw SQL |" + NL }));
+      expect(r.status).toBe(1);
+      expect(plan007(r.out).length).toBe(1);
     });
   });
 }

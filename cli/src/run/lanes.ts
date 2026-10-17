@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { UsageError } from "../args";
 import { contentHash, readJson, writeJson } from "../fsutil";
 import { runTool, runToolAsync } from "../platform";
+import { type DashStamp, rebuildDashboard } from "./dashstale";
 
 /**
  * Dependency-driven scheduling of the per-spec states, used by `kcc run`.
@@ -60,7 +61,10 @@ export function groupByOrder(rows: RoadmapRow[]): string[][] {
 // ---------------------------------------------------------------- snapshots and merging
 
 const SKIP_DIRS = new Set([".git", "node_modules", ".kcc-lane", ".kcc-lanes"]);
-const SKIP_PREFIXES = ["coordination/run/", "coordination/gates/", "coordination/checkpoints/", "dashboard/"];
+// coordination/NeedsAttention*.md is never copied or merged as a file: every lane writes its own, and syncNeedsAttention appends
+// the lane's new sections to the workspace's one file (two lanes writing the same file would clash).
+const SKIP_PREFIXES = ["coordination/run/", "coordination/gates/", "coordination/checkpoints/", "dashboard/", "coordination/NeedsAttention"];
+const ATTENTION = "coordination/NeedsAttention.md";
 /** Indexes and logs every lane touches; a clash on these is reported, not a failure. */
 const SHARED_INDEXES = new Set(["specs/specs.md", "ideation/ideas.md", "progress.md", "memory/index.json", "memory/memory.md", "architecture/architecture.md"]);
 const BACKCHANNEL = "coordination/backchannel.jsonl";
@@ -127,6 +131,8 @@ export interface MergeResult {
   conflicts: string[];
   sharedSkipped: string[];
   events: number;
+  /** NeedsAttention sections appended to the workspace's file. */
+  attention?: number;
 }
 
 function nextEventNumber(file: string): number {
@@ -154,6 +160,56 @@ export function syncBackchannel(main: string, lane: string): number {
   mkdirSync(dirname(mainBc), { recursive: true });
   for (const l of fresh) appendFileSync(mainBc, l.replace(/("id"\s*:\s*")BC-\d+(")/, `$1BC-${String(n++).padStart(5, "0")}$2`) + "\n");
   writeJson(metaFile, { ...meta, backchannelSynced: all.length });
+  return fresh.length;
+}
+
+/** The `## [open|decided] ...` sections of a NeedsAttention.md, each with its trailing text; the header before the first one is dropped. */
+function attentionSections(text: string): string[] {
+  return text.replace(/\r\n/g, "\n").split(/^(?=## \[(?:open|decided)\])/m).filter((s) => /^## \[(?:open|decided)\]/.test(s));
+}
+
+/** Counts the sections of a NeedsAttention.md: all and open. */
+export function attentionCounts(file: string): { items: number; open: number } {
+  if (!existsSync(file)) return { items: 0, open: 0 };
+  const s = attentionSections(readFileSync(file, "utf8"));
+  return { items: s.length, open: s.filter((x) => x.startsWith("## [open]")).length };
+}
+
+const ATTENTION_HEADER =
+  "# Needs attention\n\nWritten by kcc-run under --silent --assume, which never stops for a human: every gate is answered by policy and recorded here.\n\n" +
+  "- status: decided = the run went on with the safest continuing choice; check the decision.\n" +
+  "- status: open = the spec could not continue and was left; a human must act (the run finished everything else, exit code 7).\n\n";
+
+/** Appends one item to the workspace's coordination/NeedsAttention.md (the same section format the drivers write). */
+export function appendAttention(root: string, it: { spec: string; gate: string; status: "open" | "decided"; state?: string; decided: string; why: string; todo: string; links?: string }): void {
+  const file = join(root, ATTENTION);
+  const when = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const flat = (s: string): string => s.replace(/\s+/g, " ").trim();
+  mkdirSync(dirname(file), { recursive: true });
+  if (!existsSync(file)) writeFileSync(file, ATTENTION_HEADER);
+  const st = it.state ?? "";
+  appendFileSync(
+    file,
+    `## [${it.status}] ${it.spec || "run"} | ${it.gate} | state ${st} | ${when}\n\n- when: ${when}\n- spec: ${it.spec || "run"}\n- state: ${st}\n- gate: ${it.gate}\n- status: ${it.status}\n- decided: ${flat(it.decided)}\n- why: ${flat(it.why)}\n- todo: ${flat(it.todo)}\n- links: ${flat(it.links ?? "")}\n\n`,
+  );
+  emit(root, "needs-attention", it.spec, { status: it.status, gate: it.gate, decided: flat(it.decided), reason: flat(it.why), todo: flat(it.todo), file: ATTENTION });
+}
+
+/** Appends the lane's NeedsAttention sections that the workspace has not seen yet (the lane's own file is never merged as a file). */
+export function syncNeedsAttention(main: string, lane: string): number {
+  const laneFile = join(lane, ATTENTION);
+  if (!existsSync(laneFile)) return 0;
+  const metaFile = join(lane, ".kcc-lane", "base.json");
+  const meta = readJson<{ needsSynced?: number }>(metaFile) ?? {};
+  const text = readFileSync(laneFile, "utf8");
+  const all = attentionSections(text);
+  const fresh = all.slice(meta.needsSynced ?? 0);
+  if (!fresh.length) return 0;
+  const mainFile = join(main, ATTENTION);
+  mkdirSync(dirname(mainFile), { recursive: true });
+  if (!existsSync(mainFile)) writeFileSync(mainFile, text.replace(/\r\n/g, "\n").slice(0, text.replace(/\r\n/g, "\n").indexOf(all[0]!)) || ATTENTION_HEADER);
+  appendFileSync(mainFile, fresh.join(""));
+  writeJson(metaFile, { ...meta, needsSynced: all.length });
   return fresh.length;
 }
 
@@ -210,13 +266,15 @@ export function mergeLane(main: string, lane: string, base: Record<string, strin
     }
   }
   res.events = syncBackchannel(main, lane);
+  res.attention = syncNeedsAttention(main, lane);
   return res;
 }
 
 // ---------------------------------------------------------------- dependency scheduler
 
 export interface LaneState {
-  status: "running" | "done" | "failed" | "merged";
+  /** needs-attention: a `--silent --assume` lane that could not continue and was parked (exit 7); the run went on without it. */
+  status: "running" | "done" | "failed" | "merged" | "needs-attention";
   dir: string;
   exit?: number;
   reason?: string;
@@ -324,12 +382,23 @@ export function trustFolder(dir: string): void {
   writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
+/** Adds a line to the folder's .gitignore when it is not there yet (the file is created when missing). */
+export function ensureGitignore(dir: string, line: string): void {
+  const f = join(dir, ".gitignore");
+  const cur = existsSync(f) ? readFileSync(f, "utf8") : "";
+  const bare = line.replace(/\/$/, "");
+  if (cur.split(/\r?\n/).some((l) => l.trim() === line || l.trim() === bare)) return;
+  writeFileSync(f, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + line + "\n");
+}
+
 /** Cuts a lane: a copy of the workspace with its own git baseline and base snapshot. */
 export function createLane(root: string, spec: string, trust: boolean): { dir: string; base: Record<string, string> } {
   const dir = laneDir(root, spec);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   copyTree(root, dir);
+  // The lane's own git repo must not see its marker folder as an untracked change (R10: implementers had to step around it).
+  ensureGitignore(dir, ".kcc-lane/");
   const base = snapshot(dir);
   const bc = join(dir, BACKCHANNEL);
   const backchannelLines = existsSync(bc) ? readFileSync(bc, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
@@ -392,7 +461,10 @@ function emit(root: string, kind: string, spec: string, payload: Record<string, 
 export interface ScheduleOptions {
   /** kcc-run flags every lane gets (--fasttrack, --silent, --assume, --depthlevel N, ...). */
   passthrough: string[];
+  /** Build lanes (IMPLEMENT .. REVIEW) at the same time. */
   maxParallel: number;
+  /** Fan-out states (WRITE, PLAN) at the same time; unset = unlimited (short, file-disjoint planning tasks). */
+  maxFanout?: number;
   /** Seconds between live syncs of lane progress into the main workspace and its dashboard. */
   syncSeconds?: number;
   /** Runs a kcc-run in a folder; injectable for tests. */
@@ -402,9 +474,13 @@ export interface ScheduleOptions {
   until?: number;
   /** State a fresh lane starts at (kcc-run --from), e.g. the state after PLAN once every plan exists. */
   from?: number;
+  /** Specs parked as needs-attention earlier in this run (the fan-out phase): they stay parked instead of being retried at once. */
+  hold?: string[];
+  /** Filled on return: the specs parked as needs-attention. */
+  report?: { attention: string[] };
   /** Run only these specs (default: every spec of the roadmap). */
   only?: string[];
-  /** Planning needs no other spec's output, so `Depends on` is ignored and every spec starts at once (up to maxParallel). */
+  /** Planning needs no other spec's output, so `Depends on` is ignored and every spec starts at once (up to maxFanout, unlimited by default). */
   independent?: boolean;
   /** Set (to the state's name) for a fan-out state: lane state stays in memory (the exit check says what is done, the lane folder what to resume). */
   fanout?: string;
@@ -441,43 +517,56 @@ function toolArg(a: string, spec: string): string {
  * resume. A left-over lane belongs to the state it stopped at; one that is past this state belongs to a later one, except past
  * the last fan-out state, where only its merge is left.
  */
-export function specsToRun(root: string, state: FanoutState, last = true): string[] {
+export async function specsToRun(root: string, state: FanoutState, last = true): Promise<string[]> {
   const roadmap = findRoadmap(root);
   if (!roadmap) return [];
-  return parseRoadmap(readFileSync(roadmap, "utf8"))
-    .map((r) => r.spec)
-    .filter((spec) => {
+  const specs = parseRoadmap(readFileSync(roadmap, "utf8")).map((r) => r.spec);
+  // The exit checks of the specs are independent and read-only, and each is a PowerShell or bash process that costs seconds to start:
+  // run them side by side (a few at a time) instead of one after the other.
+  const todo = new Array<boolean>(specs.length).fill(false);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < specs.length; i = next++) {
+      const spec = specs[i]!;
       const leftover = readJson<{ state?: string }>(join(laneDir(root, spec), "coordination", "run", "run.json"));
-      if (leftover) return last || !(Number(leftover.state) > state.id);
-      if (!state.check || state.check.tool.startsWith("internal:")) return true;
-      const r = runTool(root, state.check.tool, [...(state.check.args ?? []).map((a) => toolArg(a, spec)), "--json"], { capture: true });
-      return r.status !== 0;
-    });
+      if (leftover) { todo[i] = last || !(Number(leftover.state) > state.id); continue; }
+      if (!state.check || state.check.tool.startsWith("internal:")) { todo[i] = true; continue; }
+      const r = await runToolAsync(root, state.check.tool, [...(state.check.args ?? []).map((a) => toolArg(a, spec)), "--json"], { capture: true });
+      todo[i] = r.status !== 0;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, specs.length) }, () => worker()));
+  return specs.filter((_, i) => todo[i]);
 }
 
 export interface FanoutResult {
-  /** 0 when every spec went through every fan-out state (or the table has none), 4 when a lane stopped. */
+  /** 0 when every spec went through every fan-out state (or the table has none), 4 when a lane stopped, 7 when only parked specs are left (silent). */
   code: number;
   /** The state after the last fan-out state: where the build lanes start, so nothing is redone or re-approved. */
   after?: number;
+  /** Specs a --silent --assume lane parked as needs-attention (exit 7): skipped by the later states and by the build lanes of this run. */
+  attention?: string[];
 }
 
 /**
- * The fan-out states (a spec-writer per spec, then a planner per spec), each for all specs at the same time (up to
- * maxParallel), every one in its own lane and ignoring `Depends on`: writing or planning one spec needs only its own files,
+ * The fan-out states (a spec-writer per spec, then a planner per spec), each for all specs at the same time (no limit unless
+ * maxFanout is set; maxParallel bounds only the build lanes), every one in its own lane and ignoring `Depends on`: writing or planning one spec needs only its own files,
  * the architecture and the dialects, never another spec's output. A spec whose exit check already passes is not run
  * again; a failure retries only its own spec (its lane keeps the attempt count and the loop gate).
  */
-export async function fanoutSpecs(root: string, o: Pick<ScheduleOptions, "passthrough" | "maxParallel" | "syncSeconds" | "runDriver" | "log">): Promise<FanoutResult> {
+export async function fanoutSpecs(root: string, o: Pick<ScheduleOptions, "passthrough" | "maxParallel" | "maxFanout" | "syncSeconds" | "runDriver" | "log">): Promise<FanoutResult> {
   const { states, after } = fanoutStates(root, o.passthrough.includes("--fasttrack"));
+  const parked: string[] = [];
   for (const s of states) {
-    const todo = specsToRun(root, s, s === states[states.length - 1]);
+    const todo = (await specsToRun(root, s, s === states[states.length - 1])).filter((x) => !parked.includes(x));
     if (!todo.length) continue;
-    (o.log ?? ((l: string) => console.log(l)))(`kcc: state ${s.id} ${s.name} for ${todo.length} spec(s) at the same time (up to ${o.maxParallel})`);
-    const code = await scheduleSpecs(root, { ...o, until: s.id, independent: true, fanout: s.name, only: todo });
-    if (code !== 0) return { code, after };
+    (o.log ?? ((l: string) => console.log(l)))(`kcc: state ${s.id} ${s.name} for ${todo.length} spec(s) at the same time (${o.maxFanout ? `up to ${o.maxFanout}` : "no limit"})`);
+    const report = { attention: [] as string[] };
+    const code = await scheduleSpecs(root, { ...o, until: s.id, independent: true, fanout: s.name, only: todo, report, hold: parked });
+    for (const a of report.attention) if (!parked.includes(a)) parked.push(a);
+    if (code !== 0 && code !== 7) return parked.length ? { code, after, attention: parked } : { code, after };
   }
-  return { code: 0, after };
+  return parked.length ? { code: 7, after, attention: parked } : { code: 0, after };
 }
 
 /**
@@ -508,14 +597,19 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
     return r.status;
   });
 
-  // A lane that stopped earlier (gate, failure) is resumed, not recreated.
+  // A lane that stopped earlier (gate, failure, parked as needs-attention) is resumed, not recreated. A spec parked in this very
+  // run (o.hold, from the fan-out phase) stays parked: retrying it at once would only repeat the failure.
   for (const [spec, lane] of Object.entries(state)) {
-    if (lane.status === "failed" || lane.status === "running") delete state[spec];
+    if (lane.status === "failed" || lane.status === "running" || (lane.status === "needs-attention" && !o.hold?.includes(spec))) delete state[spec];
   }
+  for (const spec of o.hold ?? []) if (rows.some((r) => r.spec === spec)) state[spec] ??= { status: "needs-attention", dir: laneDir(root, spec), reason: "parked in an earlier phase of this run" };
+  const silent = o.passthrough.includes("--silent");
   const resumable = new Set(rows.map((r) => r.spec).filter((s) => existsSync(join(laneDir(root, s), "coordination", "run", "run.json"))));
   const deps = rows.map((r) => `${r.spec}${r.dependsOn.length ? " <- " + r.dependsOn.join(", ") : ""}`).join(" | ");
-  log(o.fanout ? `kcc: ${o.fanout}: ${rows.map((r) => r.spec).join(", ")} (up to ${o.maxParallel} at the same time, no dependency order)` : `kcc: specs scheduled by dependency: ${deps}`);
+  log(o.fanout ? `kcc: ${o.fanout}: ${rows.map((r) => r.spec).join(", ")} (${o.maxFanout ? `up to ${o.maxFanout}` : "no limit"} at the same time, no dependency order)` : `kcc: specs scheduled by dependency: ${deps}`);
 
+  // Only the build lanes are bounded by --max-parallel; a fan-out state runs every spec at once unless --max-fanout says otherwise.
+  const cap = o.fanout ? (o.maxFanout ?? Number.POSITIVE_INFINITY) : o.maxParallel;
   const running = new Map<string, Promise<void>>();
   const start = (spec: string): void => {
     const owned = ownedPaths(root, spec);
@@ -538,10 +632,21 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
       lane.finished = new Date().toISOString();
       if (code !== 0) {
         const r = readJson<{ gate_id?: string; gate_name?: string; reason?: string; state?: string }>(join(dir, "coordination", "run", "run.json"));
-        lane.status = "failed";
+        // Exit 7: a --silent --assume lane that could not continue and was parked (its NeedsAttention item says why); anything else is a stop.
+        lane.status = code === 7 ? "needs-attention" : "failed";
         lane.reason = r?.gate_id ? `paused at gate ${r.gate_id} (${r.gate_name}) in state ${r.state}` : r?.reason || `kcc-run exited ${code}`;
-        syncOwned(root, dir, owned);
-        syncBackchannel(root, dir);
+        // The workspace never lags a stopped lane: its owned files AND src/ (the lane is a scratch copy) are merged right now, the same
+        // merge a finished lane gets. A file both sides changed is a conflict: kept as the workspace copy and reported, never dropped.
+        const m = liveSyncLane(root, dir, spec);
+        if (!m) {
+          syncOwned(root, dir, owned);
+          syncBackchannel(root, dir);
+          syncNeedsAttention(root, dir);
+        } else if (m.conflicts.length) {
+          lane.reason += `; merge conflict: ${m.conflicts.join(", ")}`;
+          if (silent) appendAttention(root, { spec, gate: "merge-conflict", status: "open", decided: "kept the workspace copy of the files both sides changed", why: `the stopped lane and the workspace both changed: ${m.conflicts.join(", ")}`, todo: `compare each file with ${laneDir(root, spec)}/<file> and merge by hand`, links: laneDir(root, spec) });
+        }
+        if (silent && code !== 7 && code !== 0) appendAttention(root, { spec, gate: "lane-stopped", status: "open", decided: "the lane stopped and the run went on with the other specs", why: lane.reason ?? `kcc-run exited ${code}`, todo: `see ${join(dir, "coordination", "run", "logs")}; fix the cause and run: kcc run --resume`, links: laneDir(root, spec) });
         emit(root, "lane-blocked", spec, { exit: code, reason: lane.reason });
         log(`kcc: ${spec} stopped: ${lane.reason}`);
       } else {
@@ -550,6 +655,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         if (m.conflicts.length) {
           lane.status = "failed";
           lane.reason = `merge conflict: ${m.conflicts.join(", ")}`;
+          if (silent) appendAttention(root, { spec, gate: "merge-conflict", status: "open", decided: "kept the workspace copy of the files both sides changed; the lane is kept", why: `the lane and the workspace both changed: ${m.conflicts.join(", ")}`, todo: `compare each file with ${laneDir(root, spec)}/<file>, merge by hand, then: kcc run --resume`, links: laneDir(root, spec) });
           emit(root, "lane-blocked", spec, { reason: lane.reason });
           log(`kcc: ${spec} CONFLICT, these files changed in the workspace and in the lane: ${m.conflicts.join(", ")}`);
         } else {
@@ -566,6 +672,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
     void lanePromise.finally(() => running.delete(spec));
   };
 
+  const dashStamp: DashStamp = { sig: "", at: 0 };
   const tick = async (): Promise<void> => {
     await Bun.sleep((o.syncSeconds ?? 20) * 1000);
     // The sync is a convenience copy; an error in it must never take the scheduler (and the lanes it supervises) down.
@@ -576,7 +683,8 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         liveSyncLane(root, lane.dir, spec);
       }
       mirrorRun(root, state, running.keys());
-      if (!o.runDriver) runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
+      // rebuilt only when a file it reads changed (or the last build is a minute old): most ticks find nothing new
+      if (!o.runDriver) await rebuildDashboard(root, dashStamp);
     } catch (e) {
       log(`kcc: lane sync skipped this round: ${(e as Error).message}`);
     }
@@ -585,7 +693,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
   for (;;) {
     const blocked = new Set(Object.entries(state).filter(([, l]) => l.status === "failed").map(([s]) => s));
     for (const spec of readySpecs(rows, state)) {
-      if (running.size >= o.maxParallel || blocked.has(spec)) break;
+      if (running.size >= cap || blocked.has(spec)) break;
       start(spec);
     }
     if (!running.size) break;
@@ -597,6 +705,27 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
   if (!stopped.length) {
     mirrorRun(root, state, [], { status: "running", reason: o.fanout ? `${o.fanout} done for every spec` : "all specs merged; closing the run" });
     return 0;
+  }
+  const parked = stopped.filter((s) => state[s]?.status === "needs-attention");
+  if (o.report) o.report.attention = parked;
+  // A --silent --assume run never stops for a human: a spec that waits on a parked spec is parked with it, and the run ends with exit 7
+  // (items need a human) instead of 4 (paused at a gate). The parked specs of a fan-out phase are kept for the build phase.
+  if (silent || (parked.length && stopped.every((s) => !state[s] || state[s]!.status === "needs-attention"))) {
+    if (!o.fanout) {
+      for (const s of stopped) {
+        if (state[s]) continue;
+        const dep = rows.find((r) => r.spec === s)?.dependsOn.find((d) => state[d] && state[d]!.status !== "merged");
+        state[s] = { status: "needs-attention", dir: laneDir(root, s), reason: dep ? `waits for ${dep}, which needs attention` : "waits for a spec that needs attention" };
+      }
+      save();
+    } else if (parked.length) {
+      const cur = readJson<Record<string, LaneState>>(stateFile) ?? {};
+      for (const s of parked) cur[s] = state[s]!;
+      writeJson(stateFile, cur);
+    }
+    mirrorRun(root, state, [], { status: "running", reason: `${what}s parked as needs-attention: ${stopped.join(", ")}` });
+    for (const s of stopped) log(`kcc: ${s} needs attention: ${state[s]?.reason ?? "stopped"}. See coordination/NeedsAttention.md`);
+    return 7;
   }
   mirrorRun(root, state, [], { status: "stopped", reason: `${what}s need attention: ${stopped.join(", ")}` });
   for (const s of stopped) {

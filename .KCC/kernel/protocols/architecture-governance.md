@@ -396,7 +396,11 @@ must read this file for every spec.
 The planner maps every gate it cites to something runnable in the plan's `## Gates coverage`
 (`| Gate | Covered by |`: Test IDs, `check:<QG-ID>` for a check `quality-gate` implements, or
 `verifier:<step>`), one row per numbered `QG-PROD` checklist item as well; a gate no check implements
-gets its own Test ID. `check-run-conformance` enforces it as PLAN-007 (error, owner planner).
+gets its own Test ID. Every guardrail `GR-nnn` needs a row too, covered by the same forms,
+`static-rules:<rule-id>` (an id in `architecture/static-rules.tsv`) or `n/a:<reason>`. The architect
+therefore gives each guardrail an id and writes a `static-rules.tsv` rule for each pattern-checkable
+one; a guardrail with no pattern (GR-012, "declared libraries are used") gets a verifier step comparing
+the Decisions table with the manifest and imports. `check-run-conformance` enforces it as PLAN-007 (error, owner planner).
 
 Use this table:
 

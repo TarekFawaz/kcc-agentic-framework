@@ -43,13 +43,19 @@ case "$SCOPE" in
   *) echo "unknown scope: $SCOPE" >&2; exit 2 ;;
 esac
 
-TOOL_DIR="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) TOOL_DIR="${0%/*}" ;; *) TOOL_DIR="." ;; esac
+case "$TOOL_DIR" in /*) ;; *) TOOL_DIR="$PWD/$TOOL_DIR" ;; esac
 if [ -z "$REPO_ROOT" ]; then
+  TOOL_DIR="$(cd "$TOOL_DIR" && pwd)"
   PARENT="$(dirname "$TOOL_DIR")"
   if [ "$(basename "$PARENT")" = ".KCC" ]; then REPO_ROOT="$(dirname "$PARENT")"; else REPO_ROOT="$PARENT"; fi
 fi
 if [ ! -d "$REPO_ROOT" ]; then echo "workspace not found: $REPO_ROOT" >&2; exit 2; fi
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+case "$REPO_ROOT" in
+  /*) # an absolute path without dot segments is already what `cd && pwd` would print; skip the fork
+    case "$REPO_ROOT/" in */./*|*/../*|*//*) REPO_ROOT="$(cd "$REPO_ROOT" && pwd)" ;; *) REPO_ROOT="${REPO_ROOT%/}"; [ -n "$REPO_ROOT" ] || REPO_ROOT="/" ;; esac ;;
+  *) REPO_ROOT="$(cd "$REPO_ROOT" && pwd)" ;;
+esac
 
 ARCH_DIR="$REPO_ROOT/architecture"
 SPECS_DIR="$REPO_ROOT/specs"
@@ -60,7 +66,7 @@ MEMORY_DIR="$REPO_ROOT/memory"
 ERRORS=0
 WARNINGS=0
 VJSON=""
-TAB="$(printf '\t')"
+TAB=$'\t'
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -74,18 +80,35 @@ je() {
   s="${s//$'\n'/\\n}"
   printf '%s' "$s"
 }
+# jev: je into JV (no command substitution, so no fork); lc: lower-case $1 into LC. Git Bash on Windows pays ~0.3 s per fork, and
+# `$(...)` is a fork, so the hot helpers hand their result back in a variable. ${x,,} needs bash 4; macOS bash 3.2 falls back to tr.
+jev() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/}"
+  JV="${s//$'\n'/\\n}"
+}
+if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+  eval 'lc() { LC="${1,,}"; }'
+else
+  lc() { LC="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; }
+fi
 
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+lower() { lc "$1"; printf '%s' "$LC"; }
 
 rel() { printf '%s' "${1#"$REPO_ROOT"/}"; }
 
 violation() { # id severity owner message [file]
-  local id="$1" sev="$2" owner="$3" msg="$4" file="${5:-}" obj
+  local id="$1" sev="$2" owner="$3" msg="$4" file="${5:-}" obj ej eo ef em
   if [ "$sev" = "error" ]; then ERRORS=$((ERRORS + 1)); else WARNINGS=$((WARNINGS + 1)); fi
-  obj="{\"id\":\"$(je "$id")\",\"code\":\"$(je "$id")\",\"severity\":\"$sev\",\"fix_owner\":\"$(je "$owner")\",\"owner\":\"$(je "$owner")\",\"file\":\"$(je "$file")\",\"message\":\"$(je "$msg")\"}"
+  jev "$id"; ej="$JV"; jev "$owner"; eo="$JV"; jev "$file"; ef="$JV"; jev "$msg"; em="$JV"
+  obj="{\"id\":\"$ej\",\"code\":\"$ej\",\"severity\":\"$sev\",\"fix_owner\":\"$eo\",\"owner\":\"$eo\",\"file\":\"$ef\",\"message\":\"$em\"}"
   if [ -z "$VJSON" ]; then VJSON="$obj"; else VJSON="$VJSON,$obj"; fi
   if [ "$JSON" -eq 0 ]; then
-    printf '[%s] %s (%s) %s: %s\n' "$(printf '%s' "$sev" | tr '[:lower:]' '[:upper:]')" "$id" "$owner" "$file" "$msg"
+    case "$sev" in error) sev="ERROR" ;; warning) sev="WARNING" ;; *) sev="$(printf '%s' "$sev" | tr '[:lower:]' '[:upper:]')" ;; esac
+    printf '[%s] %s (%s) %s: %s\n' "$sev" "$id" "$owner" "$file" "$msg"
   fi
   return 0
 }
@@ -95,30 +118,33 @@ has_mermaid() { grep -qE '^[[:space:]]*```mermaid' "$1" 2>/dev/null; }
 # ---------------------------------------------------------------------------
 # Settings (spec_sizing)
 # ---------------------------------------------------------------------------
-setting() { # key default
-  local f="$REPO_ROOT/.KCC/settings.json" v=""
-  if [ -f "$f" ]; then
-    v="$(grep -oE "\"$1\"[[:space:]]*:[[:space:]]*[0-9]+" "$f" 2>/dev/null | head -n 1 | grep -oE '[0-9]+$' || true)"
-  fi
-  if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+# settings.json is read once; setting sets SV to the first `"key": <digits>` (the grep -oE | head -n 1 it replaces, without the processes).
+SETTINGS_TXT=""
+if [ -f "$REPO_ROOT/.KCC/settings.json" ]; then SETTINGS_TXT="$(<"$REPO_ROOT/.KCC/settings.json")"; fi
+setting() { # key default -> SV
+  local re="\"$1\"[[:blank:]]*:[[:blank:]]*([0-9]+)"
+  if [[ "$SETTINGS_TXT" =~ $re ]]; then SV="${BASH_REMATCH[1]}"; else SV="$2"; fi
 }
-MAX_ITEMS="$(setting max_items 6)"
-MAX_FILES="$(setting max_files_per_item 5)"
-MAX_TESTS="$(setting max_tests_per_item 8)"
-MAX_SPEC_LINES="$(setting max_spec_lines 150)"
-MAX_BACKLOG_LINES="$(setting max_backlog_item_lines 80)"
-MAX_PLAN_LINES="$(setting max_plan_lines 250)"
+setting max_items 6; MAX_ITEMS="$SV"
+setting max_files_per_item 5; MAX_FILES="$SV"
+setting max_tests_per_item 8; MAX_TESTS="$SV"
+setting max_spec_lines 150; MAX_SPEC_LINES="$SV"
+setting max_backlog_item_lines 80; MAX_BACKLOG_LINES="$SV"
+setting max_plan_lines 250; MAX_PLAN_LINES="$SV"
 # Checks the quality-gate tool implements; a plan's `## Gates coverage` row may say `check:<ID>` (PLAN-007).
 # Keep in sync with check-run-conformance.ps1 ($GateChecks) and quality-gate.* .
 GATE_CHECKS="QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST QG-SBOM QG-IMAGE QG-STATIC"
-MAX_BRIEF_LINES="$(setting max_brief_lines 100)"
-MAX_SPECS_FAST="$(setting max_specs_fasttrack 5)"
-MAX_DEEP="$(setting max_per_run 2)"
+setting max_brief_lines 100; MAX_BRIEF_LINES="$SV"
+setting max_specs_fasttrack 8; MAX_SPECS_FAST="$SV"
+setting max_per_run 2; MAX_DEEP="$SV"
 
 # Fast-track profile: explicit --run-profile, else the current run's policy (kcc-run stores "fasttrack": "1").
 FASTTRACK=0
 if [ "$RUN_PROFILE" = "fasttrack" ]; then FASTTRACK=1
-elif [ -z "$RUN_PROFILE" ] && [ -f "$REPO_ROOT/coordination/run/run.json" ] && grep -qE '"fasttrack"[[:space:]]*:[[:space:]]*"?1"?([^0-9]|$)' "$REPO_ROOT/coordination/run/run.json"; then FASTTRACK=1; fi
+elif [ -z "$RUN_PROFILE" ] && [ -f "$REPO_ROOT/coordination/run/run.json" ]; then
+  _ft_re='"fasttrack"[[:blank:]]*:[[:blank:]]*"?1"?([^0-9]|$)'; _ft_txt="$(<"$REPO_ROOT/coordination/run/run.json")"
+  if [[ "$_ft_txt" =~ $_ft_re ]]; then FASTTRACK=1; fi
+fi
 
 # ---------------------------------------------------------------------------
 # Markdown helpers (mirrored 1:1 in check-run-conformance.ps1)
@@ -129,7 +155,7 @@ has_heading() { # file heading-regex (case-insensitive)
 
 section() { # file heading-regex -> lines between '## heading' and next '## '
   [ -f "$1" ] || return 0
-  awk -v pat="$(lower "$2")" '
+  lc "$2"; awk -v pat="$LC" '
     { sub(/\r$/, "") }
     /^##[ \t]/ {
       if (inside) stop = 1
@@ -140,7 +166,7 @@ section() { # file heading-regex -> lines between '## heading' and next '## '
 }
 
 table_field() { # file column -> value of column in first data row of first table; __NOCOL__ if absent
-  awk -v col="$(lower "$2")" '
+  lc "$2"; awk -v col="$LC" '
     function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
     { sub(/\r$/, "") }
     fin { next }
@@ -164,7 +190,7 @@ table_field() { # file column -> value of column in first data row of first tabl
 
 status_rank() {
   local t
-  t="$(lower "$1" | sed 's/^[[:space:]]*//')"
+  lc "$1"; t="${LC#"${LC%%[![:space:]]*}"}"
   case "$t" in
     "") echo -1 ;;
     draft*) echo 0 ;;
@@ -189,7 +215,7 @@ backlog_dir() { # spec-dir -> Backlog folder with its real on-disk casing
   local d first=""
   for d in "$1"/*; do
     [ -d "$d" ] || continue
-    case "$(basename "$d")" in
+    case "${d##*/}" in
       Backlog) printf '%s' "$d"; return 0 ;;
       [Bb][Aa][Cc][Kk][Ll][Oo][Gg]) if [ -z "$first" ]; then first="$d"; fi ;;
     esac
@@ -204,9 +230,9 @@ list_items() { # spec-dir -> key \t type \t path
   [ -n "$bd" ] || return 0
   for f in "$bd"/*.md; do
     [ -f "$f" ] || continue
-    n="$(basename "$f")"
-    key="$(printf '%s' "$n" | grep -oE '^(Story|Enabler|Bug)-[0-9]+' || true)"
-    [ -n "$key" ] || continue
+    n="${f##*/}"
+    [[ "$n" =~ ^(Story|Enabler|Bug)-[0-9]+ ]] || continue
+    key="${BASH_REMATCH[0]}"
     printf '%s\t%s\t%s\n' "$key" "${key%%-*}" "$f"
   done
   return 0
@@ -310,12 +336,12 @@ list_all_specs() {
   [ -d "$SPECS_DIR" ] || return 0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    name="$(basename "$d")"
+    name="${d##*/}"
     [ -f "$d/$name.md" ] || continue
-    id="$(printf '%s' "$name" | grep -oE '^SPEC-[0-9]+' || true)"
-    [ -n "$id" ] || continue
-    group="$(dirname "$d")"
-    idea="$(basename "$group" | grep -oE '^IDEA-[0-9]+' || true)"
+    [[ "$name" =~ ^SPEC-[0-9]+ ]] || continue
+    id="${BASH_REMATCH[0]}"
+    group="${d%/*}"
+    idea=""; if [[ "${group##*/}" =~ ^IDEA-[0-9]+ ]]; then idea="${BASH_REMATCH[0]}"; fi
     legacy=0
     if [ -f "$d/backlog.md" ]; then legacy=1; fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$d" "$d/$name.md" "$group" "$idea" "$legacy"
@@ -328,8 +354,8 @@ EOF
 spec_match() { # name id
   local s n
   [ -n "$SPEC" ] || return 0
-  s="$(lower "$SPEC")"; n="$(lower "$1")"
-  if [ "$n" = "$s" ] || [ "$(lower "$2")" = "$s" ]; then return 0; fi
+  lc "$SPEC"; s="$LC"; lc "$1"; n="$LC"; lc "$2"
+  if [ "$n" = "$s" ] || [ "$LC" = "$s" ]; then return 0; fi
   case "$n" in "$s"-*) return 0 ;; esac
   return 1
 }
@@ -772,28 +798,79 @@ EOF
 # Required: a row for every QG-* id on the plan's `Gates:` line and, when QG-PROD is cited, for every numbered
 # item of the QG-PROD checklist table in quality-gates.md (a row says `QG-PROD-7`). `Covered by` holds
 # Test IDs (T-007, T-024..T-029), `check:<QG-ID>` or `verifier:<step>`, separated by commas.
+#
+# Guardrails (round 11: GR-012 "declared libraries are the ones used" had no test or check): every active GR-nnn id
+# in architecture/guardrails.md or the `## Guardrails` table of quality-gates.md / architecture.md also needs a row,
+# `Covered by` the same forms, `static-rules:<rule-id>` (a rule id in architecture/static-rules.tsv) or `n/a:<reason>`.
+guardrail_ids() { # -> active GR-nnn ids, one per line
+  local f
+  {
+    if [ -f "$ARCH_DIR/guardrails.md" ]; then tr -d '\r' < "$ARCH_DIR/guardrails.md"; fi
+    for f in quality-gates.md architecture.md; do
+      if [ -f "$ARCH_DIR/$f" ]; then section "$ARCH_DIR/$f" 'guardrails'; fi
+    done
+  } | awk '
+    function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
+    !/^[ \t]*\|/ { si = 0; next }
+    /^[ \t]*\|[ \t:|-]*$/ { next }
+    {
+      line = $0; gsub(/\\\|/, "/", line)
+      n = split(line, c, "|")
+      if (trim(c[2]) !~ /^GR-[0-9]+/) {
+        if (tolower(trim(c[2])) == "id" || tolower(trim(c[2])) ~ /^(guardrail|#)$/) { si = 0; for (i = 1; i <= n; i++) if (tolower(trim(c[i])) == "status") si = i }
+        next
+      }
+      id = trim(c[2]); match(id, /^GR-[0-9]+/); id = substr(id, RSTART, RLENGTH)
+      if (si && si <= n && tolower(trim(c[si])) ~ /(retired|superseded|withdrawn|deprecated|obsolete)/) next
+      if (!(id in seen)) { seen[id] = 1; print id }
+    }'
+}
+
+static_rule_ids() { # -> rule ids of architecture/static-rules.tsv
+  [ -f "$ARCH_DIR/static-rules.tsv" ] || return 0
+  tr -d '\r' < "$ARCH_DIR/static-rules.tsv" | awk -F'\t' '/^#/ || NF < 2 { next } tolower($1) == "id" { next } $1 != "" { print $1 }'
+}
+
 gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
-  local plan="$1" qg="$2" tests="$3" cited prod=""
+  local plan="$1" qg="$2" tests="$3" cited prod="" grs srs hassr=0
   cited="$(tr -d '\r' < "$plan" | grep -iE '^[[:space:]]*([-*][[:space:]]+)?[*_]*gates[[:space:]]*[*_]*[[:space:]]*:' | grep -oE 'QG-[A-Z0-9]+(-[A-Z0-9]+)*' | awk '!s[$0]++' || true)"
-  if printf '%s\n' "$cited" | grep -qx 'QG-PROD'; then
+  grs="$(guardrail_ids)"
+  srs="$(static_rule_ids)"
+  if [ -f "$ARCH_DIR/static-rules.tsv" ]; then hassr=1; fi
+  if [ -f "$qg" ] && printf '%s\n' "$cited" | grep -qx 'QG-PROD'; then
     prod="$(tr -d '\r' < "$qg" | awk '
       /^#/ { inside = ($0 ~ /QG-PROD/); next }
       inside && /^[ \t]*\|/ { c = $0; sub(/^[ \t]*\|[ \t]*/, "", c); if (c ~ /^[0-9]+[ \t]*\|/) { sub(/[ \t]*\|.*/, "", c); print c + 0 } }' | awk '!s[$0]++')"
   fi
   if ! has_heading "$plan" "Gates coverage"; then
-    printf '%s\n' "has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites to Test IDs, check:<QG-ID> or verifier:<step>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run)."
+    printf '%s\n' "has no '## Gates coverage' table (| Gate | Covered by |): map every architecture gate the plan cites (and every architecture guardrail GR-nnn) to Test IDs, check:<QG-ID>, verifier:<step> or static-rules:<rule-id>. A gate no quality-gate check implements needs a Test ID of its own in the atomic table (round 10: QG-STATIC had no test, the image scan was claimed but never run)."
     return 0
   fi
   {
     printf '@@T\n'; printf '%s\n' "$tests" | cut -f1
     printf '@@R\n'; printf '%s\n' "$cited"
     printf '@@P\n'; printf '%s\n' "$prod"
+    printf '@@GR\n'; printf '%s\n' "$grs"
+    printf '@@S\n'; printf '%s\n' "$srs"
     printf '@@G\n'; section "$plan" 'gates coverage' | tr -d '\r'
-  } | awk -v checks="$GATE_CHECKS" '
+  } | awk -v checks="$GATE_CHECKS" -v hassr="$hassr" '
     function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
-    function badpart(p,   n, k, tok, tk, e, lo, hi) {
+    function badpart(p, isgr,   n, k, tok, tk, e, lo, hi) {
       p = trim(p)
       if (p == "") return "empty entry"
+      if (tolower(substr(p, 1, 13)) == "static-rules:") {
+        tok = trim(substr(p, 14))
+        if (tok == "") return "static-rules: names no rule id"
+        if (!hassr) return "static-rules: but architecture/static-rules.tsv does not exist"
+        n = split(tok, tk, /[ \t]+/)
+        for (k = 1; k <= n; k++) if (tk[k] != "" && !(tk[k] in sr)) return "unknown static rule \"" tk[k] "\" (not in architecture/static-rules.tsv)"
+        return ""
+      }
+      if (tolower(substr(p, 1, 4)) == "n/a:") {
+        if (!isgr) return "n/a: is allowed only for a guardrail GR-nnn"
+        if (trim(substr(p, 5)) == "") return "n/a: names no reason"
+        return ""
+      }
       if (tolower(substr(p, 1, 6)) == "check:") {
         tok = trim(substr(p, 7))
         if ((" " checks " ") !~ (" " tok " ")) return "unknown check \"" tok "\" (quality-gate implements: " checks ")"
@@ -819,6 +896,10 @@ gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
     /^@@R$/ { part = "R"; next }
     /^@@P$/ { part = "P"; next }
     /^@@G$/ { part = "G"; next }
+    /^@@GR$/ { part = "GR"; next }
+    /^@@S$/ { part = "S"; next }
+    part == "GR" { if ($0 != "") greq[++ngr] = trim($0); next }
+    part == "S" { if ($0 != "") sr[trim($0)] = 1; next }
     part == "T" { if ($0 != "") tid[trim($0)] = 1; next }
     part == "R" { if ($0 != "") { req[++nreq] = $0 }; next }
     part == "P" { if ($0 != "") { preq[++npreq] = $0 }; next }
@@ -833,14 +914,19 @@ gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
       if (line ~ /^[ \t]*\|[ \t:|-]*$/) next
       if (!gi || !ci || gi > n) next
       g = c[gi]; cov = (ci <= n) ? trim(c[ci]) : ""
-      ids = ""
+      ids = ""; nonGr = 0
+      while (match(g, /(^|[^A-Za-z0-9_-])GR-[0-9]+/)) {
+        s = substr(g, RSTART, RLENGTH); sub(/^[^G]+/, "", s)
+        ids = ids " " s
+        g = substr(g, 1, RSTART - 1) " " substr(g, RSTART + RLENGTH)
+      }
       while (match(g, /QG-PROD[-_ #.\/:]*([Ii]tem[ ]*)?[0-9]+/)) {
         s = substr(g, RSTART, RLENGTH); sub(/^QG-PROD[-_ #.\/:]*([Ii]tem[ ]*)?/, "", s)
-        ids = ids " QG-PROD-" (s + 0)
+        ids = ids " QG-PROD-" (s + 0); nonGr = 1
         g = substr(g, 1, RSTART - 1) " " substr(g, RSTART + RLENGTH)
       }
       while (match(g, /QG-[A-Z0-9]+(-[A-Z0-9]+)*/)) {
-        ids = ids " " substr(g, RSTART, RLENGTH)
+        ids = ids " " substr(g, RSTART, RLENGTH); nonGr = 1
         g = substr(g, 1, RSTART - 1) " " substr(g, RSTART + RLENGTH)
       }
       if (ids == "") next
@@ -848,7 +934,7 @@ gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
       if (cov == "") why = "empty Covered by"
       else {
         np = split(cov, parts, /[;,]/)
-        for (k = 1; k <= np && why == ""; k++) why = badpart(parts[k])
+        for (k = 1; k <= np && why == ""; k++) why = badpart(parts[k], !nonGr)
       }
       m = split(ids, idl, " ")
       for (k = 1; k <= m; k++) {
@@ -872,11 +958,14 @@ gates_coverage_problems() { # plan-file quality-gates-file plan_tests-output
         if (!(r in named)) miss = miss (miss == "" ? "" : ", ") r
       }
       if (miss != "") print "## Gates coverage has no row for: " miss ". Add one per gate the plan cites (and one per numbered QG-PROD checklist item as QG-PROD-<n>)."
+      gm = ""
+      for (i = 1; i <= ngr; i++) if (!(greq[i] in named)) gm = gm (gm == "" ? "" : ", ") greq[i]
+      if (gm != "") print "## Gates coverage has no row for guardrail(s): " gm ". Add one per architecture guardrail (Covered by: Test ID, check:<ID>, verifier:<step>, static-rules:<rule-id> or n/a:<reason>). Round 11: GR-012 (declared libraries are used) had no test or check, so the code ignored the Decisions table."
     }'
 }
 
 check_plan() {
-  local specs id name dir file group idea legacy plan prel rank tests it_key it_type it_file ac n waves itemfiles
+  local specs id name dir file group idea legacy plan prel rank tests it_key it_type it_file ac n waves itemfiles grids
   specs="$(target_specs)"
   if [ -n "$SPEC" ] && [ -z "$specs" ]; then
     violation "SPEC-000" "error" "planner" "No spec folder matches $SPEC." "specs"
@@ -909,7 +998,8 @@ check_plan() {
     fi
     tests="$(plan_tests "$plan")"
     # PLAN-007: every architecture gate the plan cites maps to a Test ID, a quality-gate check, or a verifier step.
-    if [ "$legacy" != "1" ] && [ -f "$ARCH_DIR/quality-gates.md" ]; then
+    grids="$(guardrail_ids)"
+    if [ "$legacy" != "1" ] && { [ -f "$ARCH_DIR/quality-gates.md" ] || [ -n "$grids" ]; }; then
       while IFS= read -r gmsg; do
         [ -n "$gmsg" ] || continue
         violation "PLAN-007" "error" "planner" "plan.md $gmsg" "$prel"

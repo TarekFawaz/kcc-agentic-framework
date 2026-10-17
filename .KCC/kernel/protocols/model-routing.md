@@ -42,15 +42,22 @@ No signal, no move. The registry of what each tier is on each harness is `kernel
 
 ## Rules (applied in this order; tier is clamped to default +/- 1)
 
-1. Start at the agent's default tier and effort.
-2. **Task floor.** `research`, `architecture`, `security` never run below `balanced`.
-3. **Domain.** `novel`: one tier up and effort `high`. `common`: one tier down for `spec`,
-   `plan`, `docs`, `scaffold` (writing well-known things), effort unchanged.
+1. Start at the agent's default tier and effort. The first reason of every pick says so
+   (`agent default: balanced / high`); each later reason names one adjustment and its cause.
+2. **Task floor.** `research`, `architecture`, `security`, `spec`, `plan` never run below `balanced`, whatever the domain
+   says (round 11: the per-spec spec-writers and planners ran on `fast`, four of five planners exited without writing
+   `plan.md`, and Haiku costs the same per token as Sonnet on this account, so the step down saved nothing).
+3. **Domain.** `novel`: one tier up and effort `high`. `common`: one tier down for `docs` and `scaffold` only
+   (mechanical text: PR drafts, config scaffolds), effort unchanged. `spec` and `plan` are not lowered by a common domain.
 4. **Risk.** Never below `balanced`; effort `high`.
 5. **Size.** Large: effort one step up.
-6. **Retry.** Attempt 2 or later: one tier up and effort one step up, for the agent that is fixing something
-   (implementer, spec-writer ...). A verifier or critic (task `review`) is **never** escalated for a retry: its second run
-   is a re-check of the fixes, not harder work (round 10: a retried verifier ran on Opus at xhigh for 25 minutes).
+6. **Retry.** Attempt 2 or later, by task (`RETRY_RULES` in `router.ts`, the same table in both ports):
+   - `implement` (and the other fixers): one tier up and effort one step up.
+   - `spec`, `plan` (planning): the tier **does not** go up and the effort rises one step to at most `high`, never
+     `xhigh`; an effort the first run already had is not lowered. A planning retry is a rewrite of a file the first run
+     failed to write, not harder reasoning (round 11: Haiku, then Sonnet at xhigh for 10-19 minutes each).
+   - `review` (a verifier or critic): **never** escalated; its second run is a re-check of the fixes, not harder work
+     (round 10: a retried verifier ran on Opus at xhigh for 25 minutes).
 7. **Budget.** Under 20% left: never above `balanced` unless risk.
 8. Effort is clamped to `low` .. `xhigh`; `max` is a human choice only.
 9. **Caller ceilings.** `kcc-route -MaxTier / -MaxEffort` (`--max-tier / --max-effort`) cap the result. `kcc-run` caps REVIEW
@@ -58,9 +65,22 @@ No signal, no move. The registry of what each tier is on each harness is `kernel
    full TEST pass keeps what rules 1-7 give (a security-sensitive large spec still gets `high` or `xhigh`).
 
 Examples: an implementer (`fast`, `medium`) on a common CRUD wave stays `fast / medium`; the same
-implementer on an auth module (risk) runs `balanced / high`; a spec-writer (`balanced`, `high`) on a
-common domain writes on `fast / high`; an architect (`balanced`, `high`) on a novel domain runs
-`strong / high`.
+implementer on an auth module (risk) runs `balanced / high`; a spec-writer or planner (`balanced`, `high`) on a
+common domain stays on `balanced / high`, and so does its retry; an architect (`balanced`, `high`) on a novel domain
+runs `strong / high`.
+
+## The reasons line
+
+`reasons` is a list joined with `; ` (events and the `## Routing` table show it verbatim, the dashboard too), in plain
+English, kept short (a typical pick is under 160 characters; four stacked adjustments plus a cap reach about 170). Every pick has at least the first item, so a default pick is
+no longer an empty or `default` reason. Example for an implementer retry on an auth item:
+
+`agent default: balanced / medium; security-sensitive (auth): effort high; large unit: effort up; attempt 2: tier up, effort unchanged`
+
+Other forms: `spec never runs below balanced: tier raised`, `novel domain: tier up, effort high`,
+`attempt 2: effort raised to high, tier unchanged for planning`, `budget under 20%: tier capped at balanced`,
+`capped at balanced for review`, `effort capped at high for review`. A verifier retry adds nothing (it is routed like its
+first run).
 
 ## Plan time, per backlog item (`## Routing`)
 

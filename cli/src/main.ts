@@ -66,9 +66,10 @@ Run
   run --input <idea|path|IDEA-ID|SPEC-ID|all> [kcc-run options]
                       Drive the lifecycle; on a usage limit it waits and resumes.
   run --resume        Continue a suspended or paused run.
-                      After SPECS, the spec-writer (WRITE) and the planner (PLAN) run for all specs
-                      at the same time; then each spec builds as soon as the specs it depends on
-                      are done, independent ones side by side (--max-parallel N, default 4).
+                      After SPECS, the spec-writer (WRITE) and the planner (PLAN) run for ALL specs
+                      at the same time (no limit; --max-fanout N sets one); then each spec builds as
+                      soon as the specs it depends on are done, independent ones side by side
+                      (--max-parallel N, default 4, bounds only these build lanes).
   run --lane SPEC-X --answer <choice>
                       Answer the gate a spec stopped at, then: kcc run --resume
   run --wrap [--harness <name>] -- <command...>

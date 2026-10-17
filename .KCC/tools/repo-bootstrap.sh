@@ -20,7 +20,16 @@
 set -euo pipefail
 
 VERSION="1.0.0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# abs_dir DIR -> ABS: what `cd DIR && pwd` prints; no fork for an absolute path without dot segments (a fork costs ~0.3 s on Git Bash for Windows)
+abs_dir() {
+  case "$1" in
+    /*) case "$1/" in */./*|*/../*|*//*) ABS="$(cd "$1" && pwd)" ;; *) ABS="${1%/}"; [[ -n "$ABS" ]] || ABS=/ ;; esac ;;
+    *) ABS="$(cd "$1" && pwd)" ;;
+  esac
+}
+SCRIPT_DIR="${BASH_SOURCE[0]}"
+case "$SCRIPT_DIR" in */*) SCRIPT_DIR="${SCRIPT_DIR%/*}" ;; *) SCRIPT_DIR="." ;; esac
+abs_dir "$SCRIPT_DIR"; SCRIPT_DIR="$ABS"
 REPO_ROOT=""
 JSON=0
 APPLY=""
@@ -31,6 +40,8 @@ EMIT=0
 HOOK_MARKER="KCC-PRE-COMMIT"
 HOOK_NAMES="pre-commit commit-msg pre-push"
 hook_marker() { case "$1" in pre-commit) echo "KCC-PRE-COMMIT" ;; commit-msg) echo "KCC-COMMIT-MSG" ;; pre-push) echo "KCC-PRE-PUSH" ;; esac; }
+# file_has FILE TEXT: the file contains TEXT (grep -q on a fixed word, without the process)
+file_has() { local t; t="$(<"$1")" 2>/dev/null || return 1; [[ "$t" == *"$2"* ]]; }
 
 usage() {
   cat >&2 <<'EOF'
@@ -64,7 +75,7 @@ if [[ -z "$REPO_ROOT" ]]; then
   if [[ "$(basename "$PARENT")" == ".KCC" ]]; then REPO_ROOT="$(dirname "$PARENT")"; else REPO_ROOT="$PARENT"; fi
 fi
 [[ -d "$REPO_ROOT" ]] || die_usage "repo root not found: $REPO_ROOT"
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+abs_dir "$REPO_ROOT"; REPO_ROOT="$ABS"
 SETTINGS_FILE="$REPO_ROOT/.KCC/settings.json"
 HOOK_SRC_DIR="$SCRIPT_DIR/hooks"
 
@@ -135,25 +146,42 @@ detect() {
   DECISION="$(settings_decision || true)"
   have git || return 0
   GIT_CLI=present
-  if g rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # One rev-parse answers "inside a work tree?", the way up to the top level and the hooks folder (it used to be three git processes).
+  local rp rp_tree="" rp_up="" rp_hooks="" rp_n=0 rp_l remotes st_out st_l
+  rp="$(g rev-parse --is-inside-work-tree --show-cdup --git-path hooks 2>/dev/null || true)"
+  while IFS= read -r rp_l; do
+    case $rp_n in 0) rp_tree="$rp_l" ;; 1) rp_up="$rp_l" ;; 2) rp_hooks="$rp_l" ;; esac
+    rp_n=$((rp_n + 1))
+  done <<< "$rp"
+  # --show-cdup prints an empty line at the top level, so the lines are: true, (cdup), hooks path
+  if [[ "$rp_tree" == "true" ]]; then
     GIT_STATE=repo
-    TOPLEVEL="$(cd "$REPO_ROOT" && cdup="$(git rev-parse --show-cdup)" && cd "./$cdup" && pwd)"
-    if g rev-parse --verify -q HEAD >/dev/null 2>&1; then COMMITS="$(g rev-list --count HEAD 2>/dev/null || echo 0)"; fi
+    if [[ -z "$rp_up" ]]; then TOPLEVEL="$REPO_ROOT"; else TOPLEVEL="$(cd "$REPO_ROOT" && cd "./$rp_up" && pwd)"; fi
+    COMMITS="$(g rev-list --count HEAD 2>/dev/null || echo 0)"
     BRANCH="$(g symbolic-ref --short -q HEAD 2>/dev/null || true)"
-    REMOTE_NAME="$(g remote 2>/dev/null | grep -x origin || g remote 2>/dev/null | head -n 1 || true)"
+    # origin when there is one, else the first remote (one git call; was one or two plus grep and head)
+    remotes="$(g remote 2>/dev/null || true)"
+    while IFS= read -r rp_l; do
+      [[ -n "$rp_l" ]] || continue
+      if [[ -z "$REMOTE_NAME" ]]; then REMOTE_NAME="$rp_l"; fi
+      if [[ "$rp_l" == "origin" ]]; then REMOTE_NAME="origin"; break; fi
+    done <<< "$remotes"
     if [[ -n "$REMOTE_NAME" ]]; then
       REMOTE_RAW="$(g remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
       REMOTE="$(redact_url "$REMOTE_RAW")"
     fi
-    DIRTY="$(g status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-    local hp; hp="$(cd "$REPO_ROOT" && git rev-parse --git-path hooks 2>/dev/null || true)"
+    # the number of changed paths, counted in bash (was status | wc | tr)
+    st_out="$(g status --porcelain 2>/dev/null || true)"
+    DIRTY=0
+    while IFS= read -r st_l; do if [[ -n "$st_l" ]]; then DIRTY=$((DIRTY + 1)); fi; done <<< "$st_out"
+    local hp="$rp_hooks"
     if [[ -n "$hp" ]]; then
       case "$hp" in /*|[A-Za-z]:*) HOOKS_DIR="$hp" ;; *) HOOKS_DIR="$REPO_ROOT/$hp" ;; esac
-      if [[ -f "$HOOKS_DIR/pre-commit" ]] && grep -q "$HOOK_MARKER" "$HOOKS_DIR/pre-commit" 2>/dev/null; then HOOKS=kcc-pre-commit; fi
+      if [[ -f "$HOOKS_DIR/pre-commit" ]] && file_has "$HOOKS_DIR/pre-commit" "$HOOK_MARKER"; then HOOKS=kcc-pre-commit; fi
     fi
     local hn
     for hn in $HOOK_NAMES; do
-      if [[ -n "$HOOKS_DIR" && -f "$HOOKS_DIR/$hn" ]] && grep -q "$(hook_marker "$hn")" "$HOOKS_DIR/$hn" 2>/dev/null; then HOOKS_INSTALLED="${HOOKS_INSTALLED:+$HOOKS_INSTALLED,}$hn"
+      if [[ -n "$HOOKS_DIR" && -f "$HOOKS_DIR/$hn" ]] && file_has "$HOOKS_DIR/$hn" "$(hook_marker "$hn")"; then HOOKS_INSTALLED="${HOOKS_INSTALLED:+$HOOKS_INSTALLED,}$hn"
       else HOOKS_MISSING="${HOOKS_MISSING:+$HOOKS_MISSING,}$hn"; fi
     done
   fi
@@ -258,6 +286,7 @@ coordination/run/
 coordination/gates/
 coordination/checkpoints/
 .kcc-lanes/
+.kcc-lane/
 coordination/lanes.json
 
 node_modules/

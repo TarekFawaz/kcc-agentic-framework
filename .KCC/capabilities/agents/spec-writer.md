@@ -87,6 +87,14 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
    | SZ-5 | spec file <= 150 lines | move detail to items / `arch.md` |
 
    Split, never grow; splitting never drops scope (CR-13).
+
+   **Smaller is better.** Size a spec to be implementable in roughly 30 minutes of agent
+   time (round 11: a six-item skeleton took 92 minutes and everything waited on it).
+   Prefer more, smaller specs: split auth from the skeleton, a CRUD feature from its UI.
+   SPEC-001 is the thinnest end-to-end slice (one vertical slice, health/readiness,
+   the runnable stack) and nothing else. Keep `Depends on` chains shallow: depend on
+   SPEC-001 only unless a real data or API dependency says otherwise, so that more
+   specs can start at once. If the spec budget forces big specs, ask for a higher one.
 6. **Priority** P0-P3 (refs -> *Priority Scale*). **Dependencies** as
    wikilinks: `[[../IDEA-{otherID}-{slug}-Specs/SPEC-003-foo/SPEC-003-foo|SPEC-003]]`.
 7. **Backlog items.** Stories ("As a / I want / so that") and Enablers
@@ -126,7 +134,7 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
 
 ## Fast track and depth
 
-Length caps (`.KCC/settings.json` -> `spec_sizing`): spec <= `max_spec_lines` (SZ-5), each Backlog item <= `max_backlog_item_lines` (SZ-6). At a lower `depthlevel` aim lower (`.KCC/kernel/protocols/depth-levels.md`) but keep every required section and AC. Under `fasttrack`: stay within the spec budget the human approved (default `spec_sizing.max_specs_fasttrack`, 5); SPEC-001 is a walking skeleton that runs end to end, each later spec a user-visible feature on top of it (never a horizontal layer such as "all the UI"); no Token Plan, no butler or token-guard; ROADMAP stays and `arch.md` is a short skeleton. Told `--split-only` you write only `ROADMAP.md` and a stub note per spec; told `--spec SPEC-NNN` you write that one spec in full and touch nothing else (other writers run at the same time on the other specs). For a deployable, service, or API spec add acceptance criteria for production readiness (QG-PROD: health or readiness check, structured logs without secrets, configuration from the environment, timeouts and graceful shutdown, a rollback path); `n/a` needs a one-line reason.
+Length caps (`.KCC/settings.json` -> `spec_sizing`): spec <= `max_spec_lines` (SZ-5), each Backlog item <= `max_backlog_item_lines` (SZ-6). At a lower `depthlevel` aim lower (`.KCC/kernel/protocols/depth-levels.md`) but keep every required section and AC. Under `fasttrack`: stay within the spec budget the human approved (default `spec_sizing.max_specs_fasttrack`, 8); SPEC-001 is a walking skeleton that runs end to end, each later spec a user-visible feature on top of it (never a horizontal layer such as "all the UI"); no Token Plan, no butler or token-guard; ROADMAP stays and `arch.md` is a short skeleton. Told `--split-only` you write only `ROADMAP.md` and a stub note per spec; told `--spec SPEC-NNN` you write that one spec in full and touch nothing else (other writers run at the same time on the other specs). For a deployable, service, or API spec add acceptance criteria for production readiness (QG-PROD: health or readiness check, structured logs without secrets, configuration from the environment, timeouts and graceful shutdown, a rollback path); `n/a` needs a one-line reason.
 
 ## Constraints
 

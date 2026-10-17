@@ -36,7 +36,8 @@ describe("router parity: router.ts, kcc-route.ps1, kcc-route.sh", () => {
   const input = all.map(line).join(String.fromCharCode(10)) + String.fromCharCode(10);
   const expected = all.map((r) => {
     const x = route({ defaultTier: r.t, defaultEffort: r.e, task: r.task, domain: r.domain, risk: r.risk, complexity: r.cx, items: r.items, files: r.files, attempt: r.attempt, budgetLeftPct: r.budget, maxTier: r.cap, maxEffort: r.capEffort });
-    return `${x.tier} ${x.effort}`;
+    // the ports print the reasons too: the dashboard shows them verbatim, so they must match word for word
+    return `${x.tier} ${x.effort} ${x.reasons.join("; ")}`;
   });
 
   test("the reference is not degenerate: the rows reach every tier and effort the rules can give", () => {
@@ -44,12 +45,24 @@ describe("router parity: router.ts, kcc-route.ps1, kcc-route.sh", () => {
     expect(new Set(expected.map((l) => l.split(" ")[1]))).toEqual(new Set(["low", "medium", "high", "xhigh"]));
   });
 
-  test("bash gives the reference's tier and effort for every row", () => {
+  test("a planning retry keeps its tier and every row of spec/plan retries is covered", () => {
+    const planning = all.filter((r) => (r.task === "spec" || r.task === "plan") && r.attempt >= 2);
+    expect(planning.length).toBeGreaterThan(10);
+    for (const r of planning) {
+      const x = route({ defaultTier: r.t, defaultEffort: r.e, task: r.task, domain: r.domain, risk: r.risk, complexity: r.cx, items: r.items, files: r.files, attempt: r.attempt, budgetLeftPct: r.budget, maxTier: r.cap, maxEffort: r.capEffort });
+      const first = route({ defaultTier: r.t, defaultEffort: r.e, task: r.task, domain: r.domain, risk: r.risk, complexity: r.cx, items: r.items, files: r.files, attempt: 1, budgetLeftPct: r.budget, maxTier: r.cap, maxEffort: r.capEffort });
+      expect(x.tier).toBe(first.tier);
+      expect(EFFORTS.indexOf(x.effort)).toBeGreaterThanOrEqual(EFFORTS.indexOf(first.effort));
+      if (EFFORTS.indexOf(first.effort) < EFFORTS.indexOf("high")) expect(EFFORTS.indexOf(x.effort)).toBeLessThanOrEqual(EFFORTS.indexOf("high"));
+    }
+  });
+
+  test("bash gives the reference's tier, effort and reasons for every row", () => {
     const r = spawnSync("bash", [join(tools, "kcc-route.sh"), "--batch"], { input, encoding: "utf8" });
     expect(r.stdout.trim().split(/\r?\n/)).toEqual(expected);
   });
 
-  test("PowerShell gives the reference's tier and effort for every row", () => {
+  test("PowerShell gives the reference's tier, effort and reasons for every row", () => {
     if (process.platform !== "win32") return;
     const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(tools, "kcc-route.ps1"), "-Batch"], { input, encoding: "utf8" });
     expect(r.stdout.trim().split(/\r?\n/)).toEqual(expected);

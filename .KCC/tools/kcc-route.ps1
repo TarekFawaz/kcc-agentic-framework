@@ -21,7 +21,8 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
     Implementation is capped at settings routing.implement_max_tier (default balanced). The deep tier is never chosen here.
 
     Output: one line  tier<TAB>model<TAB>effort<TAB>reasons<TAB>items   (or -Json). `kcc route` also writes the plan table `## Routing`.
-    -Batch reads signal rows from stdin (parity tests). Exit 0, or 2 on a usage or environment error.
+    The reasons start with the agent default and name each move, separated by '; '.
+    -Batch prints "tier effort reasons" per row and reads signal rows from stdin (parity tests). Exit 0, or 2 on a usage or environment error.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .KCC\tools\kcc-route.ps1 -Agent implementer -Spec SPEC-001 -Wave 2
@@ -91,23 +92,40 @@ function Get-SecurityHit([string]$text) {
 }
 
 # The router: default tier and effort moved by the signals, never more than one tier from the default.
-function Invoke-Route([string]$defTier, [string]$defEffort, [string]$task, [string]$domain, [bool]$risk, [string]$complexity, [int]$items, [int]$files, [int]$attempt, [int]$budget, [string]$capTier, [string]$capEffort = '') {
-    $reasons = @()
+function Invoke-Route([string]$defTier, [string]$defEffort, [string]$task, [string]$domain, [bool]$risk, [string]$complexity, [int]$items, [int]$files, [int]$attempt, [int]$budget, [string]$capTier, [string]$capEffort = '', [string]$riskCause = '') {
     $minT = TierDown $defTier 'fast'; $maxT = TierUp $defTier 'strong'
     $tier = $defTier; $effort = $defEffort; if ($effort -eq 'max') { $effort = 'xhigh' }
+    # every pick states its starting point first (mirror of router.ts)
+    $reasons = @("agent default: $tier / $effort")
     $isRisk = $risk -or $complexity -eq 'high' -or $complexity -eq 'extra-high'
-    if (@('research', 'architecture', 'security') -contains $task -and (Idx $Tiers $tier) -lt 1) { $tier = 'balanced'; $reasons += ($task + ' never runs below balanced') }
-    if ($domain -eq 'novel') { $tier = TierUp $tier $maxT; $effort = EffAtLeast $effort 'high'; $reasons += 'novel domain' }
-    elseif ($domain -eq 'common' -and @('spec', 'plan', 'docs', 'scaffold') -contains $task) { $tier = TierDown $tier $minT; $reasons += ('common domain, ' + $task) }
+    # BALANCED_FLOOR_TASKS: research architecture security spec plan never run below balanced
+    if (@('research', 'architecture', 'security', 'spec', 'plan') -contains $task -and (Idx $Tiers $tier) -lt 1) { $tier = 'balanced'; $reasons += ($task + ' never runs below balanced: tier raised') }
+    if ($domain -eq 'novel') { $tier = TierUp $tier $maxT; $effort = EffAtLeast $effort 'high'; $reasons += 'novel domain: tier up, effort high' }
+    # COMMON_DOMAIN_STEP_DOWN_TASKS: docs scaffold (spec and plan are not here on purpose)
+    elseif ($domain -eq 'common' -and @('docs', 'scaffold') -contains $task) { $tier = TierDown $tier $minT; $reasons += ('common domain, ' + $task + ': tier down') }
     if ($isRisk) {
+        $lifted = ''; if ((Idx $Tiers $tier) -lt 1) { $lifted = ', tier raised to balanced' }
         $tier = TierAtLeast $tier 'balanced'; $effort = EffAtLeast $effort 'high'
-        if ($risk) { $reasons += 'CR-7 risk' } else { $reasons += ('complexity ' + $complexity) }
+        if ($risk) { $cause = 'CR-7 risk'; if ($riskCause) { $cause = $riskCause }; $reasons += ($cause + ': effort ' + $effort + $lifted) } else { $reasons += ('complexity ' + $complexity + ': effort ' + $effort + $lifted) }
     }
-    if ($complexity -eq 'extra-high') { $effort = EffAtLeast $effort 'xhigh'; $reasons += 'extra-high complexity: xhigh effort' }
-    if ($items -gt 3 -or $files -gt 5) { $effort = EffUp $effort; $reasons += 'large unit' }
-    # A retry escalates the agent that fixes something; a verifier or critic (task review) is never escalated for a retry.
-    if ($attempt -ge 2 -and $task -ne 'review') { $tier = TierUp $tier $maxT; $effort = EffUp $effort; $reasons += ('attempt ' + $attempt) }
-    if ($budget -ge 0 -and $budget -lt 20 -and -not $isRisk) { $tier = TierAtMost $tier 'balanced'; $reasons += 'budget under 20%' }
+    if ($complexity -eq 'extra-high') { $effort = EffAtLeast $effort 'xhigh'; $reasons += 'extra-high complexity: effort xhigh' }
+    if ($items -gt 3 -or $files -gt 5) { $effort = EffUp $effort; $reasons += 'large unit: effort up' }
+    # RETRY_RULES (router.ts): a retry escalates the agent that fixes something (tier and effort up one step); a planning retry
+    # (spec, plan) keeps the tier and raises the effort to at most high; a verifier or critic (task review) is never escalated.
+    if ($attempt -ge 2 -and $task -ne 'review') {
+        if ($task -eq 'spec' -or $task -eq 'plan') {
+            $before = $effort
+            if ((Idx $Efforts $effort) -lt (Idx $Efforts 'high')) { $effort = $Efforts[(Idx $Efforts $effort) + 1] }
+            if ($effort -ne $before) { $reasons += ('attempt ' + $attempt + ': effort raised to ' + $effort + ', tier unchanged for planning') } else { $reasons += ('attempt ' + $attempt + ': effort stays ' + $effort + ', tier unchanged for planning') }
+        } else {
+            $t0 = $tier; $e0 = $effort
+            $tier = TierUp $tier $maxT; $effort = EffUp $effort
+            $tw = 'unchanged'; if ($tier -ne $t0) { $tw = 'up' }
+            $ew = 'unchanged'; if ($effort -ne $e0) { $ew = 'up' }
+            $reasons += ('attempt ' + $attempt + ': tier ' + $tw + ', effort ' + $ew)
+        }
+    }
+    if ($budget -ge 0 -and $budget -lt 20 -and -not $isRisk) { $tier = TierAtMost $tier 'balanced'; $reasons += 'budget under 20%: tier capped at balanced' }
     if ((Idx $Tiers $tier) -lt (Idx $Tiers $minT)) { $tier = $minT }
     if ((Idx $Tiers $tier) -gt (Idx $Tiers $maxT)) { $tier = $maxT }
     if ($capTier -and (Idx $Tiers $tier) -gt (Idx $Tiers $capTier)) { $tier = $capTier; $reasons += ('capped at ' + $capTier + ' for ' + $task) }
@@ -125,7 +143,7 @@ if ($Batch) {
         $f = @($line.Trim() -split '\s+') | ForEach-Object { if ($_ -eq '-') { '' } else { $_ } }
         $bud = -1; if ($f[9]) { $bud = [int]$f[9] }
         $r = Invoke-Route $f[0] $f[1] $f[2] $f[3] ($f[4] -eq '1') $f[5] ([int]('0' + $f[6])) ([int]('0' + $f[7])) ([int]('0' + $f[8])) $bud $f[10] $f[11]
-        Write-Output ($r.tier + ' ' + $r.effort)
+        Write-Output ($r.tier + ' ' + $r.effort + ' ' + (@($r.reasons) -join '; '))
     }
     exit 0
 }
@@ -232,8 +250,9 @@ if ($specDir -and (Test-Path -LiteralPath (Join-Path $specDir 'plan.md'))) {
 
 $cap = $MaxTier
 if (-not $cap -and $Task -eq 'implement') { $cap = [string](Get-Setting2 @('routing', 'implement_max_tier') 'balanced') }
-$r = Invoke-Route $DefaultTier $DefaultEffort $Task $Domain ([bool]$Risk) $Complexity $Items $Files $Attempt $BudgetLeft $cap $MaxEffort
-$why = @($r.reasons) + $reasonsExtra
+$riskCause = ''; if ($reasonsExtra.Count -gt 0) { $riskCause = [string]$reasonsExtra[0] }
+$r = Invoke-Route $DefaultTier $DefaultEffort $Task $Domain ([bool]$Risk) $Complexity $Items $Files $Attempt $BudgetLeft $cap $MaxEffort $riskCause
+$why = @($r.reasons)
 $whyText = 'default'; if ($why.Count -gt 0) { $whyText = ($why -join '; ') }
 
 # --- resolve to this harness ---

@@ -42,8 +42,9 @@ Plan the implementation for spec <ARGS>.
 2. Verify the following exist inside the spec folder:
    - `SPEC-{ID}-{slug}.md` with a `## Backlog` table (legacy v5: `backlog.md`);
    - `Backlog/` with `Story-*`, `Enabler-*`, and/or `Bug-*.md` files;
-   - the per-idea index `../IDEA-{ID}-{slug}-Specs.md`.
-   If any are missing, stop and ask spec-writer to regenerate per spec-layout.
+   - the per-idea index `../IDEA-{ID}-{slug}-Specs.md` (the split step writes it; when only this index is missing, write it from
+     `../ROADMAP.md` - a table of the SPEC notes, linking the idea note - and carry on, never stop for it).
+   If anything else is missing, stop and ask spec-writer to regenerate per spec-layout.
 3. Read every `Backlog/Story-*.md` and `Backlog/Enabler-*.md`. Confirm each
    item has `AC-N` IDs, Test Hints, Impacted Files using
    `src/IDEA-{ID}-{slug}/...`, dependencies, dialect, and a passing INVEST
@@ -81,7 +82,8 @@ Plan the implementation for spec <ARGS>.
      checklist item (`QG-PROD-7`), each mapped to Test IDs, `check:<QG-ID>`
      (the implementer runs `quality-gate` and must get that check green) or
      `verifier:<step>`; a gate no `quality-gate` check implements gets its own
-     Test ID (PLAN-007);
+     Test ID; every architecture guardrail `GR-nnn` also gets a row (or
+     `static-rules:<rule-id>`, `n/a:<reason>`) (PLAN-007);
    - self-check with `check-run-conformance -Scope plan`;
    - avoid unnecessary dependencies between stories/enablers.
 7. Display a summary of the plan: backlog items covered, selected dialects

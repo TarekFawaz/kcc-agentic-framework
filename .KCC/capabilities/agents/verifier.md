@@ -134,7 +134,7 @@ Otherwise **CHANGES_NEEDED** (file:line, Test IDs/ACs, Bug links),
 
 The first verification of a spec is a **full pass** (steps 1-15): do all of it, smoke tests and image and dependency scans
 included, and file every finding then; at most two full passes are allowed per spec. When the prompt says
-`RE-VERIFICATION MODE` (a previous `review.md` has the verdict `CHANGES_NEEDED`), run a **scoped pass**:
+`RE-VERIFICATION MODE` (a previous `review.md` has the verdict `CHANGES_NEEDED` or `QUALITY_DEFERRED`), run a **scoped pass**:
 
 1. Re-verify only (a) Bug items whose Status changed since that review (run the regression test and the commands that exercise
    the fix; `fixed` and passing -> `verified`) and (b) the ACs and Test IDs whose files changed in `git diff <commit>..HEAD`

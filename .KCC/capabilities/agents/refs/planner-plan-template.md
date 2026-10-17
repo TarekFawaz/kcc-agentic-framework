@@ -112,14 +112,19 @@ or a file in an item's Impacted Files; the plan follows the standard when they d
 | QG-PROD-7 | check:QG-SBOM, check:QG-IMAGE |
 | QG-STATIC | T-043 |
 | QG-A11Y | T-037..T-038, verifier:visual review of the dark theme |
+| GR-001, GR-002 | static-rules:SR-001 SR-003 |
+| GR-012 | verifier:every package in the Decisions table is imported by src and in the lockfile |
+| GR-006 | n/a: this spec has no web client |
 
 One row per `QG-*` id on the `Gates:` line, plus one `QG-PROD-<n>` row per numbered
-item of the QG-PROD checklist when QG-PROD is cited (PLAN-007, error). `Covered by`:
-Test IDs that exist in the atomic table, `check:<QG-ID>` (a check `quality-gate`
+item of the QG-PROD checklist when QG-PROD is cited, plus one row per guardrail `GR-nnn`
+(`architecture/guardrails.md` or the `## Guardrails` table; ids may share a row) (PLAN-007, error).
+`Covered by`: Test IDs that exist in the atomic table, `check:<QG-ID>` (a check `quality-gate`
 implements: QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST
 QG-SBOM QG-IMAGE QG-STATIC; the implementer runs `quality-gate` on its changes and
-gets it green), or `verifier:<step>`. Comma-separated. A gate no check implements
-gets its own Test ID (a static rule: a test that greps for the forbidden pattern).
+gets it green), or `verifier:<step>`; a guardrail may also use `static-rules:<rule-id>`
+(an id in `architecture/static-rules.tsv`) or `n/a:<reason>`. Comma-separated. A gate no
+check implements gets its own Test ID (a static rule: a test that greps for the forbidden pattern).
 
 ## Routing
 Written by `kcc route` from the Complexity column above; do not fill it by hand.

@@ -5,26 +5,36 @@
 # states, gates, resume. Modes: happy | empty-idea | over-arch | empty-wave | no-fix.
 set -u
 prompt="${1:-}"
-root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$root" || exit 1
-mode="$(cat .kcc-stub/mode 2>/dev/null || echo happy)"
-state="$(printf '%s' "$prompt" | grep -oE 'KCC run state [0-9]+' | grep -oE '[0-9]+$' | head -n 1)"
-spec="$(printf '%s' "$prompt" | grep -oE 'for SPEC-[0-9]+' | grep -oE 'SPEC-[0-9]+' | head -n 1)"
-wave="$(printf '%s' "$prompt" | grep -oE 'wave [0-9]+' | grep -oE '[0-9]+' | head -n 1)"
+# Spawn budget: the stub runs once per dispatch, and under Git Bash on Windows every process costs ~0.4 s, so the preamble below uses
+# builtins for what used to be about twenty processes (dirname, cat, grep, head, date).
+sd="${0%/*}"; [ "$sd" = "$0" ] && sd=.
+cd "$sd/.." || exit 1
+root="$PWD"
+mode=happy; if [ -f .kcc-stub/mode ]; then IFS= read -r mode < .kcc-stub/mode || true; fi
+state=""; spec=""; wave=""
+re_state='KCC run state ([0-9]+)'; re_spec='for (SPEC-[0-9]+)'; re_wave='wave ([0-9]+)'
+if [[ "$prompt" =~ $re_state ]]; then state="${BASH_REMATCH[1]}"; fi
+if [[ "$prompt" =~ $re_spec ]]; then spec="${BASH_REMATCH[1]}"; fi
+if [[ "$prompt" =~ $re_wave ]]; then wave="${BASH_REMATCH[1]}"; fi
+if ! TZ=UTC printf -v clock '%(%H:%M:%S)T' -1 2>/dev/null; then clock="$(date -u +%H:%M:%S)"; fi
+# epoch milliseconds: EPOCHREALTIME (bash 5; its decimal point depends on the locale) or date
+now_ms() { if [ -n "${EPOCHREALTIME:-}" ]; then ms="${EPOCHREALTIME//[.,]/}"; ms="${ms:0:13}"; else ms="$(date +%s%3N)"; fi; }
 # A lane (kcc run) is a copy of the workspace: one calls file per spec, so two lanes never write the same file and the merge has no clash.
 calls=.kcc-stub/calls.log; [ -d .kcc-lane ] && calls=".kcc-stub/calls-${spec:-run}.log"
-printf '%s state=%s spec=%s wave=%s mode=%s\n' "$(date -u +%H:%M:%S)" "${state:-?}" "${spec:-}" "${wave:-}" "$mode" >> "$calls"
+printf '%s state=%s spec=%s wave=%s mode=%s\n' "$clock" "${state:-?}" "${spec:-}" "${wave:-}" "$mode" >> "$calls"
 # Every prompt, for tests that read what a state was told (the scoped re-verification wording, the human note).
 prompts=.kcc-stub/prompts.log; [ -d .kcc-lane ] && prompts=".kcc-stub/prompts-${spec:-run}.log"
 printf '%s\n' "$prompt" >> "$prompts"
 # Epoch milliseconds at the start and the end of the dispatch, for tests that compare when two dispatches ran.
-printf '%s start %s %s\n' "$(date +%s%3N)" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
-sleep "$(cat .kcc-stub/sleep 2>/dev/null || echo 1)"
-printf '%s end %s %s\n' "$(date +%s%3N)" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
+now_ms; printf '%s start %s %s\n' "$ms" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
+nap=1; if [ -f .kcc-stub/sleep ]; then IFS= read -r nap < .kcc-stub/sleep || true; fi
+sleep "$nap"
+now_ms; printf '%s end %s %s\n' "$ms" "${state:-?}" "${spec:-}" >> ".kcc-stub/times-${spec:-run}.log"
 IDEA=IDEA-001-demo
 ID="ideation/$IDEA"
 SPECS="specs/$IDEA-Specs"
-w() { mkdir -p "$(dirname "$1")"; cat > "$1"; }
+# w FILE < text: writes stdin to FILE, making the folder first (builtins: no dirname, no cat)
+w() { local dn="${1%/*}" content; [ "$dn" = "$1" ] && dn=.; [ -d "$dn" ] || mkdir -p "$dn"; IFS= read -r -d '' content || true; printf '%s' "$content" > "$1"; }
 
 case "${state:-}" in
   1)
@@ -228,7 +238,7 @@ EOF
     }
     case "$state" in
       9)
-        w "$SPECS/IDEA-001-demo-Specs.md" <<'EOF'
+        [ -f .kcc-stub/noindex ] || w "$SPECS/IDEA-001-demo-Specs.md" <<'EOF'
 # IDEA-001 specs
 Source idea: [[../../ideation/IDEA-001-demo/idea-001-demo|IDEA-001]]
 EOF
@@ -302,6 +312,32 @@ EOF
     # the FIX state: close every open Bug item (mode no-fix leaves them open)
     [ "$mode" = no-fix ] && exit 0
     for f in "$SPECS"/*/Backlog/Bug-*.md; do [ -f "$f" ] && sed -i 's/| open |/| fixed |/' "$f"; done
+    ;;
+  16)
+    # the verifier: writes review.md with the verdict named in .kcc-stub/verdict (CHANGES_NEEDED, QUALITY_DEFERRED, APPROVED, ...);
+    # writes nothing when that file is absent. The status words follow the review template (lower case, hyphenated).
+    if [ -f .kcc-stub/verdict ]; then
+      verdict="$(tr -d '\r\n' < .kcc-stub/verdict)"
+      sdir="$(ls -d "$SPECS/$spec"-*/ 2>/dev/null | head -n 1)"
+      if [ -n "$sdir" ]; then
+        status="$(printf '%s' "$verdict" | tr 'A-Z_' 'a-z-')"
+        w "${sdir}review.md" <<EOF
+---
+spec-id: $spec
+status: $status
+verdict: $verdict
+commit: abc1234def5678
+---
+# $spec Verification Report
+
+## Evidence
+- \`quality-gate\` exit 3
+
+## Verdict
+**$verdict**
+EOF
+      fi
+    fi
     ;;
   18)
     w "coordination/run/closed.md" <<'EOF'

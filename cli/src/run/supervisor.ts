@@ -6,7 +6,8 @@ import { readJson, writeJson } from "../fsutil";
 import { isWindows, runTool, runToolAsync } from "../platform";
 import { readSettings } from "../settings";
 import { startDashboardServer, type DashServer } from "../commands/dashboard";
-import { findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs } from "./lanes";
+import { type DashStamp, rebuildDashboard } from "./dashstale";
+import { attentionCounts, findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs } from "./lanes";
 import { routeAll } from "./routing";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
@@ -119,16 +120,21 @@ async function superviseDriver(root: string, args: string[], p: Policy, wait: bo
  * the scheduler does while the driver runs, and prints a line so the console shows it is working.
  */
 async function superviseLane(root: string, dir: string, spec: string, args: string[], p: Policy, wait: boolean): Promise<number> {
-  const sync = (): void => {
+  // The dashboard is rebuilt in the background (it used to block this process for the whole build) and only when a file it reads changed
+  // since the last build; the final sync is forced.
+  const stamp: DashStamp = { sig: "", at: 0 };
+  let building: Promise<unknown> = Promise.resolve();
+  const sync = (force = false): Promise<unknown> => {
     try {
       liveSyncLane(root, dir, spec);
-      runTool(root, "build-dashboard", ["--repo-root", root], { capture: true });
+      building = building.then(() => rebuildDashboard(root, stamp, { force })).catch(() => undefined);
     } catch {
       /* a convenience copy; never stops the lane */
     }
+    return building;
   };
   console.log(`kcc: running  in its lane; the workspace and the dashboard are synced every 20 seconds`);
-  const timer = setInterval(sync, 20000);
+  const timer = setInterval(() => void sync(), 20000);
   try {
     let current = args;
     for (let resumes = 0; ; resumes++) {
@@ -140,7 +146,7 @@ async function superviseLane(root: string, dir: string, spec: string, args: stri
     }
   } finally {
     clearInterval(timer);
-    sync();
+    await sync(true);
   }
 }
 
@@ -223,6 +229,7 @@ async function runInner(argv: string[]): Promise<number> {
   let wait = true;
   let lane: string | undefined;
   let maxParallel = 4;
+  let maxFanout: number | undefined; // WRITE and PLAN: every spec at once unless --max-fanout N
   for (let i = 0; i < own.length; i++) {
     const a = own[i] ?? "";
     if (a === "--wrap") wrap = true;
@@ -231,6 +238,7 @@ async function runInner(argv: string[]): Promise<number> {
     else if (a === "--max-resumes") maxResumes = own[++i];
     else if (a === "--lane") lane = (own[++i] ?? "").toUpperCase();
     else if (a === "--max-parallel") maxParallel = Number(own[++i]);
+    else if (a === "--max-fanout") maxFanout = Number(own[++i]);
     else if (a === "--harness") {
       harness = own[++i];
       if (harness) rest.push("--harness", harness);
@@ -240,6 +248,7 @@ async function runInner(argv: string[]): Promise<number> {
   const p = policy(root, harness, maxResumes);
   if (!Number.isInteger(p.maxResumes) || p.maxResumes < 0) throw new UsageError("--max-resumes expects a whole number");
   if (!Number.isInteger(maxParallel) || maxParallel < 1) throw new UsageError("--max-parallel expects a whole number >= 1");
+  if (maxFanout !== undefined && (!Number.isInteger(maxFanout) || maxFanout < 1)) throw new UsageError("--max-fanout expects a whole number >= 1");
 
   if (wrap) {
     if (!wrapped.length) throw new UsageError("usage: kcc run --wrap [--harness <name>] -- <harness command...>");
@@ -260,7 +269,7 @@ async function runInner(argv: string[]): Promise<number> {
     if (!rest.includes("--repo-root")) rest.push("--repo-root", root);
     return superviseDriver(root, rest, p, wait && !passive);
   }
-  return lifecycleRun(root, rest, p, wait, maxParallel);
+  return lifecycleRun(root, rest, p, wait, maxParallel, maxFanout);
 }
 
 /** kcc-run flags that every lane and the closing run inherit. */
@@ -277,11 +286,11 @@ function laneFlags(args: string[]): string[] {
 
 /**
  * The whole lifecycle: the shared states once (REPO .. SPECS), then the WRITE and PLAN states, each for every
- * spec at the same time (a spec-writer, then a planner, per spec, up to --max-parallel, in lanes), then every spec as soon as the specs it depends on are done
+ * spec at the same time (a spec-writer, then a planner, per spec, ALL at once unless --max-fanout N, in lanes; --max-parallel bounds only the build lanes below), then every spec as soon as the specs it depends on are done
  * (independent specs at the same time, in their own lanes), then CLOSE once. The bare kcc-run driver has no scheduler:
  * it plans spec by spec, in the table's own order.
  */
-async function lifecycleRun(root: string, args: string[], p: Policy, wait: boolean, maxParallel: number): Promise<number> {
+async function lifecycleRun(root: string, args: string[], p: Policy, wait: boolean, maxParallel: number, maxFanout?: number): Promise<number> {
   const flags = laneFlags(args);
   const runJson = readJson<{ state?: string; status?: string; fasttrack?: string; depthlevel?: string; silent?: string }>(join(root, "coordination", "run", "run.json"));
   // A resumed run keeps the policy it started with: its lanes must use the same state table.
@@ -302,17 +311,25 @@ async function lifecycleRun(root: string, args: string[], p: Policy, wait: boole
     return 6;
   }
   // Writing or planning one spec needs only its own files, the architecture and the dialects, so all specs go at the same time.
-  const fanned = await fanoutSpecs(root, { passthrough: flags, maxParallel });
-  if (fanned.code !== 0) return fanned.code;
+  const fanned = await fanoutSpecs(root, { passthrough: flags, maxParallel, maxFanout });
+  // Exit 7 = a --silent --assume lane was parked as needs-attention: the run goes on with the other specs, then closes.
+  if (fanned.code !== 0 && fanned.code !== 7) return fanned.code;
   try {
     const routed = routeAll(root);
     if (routed.length) console.log(`kcc: routed ${routed.reduce((n, r) => n + r.routes.length, 0)} backlog items in ${routed.length} plans (model and effort per item, in plan.md -> ## Routing)`);
   } catch {
     /* routing is guidance for the drivers; a plan it cannot read keeps the driver's own rules */
   }
-  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel, from: fanned.after });
-  if (b !== 0) return b;
-  return superviseDriver(root, ["--resume", "--from", "18", ...flags, "--repo-root", root], p, wait);
+  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel, from: fanned.after, hold: fanned.attention });
+  if (b !== 0 && b !== 7) return b;
+  const closed = await superviseDriver(root, ["--resume", "--from", "18", ...flags, "--repo-root", root], p, wait);
+  // The run closed, but specs were parked: exit 7 (items need a human) rather than 0. The list is in coordination/NeedsAttention.md.
+  if (closed === 0 && (b === 7 || fanned.code === 7)) {
+    const c = attentionCounts(join(root, "coordination", "NeedsAttention.md"));
+    console.log(`kcc: needs attention: coordination/NeedsAttention.md - ${c.items} item(s), ${c.open} open`);
+    return 7;
+  }
+  return closed;
 }
 
 export function limits(argv: string[]): number {

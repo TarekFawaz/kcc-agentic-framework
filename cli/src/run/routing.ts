@@ -116,8 +116,9 @@ export function routePlan(root: string, specDir: string, plan: string, o: RouteO
       items: undefined,
       files: facts.files,
       maxTier: o.maxTier ?? "balanced",
+      riskCause: hit ? `security-sensitive (${hit})` : undefined,
     });
-    const why = [...r.reasons, ...(hit ? [`security-sensitive (${hit})`] : [])];
+    const why = r.reasons;
     const model = (reg && modelFor(reg, harness, r.tier)) ?? "";
     return { key: it.key, wave: it.wave, tier: r.tier, model, effort: r.effort, why: why.length ? why.join("; ") : "default" };
   });

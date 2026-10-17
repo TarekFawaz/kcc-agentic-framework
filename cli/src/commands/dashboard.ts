@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse, UsageError, workspace } from "../args";
-import { runTool, runToolAsync, which } from "../platform";
+import { runTool, which } from "../platform";
+import { type DashStamp, rebuildDashboard } from "../run/dashstale";
 import { liveSyncAllLanes } from "../run/lanes";
 
 /**
@@ -92,11 +93,14 @@ export function startDashboardServer(root: string, opts: { port?: number; minAge
   const minAge = opts.minAgeMs ?? 2000;
   let builtAt = 0;
   let building: Promise<void> | null = null;
+  const stamp: DashStamp = { sig: "", at: 0 };
   const fresh = async (): Promise<void> => {
     if (existsSync(file) && Date.now() - builtAt < minAge) return;
     if (!building) {
       liveSyncAllLanes(root); // the page shows the lanes' work, not what the last merge left in the workspace
-      building = runToolAsync(root, "build-dashboard", ["--repo-root", root], { capture: true })
+      // a request that finds no input changed since the last build (and that build recent) is served from it: the page auto-reloads, so
+      // most requests would otherwise start a full rebuild for nothing
+      building = rebuildDashboard(root, stamp, { force: !existsSync(file) })
         .then(() => { builtAt = Date.now(); })
         .catch(() => undefined)
         .finally(() => { building = null; });

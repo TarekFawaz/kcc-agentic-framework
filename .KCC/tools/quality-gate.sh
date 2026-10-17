@@ -20,7 +20,21 @@
 set -euo pipefail
 
 VERSION="1.0.0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Spawn budget: under Git Bash on Windows every fork and exec costs ~0.3-0.4 s, so the helpers below hand results back in variables and
+# use builtins; the tools that do real work (git, the scanners, the build) are untouched. lc: ${x,,} where bash 4 has it, tr on macOS 3.2.
+if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then eval 'lc() { LC="${1,,}"; }'
+else lc() { LC="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"; }; fi
+# abs_dir DIR -> ABS: what `cd DIR && pwd` prints; no fork for an absolute path without dot segments (a missing folder still fails in cd)
+abs_dir() {
+  [[ -d "$1" ]] || cd "$1"
+  case "$1" in
+    /*) case "$1/" in */./*|*/../*|*//*) ABS="$(cd "$1" && pwd)" ;; *) ABS="${1%/}"; [[ -n "$ABS" ]] || ABS=/ ;; esac ;;
+    *) ABS="$(cd "$1" && pwd)" ;;
+  esac
+}
+SCRIPT_DIR="${BASH_SOURCE[0]}"
+case "$SCRIPT_DIR" in */*) SCRIPT_DIR="${SCRIPT_DIR%/*}" ;; *) SCRIPT_DIR="." ;; esac
+abs_dir "$SCRIPT_DIR"; SCRIPT_DIR="$ABS"
 REPO_ROOT=""
 JSON=0
 SPEC=""
@@ -61,10 +75,10 @@ if [[ -z "$REPO_ROOT" ]]; then
   if [[ "$(basename "$PARENT")" == ".KCC" ]]; then REPO_ROOT="$(dirname "$PARENT")"; else REPO_ROOT="$PARENT"; fi
 fi
 [[ -d "$REPO_ROOT" ]] || die_env "repo root not found: $REPO_ROOT"
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+abs_dir "$REPO_ROOT"; REPO_ROOT="$ABS"
 
 if [[ -n "$SPEC" && ! "$SPEC" =~ ^SPEC-[0-9A-Za-z]+$ ]]; then die_env "invalid --spec '$SPEC' (expected SPEC-{ID})"; fi
-SCOPE="$(printf '%s' "$SCOPE" | tr 'A-Z' 'a-z' | tr -d ' ')"
+lc "$SCOPE"; SCOPE="${LC// /}"
 for s in ${SCOPE//,/ }; do
   case "$s" in all|lock|build|lint|test|coverage|secrets|deps|sast|static|sbom|image) ;; *) die_env "unknown scope '$s'";; esac
 done
@@ -72,16 +86,28 @@ if [[ $FAST -eq 1 ]]; then SCOPE="secrets"; fi
 in_scope() { [[ ",$SCOPE," == *",all,"* || ",$SCOPE," == *",$1,"* ]]; }
 
 # ---------------------------------------------------------------- JSON helpers
-json_escape() {
+json_escape_v() {
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
-  s="${s//$'\t'/\\t}"
-  printf '%s' "$s"
+  JE="${s//$'\t'/\\t}"
 }
-jstr() { if [[ -z "$1" ]]; then printf 'null'; else printf '"%s"' "$(json_escape "$1")"; fi; }
+json_escape() { json_escape_v "$1"; printf '%s' "$JE"; }
+jstr_v() { if [[ -z "$1" ]]; then JS=null; else json_escape_v "$1"; JS="\"$JE\""; fi; }
+jstr() { jstr_v "$1"; printf '%s' "$JS"; }
+# pjn FORMAT ARGS... -> PJ: printf where %j is the next argument as jstr (null when empty) and %s is it as is; no command substitution
+pjn() {
+  local fmt="$1" out="" a head; shift
+  while [[ "$fmt" == *%[js]* ]]; do
+    head="${fmt%%%[js]*}"; a="${fmt:${#head}+1:1}"; fmt="${fmt:${#head}+2}"
+    out+="$head"
+    if [[ "$a" == j ]]; then jstr_v "${1-}"; out+="$JS"; else out+="${1-}"; fi
+    shift || true
+  done
+  PJ="$out$fmt"
+}
 
 # Flatten a JSON document into "path<TAB>scalar" lines (no jq).
 AWK_FLAT='
@@ -135,33 +161,51 @@ function val(path,   c, k, i, st, tok) {
 END { n = length(s); pos = 1; val("") }
 '
 json_flatten_file() { [[ -f "$1" ]] && awk "$AWK_FLAT" "$1" 2>/dev/null || true; }
-flat_get() { # flat-text key
-  printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { v = $2 } END { if (v != "" && v != "null") print v }'
+# flat_get_v FLAT KEY -> FGV: the last value of KEY ("" when absent or null). A bash pattern match on the flat text instead of an awk
+# per lookup (`$1 == k { v = $2 } END { if (v != "" && v != "null") print v }`).
+flat_get_v() {
+  local t=$'\n'"$1" k=$'\n'"$2"$'\t'
+  FGV=""
+  if [[ "$t" == *"$k"* ]]; then
+    t="${t##*"$k"}"; t="${t%%$'\n'*}"; FGV="${t%%$'\t'*}"
+    if [[ "$FGV" == "null" ]]; then FGV=""; fi
+  fi
 }
+flat_get() { flat_get_v "$1" "$2"; if [[ -n "$FGV" ]]; then printf '%s\n' "$FGV"; fi; }
 
 # ---------------------------------------------------------------- settings
 SETTINGS_FILE="$REPO_ROOT/.KCC/settings.json"
 SETTINGS_FLAT="$(json_flatten_file "$SETTINGS_FILE")"
-setting() { local v; v="$(flat_get "$SETTINGS_FLAT" "$1")"; if [[ -n "$v" ]]; then printf '%s' "$v"; else printf '%s' "${2:-}"; fi; }
+setting_v() { flat_get_v "$SETTINGS_FLAT" "$1"; if [[ -n "$FGV" ]]; then SV="$FGV"; else SV="${2:-}"; fi; }
+setting() { setting_v "$1" "${2:-}"; printf '%s' "$SV"; }
 
-COV_MIN="$(setting quality.coverage_min_pct 80)"
+setting_v quality.coverage_min_pct 80; COV_MIN="$SV"
 COV_SRC="settings.quality.coverage_min_pct"
 [[ -f "$SETTINGS_FILE" ]] || COV_SRC="default"
-FAIL_DEPS="$(setting quality.fail_on.dependencies high | tr 'A-Z' 'a-z')"
+setting_v quality.fail_on.dependencies high; lc "$SV"; FAIL_DEPS="$LC"
 # The npm audit gate covers what ships; dev-only advisories gate only when quality.audit_dev_dependencies is true.
-AUDIT_DEV="$(setting quality.audit_dev_dependencies false | tr 'A-Z' 'a-z')"
-FAIL_SAST="$(setting quality.fail_on.sast error | tr 'A-Z' 'a-z')"
+setting_v quality.audit_dev_dependencies false; lc "$SV"; AUDIT_DEV="$LC"
+setting_v quality.fail_on.sast error; lc "$SV"; FAIL_SAST="$LC"
 # local (semgrep on PATH) or docker (semgrep/semgrep image; Windows has no native semgrep).
-SAST_RUNNER="$(setting quality.scanners.sast_runner local | tr 'A-Z' 'a-z')"
-FAIL_SECRETS="$(setting quality.fail_on.secrets any | tr 'A-Z' 'a-z')"
+setting_v quality.scanners.sast_runner local; lc "$SV"; SAST_RUNNER="$LC"
+setting_v quality.fail_on.secrets any; lc "$SV"; FAIL_SECRETS="$LC"
 
-cov_override_from() { grep -Eo 'coverage_min_pct:[[:space:]]*[0-9]+(\.[0-9]+)?' "$1" 2>/dev/null | tail -n 1 | grep -Eo '[0-9]+(\.[0-9]+)?$' || true; }
+cov_override_from() { # file -> the number of its last `coverage_min_pct: N` (grep -Eo | tail | grep -Eo, in bash)
+  local t rest v="" re='coverage_min_pct:[[:blank:]]*([0-9]+(\.[0-9]+)?)'
+  [[ -f "$1" ]] || return 0
+  t="$(<"$1")" 2>/dev/null || return 0
+  rest="$t"
+  while [[ "$rest" =~ $re ]]; do v="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"; done
+  if [[ -n "$v" ]]; then printf '%s\n' "$v"; fi
+}
 if [[ -f "$REPO_ROOT/architecture/quality-gates.md" ]]; then
   v="$(cov_override_from "$REPO_ROOT/architecture/quality-gates.md")"
   if [[ -n "$v" ]]; then COV_MIN="$v"; COV_SRC="architecture/quality-gates.md"; fi
 fi
 if [[ "$COV_SRC" != "architecture/quality-gates.md" && -d "$REPO_ROOT/architecture/adrs" ]]; then
-  for f in $(ls "$REPO_ROOT/architecture/adrs" 2>/dev/null | grep -E '\.md$' | sort); do
+  for f in "$REPO_ROOT/architecture/adrs"/*.md; do
+    [[ -f "$f" ]] || continue
+    f="${f##*/}"
     v="$(cov_override_from "$REPO_ROOT/architecture/adrs/$f")"
     if [[ -n "$v" ]]; then COV_MIN="$v"; COV_SRC="architecture/adrs/$f"; fi
   done
@@ -180,6 +224,14 @@ rel() {
   elif [[ "$p" == "$REPO_ROOT/"* ]]; then printf '%s' "${p#"$REPO_ROOT"/}"
   elif [[ "$p" == /* ]]; then native_path "$p"
   else printf '%s' "$p"; fi
+}
+# rel_v PATH -> RELV: rel without the command substitution
+rel_v() {
+  local p="$1"
+  if [[ "$p" == "$REPO_ROOT" ]]; then RELV='.'
+  elif [[ "$p" == "$REPO_ROOT/"* ]]; then RELV="${p#"$REPO_ROOT"/}"
+  elif [[ "$p" == /* ]]; then RELV="$(native_path "$p")"
+  else RELV="$p"; fi
 }
 
 # ---------------------------------------------------------------- workspace
@@ -225,6 +277,18 @@ add_check() { # id name stack proj status severity cmd rc message owner evidence
   C_CMD+=("$7"); C_RC+=("$8"); C_MSG+=("$9"); C_OWNER+=("${10}"); C_EVID+=("${11}")
 }
 note_missing() { case ",$MISSING," in *",$1,"*) ;; *) MISSING="${MISSING:+$MISSING,}$1" ;; esac; }
+# count_lines_v FILE -> CL: wc -l (newline characters), without the processes
+count_lines_v() { local n=0 l; if [[ -f "$1" ]]; then while IFS= read -r l; do n=$((n + 1)); done < "$1"; fi; CL="$n"; }
+# count_matches_v FILE ERE -> CL: `grep -oE ERE FILE | wc -l` (every match of the expression, not every line); a big file takes the original pipeline
+count_matches_v() {
+  local t rest re="$2"
+  CL=0
+  [[ -f "$1" ]] || return 0
+  t="$(<"$1")"
+  if [[ ${#t} -gt 200000 ]]; then CL="$(grep -Eo -e "$re" "$1" 2>/dev/null | wc -l | tr -d ' ' || true)"; return 0; fi
+  rest="$t"
+  while [[ "$rest" =~ $re ]]; do CL=$((CL + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
+}
 defer_check() { # id name stack proj tool message
   note_missing "$5"
   if [[ $REQUIRE -eq 1 ]]; then
@@ -235,7 +299,19 @@ defer_check() { # id name stack proj tool message
 }
 have() { command -v "$1" >/dev/null 2>&1; }
 # Paths handed to native tools: mixed form (E:/x) on MSYS/Cygwin, unchanged elsewhere.
-native_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf "%s" "$1"; fi; }
+# A drive mount (/e/x -> E:/x) is converted by bash itself; anything else, and bash 3.2, asks cygpath (one fork and exec per call).
+ART_N=""
+native_path_v() {
+  if command -v cygpath >/dev/null 2>&1; then
+    if [[ -n "$ART_N" && "$1" == "$ART"/* ]]; then NP="$ART_N${1#"$ART"}"   # the artifacts folder was converted once
+    elif [[ "${BASH_VERSINFO[0]}" -ge 4 && "$1/" != *"/../"* && "$1/" != *"/./"* && "$1" != *//* && "$1" =~ ^/([A-Za-z])(/.*)?$ && -d "/${BASH_REMATCH[1]}" ]]; then
+      local dl="${BASH_REMATCH[1]}" dr="${BASH_REMATCH[2]:-/}"
+      NP="${dl^^}:$dr"
+    else NP="$(cygpath -m "$1")"; fi
+  else NP="$1"; fi
+}
+native_path() { native_path_v "$1"; printf '%s' "$NP"; }
+native_path_v "$ART"; ART_N="$NP"
 
 LOGN=0
 LAST_LOG=""
@@ -273,26 +349,47 @@ resolve_python() {
 # ---------------------------------------------------------------- stack discovery
 PRUNE_NAMES=(node_modules vendor target bin obj dist build out TestResults __pycache__ venv .venv)
 discover_projects() {
-  local expr=() n
+  local expr=() n f b st d
+  local -a E_ST=() E_DIR=() K_ST=() K_DIR=()
+  local cnt=0 i j k tmp dup
   for n in "${PRUNE_NAMES[@]}"; do expr+=( -name "$n" -o ); done
-  find "$WS" -maxdepth 4 \( -type d ! -path "$WS" \( "${expr[@]}" -name '.?*' \) \) -prune -o -type f \( \
+  # one entry per (stack, folder) that holds a marker file: what the find | while | sort -u pipeline produced, in bash
+  while IFS= read -r f; do
+    b="${f##*/}"
+    case "$b" in
+      package.json) st=node ;; pyproject.toml|requirements.txt|setup.py) st=python ;;
+      *.sln|*.csproj|*.fsproj) st=dotnet ;; go.mod) st=go ;; Cargo.toml) st=rust ;;
+      pom.xml|build.gradle|build.gradle.kts) st=java ;; CMakeLists.txt) st=cpp ;; composer.json) st=php ;;
+      *) continue ;;
+    esac
+    d="${f%/*}"
+    dup=0
+    for ((i = 0; i < cnt; i++)); do if [[ "${E_ST[i]}" == "$st" && "${E_DIR[i]}" == "$d" ]]; then dup=1; break; fi; done
+    if [[ $dup -eq 0 ]]; then E_ST[cnt]="$st"; E_DIR[cnt]="$d"; cnt=$((cnt + 1)); fi
+  done < <(find "$WS" -maxdepth 4 \( -type d ! -path "$WS" \( "${expr[@]}" -name '.?*' \) \) -prune -o -type f \( \
     -name package.json -o -name pyproject.toml -o -name requirements.txt -o -name setup.py -o \
     -name '*.sln' -o -name '*.csproj' -o -name '*.fsproj' -o -name go.mod -o -name Cargo.toml -o \
     -name pom.xml -o -name build.gradle -o -name build.gradle.kts -o -name CMakeLists.txt -o \
-    -name composer.json \) -print 2>/dev/null | while IFS= read -r f; do
-      local b st
-      b="$(basename "$f")"
-      case "$b" in
-        package.json) st=node ;; pyproject.toml|requirements.txt|setup.py) st=python ;;
-        *.sln|*.csproj|*.fsproj) st=dotnet ;; go.mod) st=go ;; Cargo.toml) st=rust ;;
-        pom.xml|build.gradle|build.gradle.kts) st=java ;; CMakeLists.txt) st=cpp ;; composer.json) st=php ;;
-        *) continue ;;
-      esac
-      printf '%s\t%s\n' "$st" "$(dirname "$f")"
-    done | sort -u | awk -F'\t' '{ print length($2) "\t" $0 }' | sort -t "$(printf '\t')" -k1,1n -k3,3 -k2,2 | cut -f2- | awk -F'\t' '
-      { keep = 1
-        for (i = 1; i <= k; i++) { if (S[i] == $1 && index($2 "/", D[i] "/") == 1 && $2 != D[i]) { keep = 0; break } }
-        if (keep) { k++; S[k] = $1; D[k] = $2; print } }'
+    -name composer.json \) -print 2>/dev/null)
+  # shortest folder first, then by folder, then by stack (sort -k1,1n -k3,3 -k2,2 on length, stack, folder)
+  for ((i = 1; i < cnt; i++)); do
+    st="${E_ST[i]}"; d="${E_DIR[i]}"; j=$((i - 1))
+    while [[ $j -ge 0 ]]; do
+      if [[ ${#E_DIR[j]} -gt ${#d} || ( ${#E_DIR[j]} -eq ${#d} && ( "${E_DIR[j]}" > "$d" || ( "${E_DIR[j]}" == "$d" && "${E_ST[j]}" > "$st" ) ) ) ]]; then
+        E_ST[j + 1]="${E_ST[j]}"; E_DIR[j + 1]="${E_DIR[j]}"; j=$((j - 1))
+      else break; fi
+    done
+    E_ST[j + 1]="$st"; E_DIR[j + 1]="$d"
+  done
+  # drop a project that sits inside a kept project of the same stack
+  k=0
+  for ((i = 0; i < cnt; i++)); do
+    dup=0
+    for ((j = 0; j < k; j++)); do
+      if [[ "${K_ST[j]}" == "${E_ST[i]}" && "${E_DIR[i]}/" == "${K_DIR[j]}/"* && "${E_DIR[i]}" != "${K_DIR[j]}" ]]; then dup=1; break; fi
+    done
+    if [[ $dup -eq 0 ]]; then K_ST[k]="${E_ST[i]}"; K_DIR[k]="${E_DIR[i]}"; k=$((k + 1)); printf '%s\t%s\n' "${E_ST[i]}" "${E_DIR[i]}"; fi
+  done
 }
 
 dialect_stacks() {
@@ -399,6 +496,21 @@ cov_from_override() {
 }
 
 # ---------------------------------------------------------------- stacks
+# node_ws_root_lock -> the lockfile of an ancestor npm/yarn/pnpm workspace root (above WS, up to the repository root), or nothing.
+node_ws_root_lock() {
+  local a p n
+  a="$(dirname "$WS")"
+  while [[ -n "$a" && ${#a} -ge ${#REPO_ROOT} ]]; do
+    if { [[ -f "$a/package.json" ]] && grep -q '"workspaces"' "$a/package.json"; } || [[ -f "$a/pnpm-workspace.yaml" ]]; then
+      for n in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock; do if [[ -e "$a/$n" ]]; then printf '%s' "$a/$n"; return 0; fi; done
+    fi
+    [[ "$a" == "$REPO_ROOT" ]] && break
+    p="$(dirname "$a")"; [[ "$p" == "$a" ]] && break
+    a="$p"
+  done
+  return 0
+}
+
 check_lock() { # stack proj dir
   local st="$1" proj="$2" dir="$3" f=""
   in_scope lock || return 0
@@ -407,17 +519,7 @@ check_lock() { # stack proj dir
       f="$(find_up "$dir" package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock || true)"
       # A monorepo keeps ONE lockfile at the workspace root, which can sit above the spec's src folder (npm/yarn/pnpm
       # workspaces). Accept it from an ancestor, up to the repository root, when that ancestor declares workspaces.
-      if [[ -z "$f" ]]; then
-        a="$(dirname "$WS")"
-        while [[ -n "$a" && ${#a} -ge ${#REPO_ROOT} && -z "$f" ]]; do
-          if { [[ -f "$a/package.json" ]] && grep -q '"workspaces"' "$a/package.json"; } || [[ -f "$a/pnpm-workspace.yaml" ]]; then
-            for n in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock; do if [[ -e "$a/$n" ]]; then f="$a/$n"; break; fi; done
-          fi
-          [[ "$a" == "$REPO_ROOT" ]] && break
-          p="$(dirname "$a")"; [[ "$p" == "$a" ]] && break
-          a="$p"
-        done
-      fi
+      if [[ -z "$f" ]]; then f="$(node_ws_root_lock)"; fi
       ;;
     python)
       f="$(find_up "$dir" poetry.lock uv.lock Pipfile.lock pdm.lock || true)"
@@ -798,7 +900,7 @@ GLTOML
     fi
     run_in "$WS" "${cmd[@]}" || rc=$?
     local count=0 shown="gitleaks ${cmd[1]} --redact ($mode)"
-    [[ -f "$report" ]] && count="$(grep -o '"RuleID"' "$report" | wc -l | tr -d ' ' || true)"
+    if [[ -f "$report" ]]; then count_matches_v "$report" '"RuleID"'; count="$CL"; fi
     if [[ $rc -eq 0 ]]; then add_check QG-SECRETS secrets "" "" pass none "$shown" "$rc" "gitleaks: no leaks ($mode)" human "$(rel "$report")"
     elif [[ "$count" -gt 0 ]]; then add_check QG-SECRETS secrets "" "" fail error "$shown" "$rc" "gitleaks: $count potential secret(s) (redacted; fail_on=$FAIL_SECRETS); rotate and remove" human "$(rel "$report")"
     else add_check QG-SECRETS secrets "" "" fail error "$shown" "$rc" "gitleaks failed to run (exit $rc)" human "$(rel "$LAST_LOG")"; fi
@@ -808,8 +910,8 @@ GLTOML
   [[ -n "$list" ]] || list="$(list_ws_files)"
   local hits="$ART/builtin-secrets.txt" nfiles
   builtin_secret_scan "$list" >"$hits" || true
-  nfiles="$(wc -l <"$list" | tr -d ' ')"
-  local nh; nh="$(wc -l <"$hits" | tr -d ' ')"
+  count_lines_v "$list"; nfiles="$CL"
+  local nh; count_lines_v "$hits"; nh="$CL"
   if [[ "$nh" -gt 0 ]]; then
     note_missing gitleaks
     add_check QG-SECRETS secrets "" "" fail error "builtin-secret-scan" 1 "builtin fallback found $nh potential secret(s) in $nfiles $mode file(s): $(head -n 5 "$hits" | tr '\n' ' ')(values redacted); install gitleaks for full coverage" human "$(rel "$hits")"
@@ -846,7 +948,7 @@ deps_fallback() { # stack dir proj
       if have pip-audit; then
         local args=(pip-audit -f json); [[ -f "$dir/requirements.txt" ]] && args+=(-r requirements.txt)
         run_split "$dir" "${args[@]}" || rc=$?
-        local n; n="$(grep -o '"fix_versions"' "$LAST_OUT" | wc -l | tr -d ' ' || true)"
+        local n; count_matches_v "$LAST_OUT" '"fix_versions"'; n="$CL"
         if [[ $rc -eq 0 ]]; then add_check QG-DEPS dependencies python "$proj" pass none "$(show_cmd "${args[@]}")" "$rc" "pip-audit: no known vulnerabilities" implementer "$(rel "$LAST_OUT")"
         elif [[ "$n" -gt 0 ]]; then add_check QG-DEPS dependencies python "$proj" fail error "$(show_cmd "${args[@]}")" "$rc" "pip-audit: $n vulnerability(ies) (no severity data; any counts)" implementer "$(rel "$LAST_OUT")"
         else add_check QG-DEPS dependencies python "$proj" fail error "$(show_cmd "${args[@]}")" "$rc" "pip-audit failed (exit $rc)" implementer "$(rel "$LAST_OUT")"; fi
@@ -868,20 +970,50 @@ deps_fallback() { # stack dir proj
   defer_check QG-DEPS dependencies "$st" "$proj" osv-scanner "dependency scan$fb"
 }
 
+# deps_lockfiles -> the lockfiles of the workspace (and, when it has no node lockfile of its own, the lockfile of an ancestor
+# npm/yarn/pnpm workspace root, as QG-LOCK accepts it), one path per line, for `osv-scanner -L`.
+deps_lockfiles() {
+  local expr=() nm=() n found nodefound=0 anc
+  for n in "${PRUNE_NAMES[@]}"; do expr+=( -name "$n" -o ); done
+  for n in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock poetry.lock uv.lock Pipfile.lock Cargo.lock composer.lock packages.lock.json gradle.lockfile; do nm+=( -name "$n" -o ); done
+  unset 'nm[${#nm[@]}-1]'
+  found="$(find "$WS" -maxdepth 5 \( -type d ! -path "$WS" \( "${expr[@]}" -name '.?*' \) \) -prune -o -type f \( "${nm[@]}" \) -print 2>/dev/null | sort || true)"
+  if printf '%s\n' "$found" | grep -qE '(package-lock|npm-shrinkwrap)\.json$|pnpm-lock\.yaml$|yarn\.lock$'; then nodefound=1; fi
+  if [[ $nodefound -eq 0 ]] && printf '%s\n' "$PROJECTS" | grep -q '^node'$'\t'; then
+    anc="$(node_ws_root_lock)"
+    case "$anc" in *package-lock.json|*npm-shrinkwrap.json|*pnpm-lock.yaml|*yarn.lock) found="${found:+$found$'\n'}$anc" ;; esac
+  fi
+  [[ -n "$found" ]] && printf '%s\n' "$found"
+  return 0
+}
+
 check_deps() {
   in_scope deps || return 0
   if [[ -z "$PROJECTS" ]]; then add_check QG-DEPS dependencies "" "" skipped none "" "" "no dependency manifests detected" implementer ""; return 0; fi
   if have osv-scanner; then
-    local out="$ART/osv.json" rc=0
-    run_split "$WS" osv-scanner --format json -r "$(native_path "$WS")" || rc=$?
+    local out="$ART/osv.json" rc=0 lf shown="osv-scanner --format json -r <ws>" lockargs=() nlock=0
+    # Scan the lockfiles by name as well as the directory: a directory walk can come back with "no packages" (gitignore, path form)
+    # although the workspace has a lockfile (round 11, npm workspaces). A lockfile named with -L is always read.
+    while IFS= read -r lf; do
+      [[ -n "$lf" ]] || continue
+      lockargs+=( -L "$(native_path "$lf")" ); nlock=$((nlock + 1))
+    done <<<"$(deps_lockfiles)"
+    if [[ $nlock -gt 0 ]]; then shown="osv-scanner --format json -L <lockfile>... -r <ws>"; fi
+    run_split "$WS" osv-scanner --format json ${lockargs[@]+"${lockargs[@]}"} -r "$(native_path "$WS")" || rc=$?
     cp "$LAST_OUT" "$out" 2>/dev/null || true
-    if [[ $rc -eq 0 ]]; then add_check QG-DEPS dependencies "" "" pass none "osv-scanner --format json -r <ws>" "$rc" "osv-scanner: no known vulnerabilities" implementer "$(rel "$out")"; return 0; fi
-    if [[ $rc -eq 128 ]]; then add_check QG-DEPS dependencies "" "" pass none "osv-scanner --format json -r <ws>" "$rc" "osv-scanner: no packages found to scan" implementer "$(rel "$out")"; return 0; fi
-    if [[ $rc -ne 1 ]]; then add_check QG-DEPS dependencies "" "" fail error "osv-scanner --format json -r <ws>" "$rc" "osv-scanner failed (exit $rc)" implementer "$(rel "$out")"; return 0; fi
+    if [[ $rc -eq 0 ]]; then add_check QG-DEPS dependencies "" "" pass none "$shown" "$rc" "osv-scanner: no known vulnerabilities" implementer "$(rel "$out")"; return 0; fi
+    if [[ $rc -eq 128 ]]; then
+      # The scanner looked and found no packages: nothing was checked, so this is not a pass.
+      local nomsg="osv-scanner found no packages to scan (nothing was checked)"
+      if [[ $REQUIRE -eq 1 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "$nomsg (--require)" implementer "$(rel "$out")"
+      else add_check QG-DEPS dependencies "" "" deferred warning "$shown" "$rc" "$nomsg; deferred (not a pass)" human "$(rel "$out")"; fi
+      return 0
+    fi
+    if [[ $rc -ne 1 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "osv-scanner failed (exit $rc)" implementer "$(rel "$out")"; return 0; fi
     local counts; counts="$(grep -Eo '"max_severity"[[:space:]]*:[[:space:]]*"[0-9.]*"' "$out" | grep -Eo '"[0-9.]*"$' | tr -d '"' | awk -v f="$DEPS_FLOOR" '{ if ($1 == "" || ($1 + 0) >= (f + 0)) a++; t++ } END { printf "%d %d", a, t }')"
     local above="${counts% *}" total="${counts#* }"
-    if [[ "$above" -gt 0 ]]; then add_check QG-DEPS dependencies "" "" fail error "osv-scanner --format json -r <ws>" "$rc" "osv-scanner: $above of $total vulnerability group(s) at or above '$FAIL_DEPS' (unknown severity counts)" implementer "$(rel "$out")"
-    else add_check QG-DEPS dependencies "" "" pass none "osv-scanner --format json -r <ws>" "$rc" "osv-scanner: $total group(s), none at or above '$FAIL_DEPS'" implementer "$(rel "$out")"; fi
+    if [[ "$above" -gt 0 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "osv-scanner: $above of $total vulnerability group(s) at or above '$FAIL_DEPS' (unknown severity counts)" implementer "$(rel "$out")"
+    else add_check QG-DEPS dependencies "" "" pass none "$shown" "$rc" "osv-scanner: $total group(s), none at or above '$FAIL_DEPS'" implementer "$(rel "$out")"; fi
     return 0
   fi
   note_missing osv-scanner
@@ -917,7 +1049,7 @@ check_sast() {
   if [[ ! -f "$out" ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep failed (exit $rc)" implementer "$(rel "$LAST_LOG")"; return 0; fi
   local pat='ERROR'
   case "$FAIL_SAST" in warning) pat='ERROR|WARNING';; info|any) pat='ERROR|WARNING|INFO';; esac
-  local n; n="$(grep -Eo "\"severity\"[[:space:]]*:[[:space:]]*\"($pat)\"" "$out" | wc -l | tr -d ' ')"
+  local n; count_matches_v "$out" "\"severity\"[[:space:]]*:[[:space:]]*\"($pat)\""; n="$CL"
   if [[ "$n" -gt 0 ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep: $n finding(s) at severity >= $FAIL_SAST" implementer "$(rel "$out")"
   elif [[ $rc -ne 0 ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep exited $rc" implementer "$(rel "$out")"
   else add_check QG-SAST sast "" "" pass none "semgrep scan --config auto --json" "$rc" "semgrep: no findings at severity >= $FAIL_SAST" implementer "$(rel "$out")"; fi
@@ -979,7 +1111,7 @@ check_static() {
     | sed 's|^\./||' | LC_ALL=C sort >"$list" || true
   # the rules file is data, not code: it names the forbidden patterns
   if [[ "$WS" == "$REPO_ROOT" ]]; then grep -vxF -e "$rrel" "$list" >"$sel" || true; mv "$sel" "$list"; fi
-  local nfiles; nfiles="$(wc -l <"$list" | tr -d ' ')"
+  local nfiles; count_lines_v "$list"; nfiles="$CL"
   local i
   for i in "${!R_ID[@]}"; do
     LC_ALL=C grep -E -e "${R_FILES[$i]}" "$list" >"$sel" || true
@@ -988,15 +1120,30 @@ check_static() {
     ( cd "$WS" && tr '\n' '\0' <"$sel" | LC_ALL=C xargs -0 grep -nHIE -e "${R_PAT[$i]}" -- 2>/dev/null ) \
       | awk -F: -v id="${R_ID[$i]}" '{ print $1 ":" $2 " " id }' >>"$hits" || true
   done
-  local nh; nh="$(wc -l <"$hits" | tr -d ' ')"
+  local nh; count_lines_v "$hits"; nh="$CL"
   if [[ "$nh" -eq 0 ]]; then
     add_check QG-STATIC static-rules "" "" pass none "static-rules scan (${#R_ID[@]} rule(s) from $rrel)" 0 "static rules: ${#R_ID[@]} rule(s) over $nfiles file(s), no forbidden pattern found" implementer ""
     return 0
   fi
   { head -n 20 "$hits"; if [[ "$nh" -gt 20 ]]; then echo "... and $((nh - 20)) more"; fi; } >"$ev"
   local ids first
-  ids="$(awk '{ print $2 }' "$hits" | sort -u | tr '\n' ',' | sed 's/,$//')"
-  first="$(head -n 3 "$hits" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+  # rule ids of the hits (second field), each once, sorted; the first three hits joined with ", " (was awk | sort -u | tr | sed, head | tr | sed)
+  local -a idl=(); local hl hf1 hf2 hrest hi hj hnew hn=0
+  while IFS= read -r hl; do
+    read -r hf1 hf2 hrest <<< "$hl"
+    [[ -n "$hf2" ]] || continue
+    hnew=1; for hi in ${idl[@]+"${idl[@]}"}; do if [[ "$hi" == "$hf2" ]]; then hnew=0; break; fi; done
+    if [[ $hnew -eq 1 ]]; then idl[${#idl[@]}]="$hf2"; fi
+  done < "$hits"
+  for ((hi = 1; hi < ${#idl[@]}; hi++)); do
+    hnew="${idl[hi]}"; hj=$((hi - 1))
+    while [[ $hj -ge 0 && "${idl[hj]}" > "$hnew" ]]; do idl[hj + 1]="${idl[hj]}"; hj=$((hj - 1)); done
+    idl[hj + 1]="$hnew"
+  done
+  ids=""; for hi in ${idl[@]+"${idl[@]}"}; do ids="${ids:+$ids,}$hi"; done
+  first=""
+  while IFS= read -r hl && [[ $hn -lt 3 ]]; do first="${first:+$first,}$hl"; hn=$((hn + 1)); done < "$hits"
+  first="${first//,/, }"
   add_check QG-STATIC static-rules "" "" fail error "static-rules scan (${#R_ID[@]} rule(s) from $rrel)" 1 "static rules: $nh forbidden-pattern hit(s) (rule(s): $ids); first: $first; first 20 in the evidence file" implementer "$(rel "$ev")"
 }
 
@@ -1051,9 +1198,11 @@ check_image_built() { # $1 = 1 when a Dockerfile exists in the workspace
     [[ -n "$f" ]] || continue
     proj="${COMPOSE_PROJECT_NAME:-}"
     local parsed; parsed="$(parse_compose "$f")"
-    [[ -n "$proj" ]] || proj="$(printf '%s\n' "$parsed" | awk -F'|' '$1 == "P" { print $2 }' | head -n 1)"
-    [[ -n "$proj" ]] || proj="$(basename "$(dirname "$f")")"
-    proj="$(printf '%s' "$proj" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-')"
+    if [[ -z "$proj" ]]; then
+      while IFS='|' read -r pk pv _; do if [[ "$pk" == "P" ]]; then proj="$pv"; break; fi; done <<< "$parsed"
+    fi
+    if [[ -z "$proj" ]]; then pd="${f%/*}"; proj="${pd##*/}"; fi
+    lc "$proj"; proj="${LC//[^a-z0-9_-]/}"
     while IFS='|' read -r kind a b c; do
       [[ "$kind" == S && "$c" == 1 ]] || continue
       svc="$a"; img="$(interp_env "$b")"
@@ -1090,12 +1239,12 @@ check_image_built() { # $1 = 1 when a Dockerfile exists in the workspace
       add_check QG-IMAGE image-scan-built "" "" fail error "$shown" "$rc" "trivy image $img failed (exit $rc)" infrastructure-implementer "$(rel "$logf")"
       continue
     fi
-    nfix=0; [[ $rc -eq 1 ]] && nfix="$(grep -Eo '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"' "$out" | wc -l | tr -d ' ' || true)"
+    nfix=0; if [[ $rc -eq 1 ]]; then count_matches_v "$out" '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"'; nfix="$CL"; fi
     # second pass without --ignore-unfixed: only to report how many findings have no fix (visible, never gating)
     rc2=0; unf="unfixed count unavailable"
     run_in "$WS" trivy image --severity "$sevs" --format json --output "$(native_path "$all")" "$img" || rc2=$?
     if [[ $rc2 -eq 0 && -f "$all" ]]; then
-      ntot="$(grep -Eo '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"' "$all" | wc -l | tr -d ' ' || true)"
+      count_matches_v "$all" '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"'; ntot="$CL"
       unf="$((ntot - nfix)) unfixed, not gating"; [[ $((ntot - nfix)) -ge 0 ]] || unf="0 unfixed, not gating"
     fi
     if [[ $rc -eq 0 ]]; then
@@ -1135,7 +1284,7 @@ check_container() {
       run_in "$WS" trivy fs --scanners vuln,misconfig --severity "$sevs" --exit-code 1 --format json --output "$(native_path "$out")" "$(native_path "$WS")" || rc=$?
       if [[ $rc -eq 0 ]]; then add_check QG-IMAGE image-scan "" "" pass none "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy: no findings at $sevs" infrastructure-implementer "$(rel "$out")"
       elif [[ $rc -eq 1 && -f "$out" ]]; then
-        local n; n="$(grep -Eo '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"' "$out" | wc -l | tr -d ' ' || true)"
+        local n; count_matches_v "$out" '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"'; n="$CL"
         add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy: $n finding(s) at $sevs" infrastructure-implementer "$(rel "$out")"
       else add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy failed (exit $rc)" infrastructure-implementer "$(rel "$LAST_LOG")"; fi
     else defer_check QG-IMAGE image-scan "" "" trivy "image/fs scan"; fi
@@ -1152,7 +1301,9 @@ if [[ $FAST -eq 0 ]]; then
     if [[ -z "$PROJECTS" ]]; then
       add_check QG-STACK stack-detection "" "" skipped warning "" "" "no stack markers found in $(rel "$WS")" implementer "$(rel "$WS")"
     else
-      add_check QG-STACK stack-detection "" "" pass none "" "" "detected: $(printf '%s\n' "$PROJECTS" | awk -F'\t' '{ printf "%s%s", (NR > 1 ? ", " : ""), $1 }')" implementer "$(rel "$WS")"
+      det=""; while IFS= read -r pl; do det="${det:+$det, }${pl%%$'\t'*}"; done <<< "$PROJECTS"
+      rel_v "$WS"
+      add_check QG-STACK stack-detection "" "" pass none "" "" "detected: $det" implementer "$RELV"
     fi
     while IFS=' ' read -r st dl; do
       [[ -n "$st" ]] || continue
@@ -1202,35 +1353,36 @@ REPORT_JSON=""; REPORT_MD=""
 if [[ -n "$OUT_DIR" ]]; then REPORT_JSON="$OUT_DIR/quality-gate.json"; REPORT_MD="$OUT_DIR/quality-gate.md"; fi
 
 build_json() {
-  local i first=1
-  printf '{"tool":"quality-gate","version":"%s","scope":%s,"mode":"%s","spec":%s,"idea":%s,' "$VERSION" "$(jstr "$SCOPE_OUT")" "$MODE" "$(jstr "$SPEC")" "$(jstr "${IDEA_ID:+IDEA-$IDEA_ID}")"
-  printf '"workspace":%s,"require":%s,"coverage_min_pct":%s,"coverage_min_source":%s,' "$(jstr "$(rel "$WS")")" "$([[ $REQUIRE -eq 1 ]] && echo true || echo false)" "$COV_MIN" "$(jstr "$COV_SRC")"
+  local i first=1 rcj file msg t reqb
+  pjn '{"tool":"quality-gate","version":"%s","scope":%j,"mode":"%s","spec":%j,"idea":%j,' "$VERSION" "$SCOPE_OUT" "$MODE" "$SPEC" "${IDEA_ID:+IDEA-$IDEA_ID}"; printf '%s' "$PJ"
+  rel_v "$WS"; reqb=false; [[ $REQUIRE -eq 1 ]] && reqb=true
+  pjn '"workspace":%j,"require":%s,"coverage_min_pct":%s,"coverage_min_source":%j,' "$RELV" "$reqb" "$COV_MIN" "$COV_SRC"; printf '%s' "$PJ"
   printf '"errors":%d,"warnings":%d,"deferred":%d,"status":"%s","exit_code":%d,' "$ERRORS" "$WARNINGS" "$DEFERRED" "$STATUS" "$EXIT"
   printf '"stacks":[%s],"checks":[' "$STACKS_JSON"
   for i in "${!C_ID[@]}"; do
     [[ $first -eq 1 ]] || printf ','; first=0
-    local rcj="null"; [[ -n "${C_RC[$i]}" ]] && rcj="${C_RC[$i]}"
-    printf '{"id":%s,"name":%s,"stack":%s,"project":%s,"status":%s,"severity":%s,"command":%s,"exit_code":%s,"message":%s,"fix_owner":%s,"evidence":%s}' \
-      "$(jstr "${C_ID[$i]}")" "$(jstr "${C_NAME[$i]}")" "$(jstr "${C_STACK[$i]}")" "$(jstr "${C_PROJ[$i]}")" "$(jstr "${C_STATUS[$i]}")" \
-      "$(jstr "${C_SEV[$i]}")" "$(jstr "${C_CMD[$i]}")" "$rcj" "$(jstr "${C_MSG[$i]}")" "$(jstr "${C_OWNER[$i]}")" "$(jstr "${C_EVID[$i]}")"
+    rcj="null"; [[ -n "${C_RC[$i]}" ]] && rcj="${C_RC[$i]}"
+    pjn '{"id":%j,"name":%j,"stack":%j,"project":%j,"status":%j,"severity":%j,"command":%j,"exit_code":%s,"message":%j,"fix_owner":%j,"evidence":%j}' \
+      "${C_ID[$i]}" "${C_NAME[$i]}" "${C_STACK[$i]}" "${C_PROJ[$i]}" "${C_STATUS[$i]}" \
+      "${C_SEV[$i]}" "${C_CMD[$i]}" "$rcj" "${C_MSG[$i]}" "${C_OWNER[$i]}" "${C_EVID[$i]}"
+    printf '%s' "$PJ"
   done
   printf '],"violations":['
   first=1
   for i in "${!C_ID[@]}"; do
     [[ "${C_SEV[$i]}" == error || "${C_SEV[$i]}" == warning ]] || continue
     [[ $first -eq 1 ]] || printf ','; first=0
-    local file="${C_PROJ[$i]}"; [[ -n "$file" ]] || file="${C_EVID[$i]}"
-    local msg="${C_MSG[$i]}"; [[ -n "${C_STACK[$i]}" ]] && msg="[${C_STACK[$i]}] $msg"
-    printf '{"id":%s,"severity":%s,"fix_owner":%s,"file":%s,"message":%s}' "$(jstr "${C_ID[$i]}")" "$(jstr "${C_SEV[$i]}")" "$(jstr "${C_OWNER[$i]}")" "$(jstr "$file")" "$(jstr "$msg")"
+    file="${C_PROJ[$i]}"; [[ -n "$file" ]] || file="${C_EVID[$i]}"
+    msg="${C_MSG[$i]}"; [[ -n "${C_STACK[$i]}" ]] && msg="[${C_STACK[$i]}] $msg"
+    pjn '{"id":%j,"severity":%j,"fix_owner":%j,"file":%j,"message":%j}' "${C_ID[$i]}" "${C_SEV[$i]}" "${C_OWNER[$i]}" "$file" "$msg"; printf '%s' "$PJ"
   done
   printf '],"missing_tools":['
   first=1
-  local t
-  for t in ${MISSING//,/ }; do [[ $first -eq 1 ]] || printf ','; first=0; printf '%s' "$(jstr "$t")"; done
+  for t in ${MISSING//,/ }; do [[ $first -eq 1 ]] || printf ','; first=0; jstr_v "$t"; printf '%s' "$JS"; done
   printf '],"install_hint":'
-  if [[ -n "$HINT_PS" ]]; then printf '{"powershell":%s,"bash":%s,"note":"human-gated: run only after approval via the toolchain-preflight gate"}' "$(jstr "$HINT_PS")" "$(jstr "$HINT_SH")"; else printf 'null'; fi
-  if [[ $DROP_ART -eq 1 ]]; then printf ',"artifacts":null,"report":'; else printf ',"artifacts":%s,"report":' "$(jstr "$(native_path "$ART")")"; fi
-  if [[ -n "$REPORT_JSON" ]]; then printf '{"json":%s,"md":%s}' "$(jstr "$(rel "$REPORT_JSON")")" "$(jstr "$(rel "$REPORT_MD")")"; else printf 'null'; fi
+  if [[ -n "$HINT_PS" ]]; then pjn '{"powershell":%j,"bash":%j,"note":"human-gated: run only after approval via the toolchain-preflight gate"}' "$HINT_PS" "$HINT_SH"; printf '%s' "$PJ"; else printf 'null'; fi
+  if [[ $DROP_ART -eq 1 ]]; then printf ',"artifacts":null,"report":'; else jstr_v "$(native_path "$ART")"; printf ',"artifacts":%s,"report":' "$JS"; fi
+  if [[ -n "$REPORT_JSON" ]]; then rel_v "$REPORT_JSON"; local rj="$RELV"; rel_v "$REPORT_MD"; pjn '{"json":%j,"md":%j}' "$rj" "$RELV"; printf '%s' "$PJ"; else printf 'null'; fi
   printf '}\n'
 }
 

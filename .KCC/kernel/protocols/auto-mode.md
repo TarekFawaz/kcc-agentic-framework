@@ -185,9 +185,9 @@ install command in `Traces/.../ToolsUsed.md`; and the action in
 writes route through Butler's trace custody + the backchannel-append helper.
 
 Toolchain install is a **prohibited-assumption class** (system mutation +
-network), same family as CR-7. **Even under `--silent --assume`, the toolchain
-gate STILL stops for the human** - the AI never installs silently and never
-assumes the toolchain into existence. The preflight gate is the **MANDATORY,
+network), same family as CR-7. **Even under `--silent --assume`, the AI never installs silently and never
+assumes the toolchain into existence** - the `kcc-run` driver answers the toolchain gate with `defer` by policy
+(TOOLCHAIN_DEFERRED, never a pass, recorded in `coordination/NeedsAttention.md`) instead of waiting for a human. The preflight gate is the **MANDATORY,
 non-bypassable** path for a missing toolchain; there is no implicit "pick a
 buildable / toolchain-free stack instead" fallback. The three outcomes
 (`install` / `human-install` / `defer`) all keep the ADR-declared stack intact:

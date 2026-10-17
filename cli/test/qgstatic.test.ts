@@ -37,7 +37,7 @@ const reset = (): void => {
 };
 const slash = (p: string): string => p.replace(/\\/g, "/");
 
-function run(shell: Shell, scope: string, env: Record<string, string> = {}): Promise<Result> {
+function run(shell: Shell, scope: string, env: Record<string, string> = {}, extra: string[] = []): Promise<Result> {
   const tools = join(root, ".KCC", "tools");
   const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   const childEnv: Record<string, string | undefined> = { ...process.env, ...env, [pathKey]: fake + delimiter + (process.env[pathKey] ?? "") };
@@ -45,10 +45,10 @@ function run(shell: Shell, scope: string, env: Record<string, string> = {}): Pro
   let argv: string[];
   if (shell === "bash") {
     cmd = "bash";
-    argv = [join(tools, "quality-gate.sh"), "--repo-root", slash(root), "--path", slash(ws), "--scope", scope, "--json"];
+    argv = [join(tools, "quality-gate.sh"), "--repo-root", slash(root), "--path", slash(ws), "--scope", scope, "--json", ...extra];
   } else {
     cmd = powershellExe() as string;
-    argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(tools, "quality-gate.ps1"), ...toPowerShellArgs(["--repo-root", root, "--path", ws, "--scope", scope, "--json"])];
+    argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(tools, "quality-gate.ps1"), ...toPowerShellArgs(["--repo-root", root, "--path", ws, "--scope", scope, "--json", ...extra])];
   }
   return new Promise((done) => {
     const child = spawn(cmd, argv, { cwd: root, env: childEnv as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
@@ -64,8 +64,8 @@ function run(shell: Shell, scope: string, env: Record<string, string> = {}): Pro
     });
   });
 }
-const both = (scope: string, env: Record<string, string> = {}): Promise<Array<[Shell, Result]>> =>
-  Promise.all(shells.map(async (s) => [s, await run(s, scope, env)] as [Shell, Result]));
+const both = (scope: string, env: Record<string, string> = {}, extra: string[] = []): Promise<Array<[Shell, Result]>> =>
+  Promise.all(shells.map(async (s) => [s, await run(s, scope, env, extra)] as [Shell, Result]));
 const find = (r: Result, id: string, name?: string): Check[] => r.checks.filter((c) => c.id === id && (!name || c.name === name));
 const why = (s: Shell, r: Result): string => `[${s}] exit ${r.exit}\n${r.stdout.slice(0, 1500)}\n${r.stderr.slice(0, 500)}`;
 
@@ -77,6 +77,13 @@ beforeAll(() => {
     'const fs = require("fs");',
     'const [tool, ...a] = process.argv.slice(2);',
     'const env = process.env;',
+    'if (tool === "osv-scanner") {',
+    '  if (env.FAKE_OSV_LOG) fs.appendFileSync(env.FAKE_OSV_LOG, a.join(" ") + "\\n");',
+    '  const mode = env.FAKE_OSV || "clean";',
+    '  if (mode === "none" || (mode === "lockonly" && !a.includes("-L"))) { process.stderr.write("No package sources found, --help for usage information.\\n"); process.exit(128); }',
+    '  if (mode === "findings") { process.stdout.write(JSON.stringify({ results: [{ packages: [{ groups: [{ max_severity: "9.8" }] }] }] })); process.exit(1); }',
+    '  process.stdout.write(JSON.stringify({ results: [] })); process.exit(0);',
+    '}',
     'if (tool === "docker") {',
     '  const have = (env.FAKE_IMAGES || "").split(",").filter(Boolean);',
     '  process.exit(a[0] === "image" && a[1] === "inspect" ? (have.includes(a[2]) ? 0 : 1) : 0);',
@@ -90,7 +97,7 @@ beforeAll(() => {
     'process.exit(ignore && (+env.FAKE_FIXABLE || 0) > 0 ? 1 : 0);',
   ].join("\n"));
   const bun = process.execPath;
-  for (const tool of ["docker", "trivy"]) {
+  for (const tool of ["docker", "trivy", "osv-scanner"]) {
     writeFileSync(join(fake, tool), `#!/bin/sh\nexec "${slash(bun)}" "${slash(join(fake, "fake.js"))}" ${tool} "$@"\n`, { mode: 0o755 });
     writeFileSync(join(fake, `${tool}.cmd`), `@"${bun}" "${join(fake, "fake.js")}" ${tool} %*\r\n`);
   }
@@ -216,6 +223,85 @@ describe("QG-STATIC and the built-image scan, bash and PowerShell", () => {
       expect(st[0]!.message).toContain("line 3");
       expect(st[0]!.message).toContain("line 4 (BAD-RE)");
       expect(r.exit).toBe(1);
+    }
+  });
+});
+
+// Round 11: QG-DEPS reported pass for "osv-scanner: no packages found to scan" (exit 128) although the workspace had a lockfile.
+// A fake osv-scanner on PATH: FAKE_OSV = clean (exit 0) | findings (exit 1) | none (exit 128) | lockonly (exit 128 unless a lockfile
+// is named with -L); FAKE_OSV_LOG records the arguments it was called with.
+describe("QG-DEPS scans the lockfiles and is never a pass when it scanned nothing, bash and PowerShell", () => {
+  const log = join(root, "osv-args.log");
+  const osvEnv = (mode: string): Record<string, string> => ({ FAKE_OSV: mode, FAKE_OSV_LOG: log });
+  const args = (): string => (existsSync(log) ? readFileSync(log, "utf8") : "");
+  const npmWorkspace = (): void => {
+    reset();
+    rmSync(log, { force: true });
+    put("src/IDEA-001-x/package.json", JSON.stringify({ name: "bp", private: true, workspaces: ["apps/*"] }));
+    put("src/IDEA-001-x/package-lock.json", "{}");
+    put("src/IDEA-001-x/apps/api/package.json", JSON.stringify({ name: "api" }));
+  };
+
+  test("a lockfile in the workspace is named with -L; clean is a pass, findings fail", async () => {
+    npmWorkspace();
+    for (const [s, r] of await both("deps", osvEnv("clean"))) {
+      const d = find(r, "QG-DEPS");
+      expect(d.length, why(s, r)).toBe(1);
+      expect(d[0]!.status, why(s, r)).toBe("pass");
+      expect(d[0]!.message).toContain("no known vulnerabilities");
+      expect(r.exit, why(s, r)).toBe(0);
+    }
+    expect(args()).toMatch(/-L \S*package-lock\.json/);
+    expect(args()).toContain("-r");
+    for (const [s, r] of await both("deps", osvEnv("findings"))) {
+      const d = find(r, "QG-DEPS");
+      expect(d[0]!.status, why(s, r)).toBe("fail");
+      expect(d[0]!.severity).toBe("error");
+      expect(d[0]!.message).toContain("1 of 1 vulnerability group(s)");
+      expect(r.exit, why(s, r)).toBe(1);
+    }
+  });
+
+  test("the directory walk finds nothing but the lockfile exists: naming it with -L makes the scan real (the round 11 case)", async () => {
+    npmWorkspace();
+    for (const [s, r] of await both("deps", osvEnv("lockonly"))) {
+      const d = find(r, "QG-DEPS");
+      expect(d[0]!.status, why(s, r)).toBe("pass");
+      expect(r.exit, why(s, r)).toBe(0);
+    }
+  });
+
+  test("the lockfile of an ancestor npm workspace root inside the repo is scanned too", async () => {
+    reset();
+    rmSync(log, { force: true });
+    put("package.json", JSON.stringify({ name: "root", private: true, workspaces: ["src/IDEA-001-x/api"] }));
+    put("package-lock.json", "{}");
+    put("src/IDEA-001-x/api/package.json", JSON.stringify({ name: "api" }));
+    for (const [s, r] of await both("deps", osvEnv("lockonly"))) {
+      expect(find(r, "QG-DEPS")[0]!.status, why(s, r)).toBe("pass");
+    }
+    const lines = args().trim().split(/\r?\n/);
+    expect(lines.every((l) => /-L \S*[\\/]package-lock\.json/.test(l)), args()).toBe(true);
+    expect(lines.every((l) => !l.includes("src/IDEA-001-x/package-lock.json")), args()).toBe(true);
+  });
+
+  test("nothing found to scan is deferred with a warning (exit 3), never a pass; with --require it fails", async () => {
+    npmWorkspace();
+    for (const [s, r] of await both("deps", osvEnv("none"))) {
+      const d = find(r, "QG-DEPS");
+      expect(d.length, why(s, r)).toBe(1);
+      expect(d[0]!.status, why(s, r)).toBe("deferred");
+      expect(d[0]!.severity).toBe("warning");
+      expect(d[0]!.message).toContain("osv-scanner found no packages to scan (nothing was checked)");
+      expect(r.status, why(s, r)).toBe("deferred");
+      expect(r.exit, why(s, r)).toBe(3);
+    }
+    for (const [s, r] of await both("deps", osvEnv("none"), ["--require"])) {
+      const d = find(r, "QG-DEPS");
+      expect(d[0]!.status, why(s, r)).toBe("fail");
+      expect(d[0]!.severity).toBe("error");
+      expect(d[0]!.message).toContain("nothing was checked");
+      expect(r.exit, why(s, r)).toBe(1);
     }
   });
 });

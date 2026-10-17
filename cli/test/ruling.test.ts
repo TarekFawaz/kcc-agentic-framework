@@ -81,16 +81,20 @@ const placeBug = (root: string, status: string, severity = "major", ruling = tru
   writeFileSync(f, bugText(status, severity, ruling));
   return f;
 };
+// The preparation runs --silent --assume (nobody answers prompts). These scenarios are about the BLOCKING gates, which a run without
+// --silent --assume keeps (a silent run never pauses; see verdictloop.test.ts), so the run is switched to non-silent here.
 const prepared = (name: string): string => {
   const root = workspace(name);
   expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
+  const rj = join(root, "coordination", "run", "run.json");
+  writeFileSync(rj, readFileSync(rj, "utf8").replace(/"silent": "1"/, '"silent": "0"').replace(/"assume": "1"/, '"assume": "0"'));
   return root;
 };
 
 for (const [dname, run, every] of drivers) {
   const scenario = every ? test : test.skip;
   describe(`a blocked Bug opens the ruling gate at once (${dname})`, () => {
-    test("no implementer run, no attempt used, the gate names the Bug and quotes the ruling section; a silent run does not answer it", () => {
+    test("no implementer run, no attempt used, the gate names the Bug and quotes the ruling section; a run without --silent --assume waits for the human", () => {
       const root = prepared(`blocked-${dname}`);
       placeBug(root, "blocked");
       const before = callsOf(root, 19);

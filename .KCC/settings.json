@@ -51,7 +51,7 @@
     "max_backlog_item_lines": 80,
     "max_plan_lines": 250,
     "max_brief_lines": 100,
-    "max_specs_fasttrack": 5
+    "max_specs_fasttrack": 8
   },
   "quality": {
     "coverage_min_pct": 80,

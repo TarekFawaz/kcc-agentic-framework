@@ -125,6 +125,11 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
      (not prose, not a manual grep). In the `QG-PROD` image-scan item name both
      `quality-gate` checks: `image-scan` (source) and `image-scan-built` (images the
      compose file builds).
+   - Give each guardrail an id `GR-nnn` (`guardrails.md`, or `## Guardrails` in `quality-gates.md`
+     under fasttrack) and a static-rules.tsv rule when it is pattern-checkable (name the rule ids
+     in "Enforced by"). "Declared libraries are used" (GR-012 style) has no pattern: add a verifier
+     step comparing the Decisions table with the manifest and imports. The plan must cover every
+     `GR-nnn` (PLAN-007: Test ID, `check:`, `verifier:`, `static-rules:<rule-id>`).
    - Confirm dialects from `.KCC/kernel/protocols/dialects/`; record in ADRs or
      `architecture/architecture.md`.
    - `architecture/architecture.md` sections: see `architecture-documentation.md`

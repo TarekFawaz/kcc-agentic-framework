@@ -106,7 +106,7 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
     file, once: what blocks the fix, the options (each with its cost), and the recommended option. Report it as blocked and
     stop work on it. `kcc-run` opens a `ruling` human gate at once and does not run you again for that Bug. The human
     answers `revise` (their ruling), `waive` (Status becomes `wontfix`) or `escalate`; on `revise`/`escalate` the driver sets
-    the Bug back to `open`, records the ruling under `## Ruling` in the Bug file and in your prompt: follow it. The statuses
+    the Bug back to `open`, records the ruling under `## Ruling` in the Bug file (and in HumanDecisions where the trace keeps one) and in your prompt: follow it. A `revise` note that states the human's approval (e.g. "Option A approved: amend D10") is the recorded human decision that lets you make an edit the architect otherwise owns, such as the Decisions table in `architecture/architecture.md`; make exactly that edit and cite the ruling in the commit. The statuses
     are `open -> fixing -> fixed -> verified`, plus `blocked` and `wontfix`.
 11. All source, tests, fixtures, configs, docs under `src/IDEA-{ID}-{slug}/`
     (even if a dialect allows `src/`); create/update its `README.md`. No

@@ -544,25 +544,29 @@ function Invoke-Simple([string]$Stack, [string]$Check, [string]$Id, [string]$Pro
 }
 
 # ------------------------------------------------------------------ lockfiles
+$NodeLockNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock')
+# The lockfile of an ancestor npm/yarn/pnpm workspace root (above the workspace, up to the repository root), or $null.
+function Get-NodeWsRootLock {
+    $a = Split-Path -Parent $WS
+    while ($a -and ($a.Length -ge $RepoRoot.Length)) {
+        $pj = Join-Path $a 'package.json'
+        $isWs = ((Test-Path -LiteralPath $pj) -and ([System.IO.File]::ReadAllText($pj) -match '"workspaces"')) -or (Test-Path -LiteralPath (Join-Path $a 'pnpm-workspace.yaml'))
+        if ($isWs) { foreach ($n in $NodeLockNames) { $c = Join-Path $a $n; if (Test-Path -LiteralPath $c) { return $c } } }
+        if ($a -ieq $RepoRoot) { break }
+        $a = Split-Path -Parent $a
+    }
+    return $null
+}
+
 function Test-Lock([string]$Stack, [string]$Project, [string]$Dir) {
     if (-not (Test-InScope 'lock')) { return }
     $f = $null
     switch ($Stack) {
         'node' {
-            $lockNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock')
-            $f = Find-Up $Dir $lockNames
+            $f = Find-Up $Dir $NodeLockNames
             # A monorepo keeps ONE lockfile at the workspace root, which can sit above the spec's src folder (npm/yarn/pnpm
             # workspaces). Accept it from an ancestor, up to the repository root, when that ancestor declares workspaces.
-            if (-not $f) {
-                $a = Split-Path -Parent $WS
-                while ($a -and ($a.Length -ge $RepoRoot.Length) -and -not $f) {
-                    $pj = Join-Path $a 'package.json'
-                    $isWs = ((Test-Path -LiteralPath $pj) -and ([System.IO.File]::ReadAllText($pj) -match '"workspaces"')) -or (Test-Path -LiteralPath (Join-Path $a 'pnpm-workspace.yaml'))
-                    if ($isWs) { foreach ($n in $lockNames) { $c = Join-Path $a $n; if (Test-Path -LiteralPath $c) { $f = $c; break } } }
-                    if ($a -ieq $RepoRoot) { break }
-                    $a = Split-Path -Parent $a
-                }
-            }
+            if (-not $f) { $f = Get-NodeWsRootLock }
         }
         'python' {
             $f = Find-Up $Dir @('poetry.lock', 'uv.lock', 'Pipfile.lock', 'pdm.lock')
@@ -1074,16 +1078,43 @@ function Invoke-DepsFallback([string]$Stack, [string]$Dir, [string]$Project) {
     Add-Deferred 'QG-DEPS' 'dependencies' $Stack $Project 'osv-scanner' ('dependency scan' + $fb)
 }
 
+# The lockfiles of the workspace (and, when it has no node lockfile of its own, the lockfile of an ancestor npm/yarn/pnpm
+# workspace root, as QG-LOCK accepts it), for `osv-scanner -L`. Same set as deps_lockfiles in quality-gate.sh.
+function Get-DepsLockfiles([System.Collections.ArrayList]$Projects) {
+    $names = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'Cargo.lock', 'composer.lock', 'packages.lock.json', 'gradle.lockfile')
+    $found = @(Get-WalkFiles $WS 5 | Where-Object { $names -ccontains (Split-Path -Leaf $_) } | Sort-Object)
+    $nodeNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock')
+    $nodeFound = @($found | Where-Object { $nodeNames -ccontains (Split-Path -Leaf $_) }).Count -gt 0
+    if ((-not $nodeFound) -and (@($Projects | Where-Object { $_.stack -eq 'node' }).Count -gt 0)) {
+        $anc = Get-NodeWsRootLock
+        if ($anc -and ($nodeNames -ccontains (Split-Path -Leaf $anc))) { $found += $anc }
+    }
+    return $found
+}
+
 function Invoke-DepsCheck([System.Collections.ArrayList]$Projects) {
     if (-not (Test-InScope 'deps')) { return }
     if ($Projects.Count -eq 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'skipped' 'none' '' $null 'no dependency manifests detected' 'implementer' ''; return }
     if (Test-Tool 'osv-scanner') {
         $out = Join-Path $Art 'osv.json'
-        $rc = Invoke-Logged -Dir $WS -Argv @('osv-scanner', '--format', 'json', '-r', $WS)
-        Copy-Item -LiteralPath $script:LastOut -Destination $out -Force
+        # Scan the lockfiles by name as well as the directory: a directory walk can come back with "no packages" (gitignore, path form)
+        # although the workspace has a lockfile (round 11, npm workspaces). A lockfile named with -L is always read.
+        $lockfiles = @(Get-DepsLockfiles $Projects)
+        $argv = @('osv-scanner', '--format', 'json')
+        foreach ($lf in $lockfiles) { $argv += @('-L', $lf) }
+        $argv += @('-r', $WS)
         $shown = 'osv-scanner --format json -r <ws>'
+        if ($lockfiles.Count -gt 0) { $shown = 'osv-scanner --format json -L <lockfile>... -r <ws>' }
+        $rc = Invoke-Logged -Dir $WS -Argv $argv
+        Copy-Item -LiteralPath $script:LastOut -Destination $out -Force
         if ($rc -eq 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc 'osv-scanner: no known vulnerabilities' 'implementer' (Get-Rel $out); return }
-        if ($rc -eq 128) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc 'osv-scanner: no packages found to scan' 'implementer' (Get-Rel $out); return }
+        if ($rc -eq 128) {
+            # The scanner looked and found no packages: nothing was checked, so this is not a pass.
+            $nomsg = 'osv-scanner found no packages to scan (nothing was checked)'
+            if ($Require) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ($nomsg + ' (--require)') 'implementer' (Get-Rel $out) }
+            else { Add-Check 'QG-DEPS' 'dependencies' '' '' 'deferred' 'warning' $shown $rc ($nomsg + '; deferred (not a pass)') 'human' (Get-Rel $out) }
+            return
+        }
         if ($rc -ne 1) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ('osv-scanner failed (exit ' + $rc + ')') 'implementer' (Get-Rel $out); return }
         $above = 0; $total = 0
         foreach ($m in [regex]::Matches([IO.File]::ReadAllText($out), '"max_severity"\s*:\s*"([0-9.]*)"')) {

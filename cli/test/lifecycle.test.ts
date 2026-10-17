@@ -100,17 +100,19 @@ describe("fast track, happy path", () => {
 });
 
 describe("fast track refuses empty work", () => {
-  test("an IDEA that wrote nothing fails its check three times, then pauses at the loop gate; revise with real work continues", () => {
+  test("an IDEA that wrote nothing fails its check three times; a silent run does not pause: it stops with exit 7 (needs attention); resuming with real work continues", () => {
     const root = workspace("empty-idea");
     mode(root, "empty-idea");
     const r = drv(root, [...FT, "--until", "4"]);
-    expect(r.status).toBe(4);
+    expect(r.status).toBe(7);
     expect(r.stdout).toContain("FILE-001");
-    expect(r.stdout).toContain("PAUSED at state 1");
+    expect(r.stdout).not.toContain("PAUSED");
+    expect(r.stdout).toContain("NEEDS ATTENTION");
     expect(calls(root).length).toBe(3);
     expect(events(root)).toContain("human-gate-triggered");
+    expect(readFileSync(join(root, "coordination", "NeedsAttention.md"), "utf8")).toContain("## [open] run | loop | state 1 IDEA");
     mode(root, "happy");
-    const r2 = drv(root, ["--answer", "revise"]);
+    const r2 = drv(root, ["--resume"]);
     expect(r2.status).toBe(0);
     expect(r2.stdout).toContain("done   state 1 IDEA");
     expect(r2.stdout).toMatch(/-?-?Until 4 reached/i);
@@ -119,7 +121,7 @@ describe("fast track refuses empty work", () => {
     const root = workspace("over-arch");
     mode(root, "over-arch");
     const r = drv(root, [...FT, "--until", "6"]);
-    expect(r.status).toBe(4);
+    expect(r.status).toBe(7);
     expect(r.stdout).toContain("ARCH-FT-007");
   });
   test("a wave that changed none of its declared files fails (WAVE-004)", () => {
@@ -128,7 +130,7 @@ describe("fast track refuses empty work", () => {
     expect(ok.status).toBe(0);
     mode(root, "empty-wave");
     const r = drv(root, ["--resume"]);
-    expect(r.status).toBe(4);
+    expect(r.status).toBe(7);
     expect(r.stdout).toContain("WAVE-004");
   });
 });
@@ -170,13 +172,13 @@ describe("the FIX state (a failed TEST or REVIEW sends the spec back to the impl
     expect(fixCalls(root)).toBe(1);
     expect(readFileSync(f, "utf8")).toContain("| fixed |");
   });
-  test("a Bug the implementer leaves open fails BUG-OPEN and, after the attempts, pauses at the loop gate", () => {
+  test("a Bug the implementer leaves open fails BUG-OPEN and, after the attempts, the silent run parks the spec (exit 7) instead of pausing at the loop gate", () => {
     const root = workspace("fix-stuck");
     expect(drv(root, [...FT, "--until", "15"]).status).toBe(0);
     place(root, "open");
     mode(root, "no-fix");
     const r = drv(root, ["--resume", "--from", "19", "--until", "19"]);
-    expect(r.status).toBe(4);
+    expect(r.status).toBe(7);
     expect(r.stdout).toContain("BUG-OPEN");
     expect(r.stdout).toContain("Bug-001");
   });
@@ -324,9 +326,9 @@ describe("the router is asked for every dispatch, in every cycle", () => {
   test("full lifecycle (no --fasttrack): the same routing sentence, no agent or model flags on the session", () => {
     const root = workspace("route-full");
     const r = drv(root, ["--input", "a tiny app", "--silent", "--assume", "--until", "1"]);
-    // The stub writes the fast-track idea set, so the full table's IDEA check fails and the run pauses at the loop gate (4);
+    // The stub writes the fast-track idea set, so the full table's IDEA check fails and the run pauses at the loop gate (4; a silent run parks the state instead: 7);
     // the dispatch itself, which is what this test is about, has already happened and is in the log.
-    expect([0, 4]).toContain(r.status);
+    expect([0, 4, 7]).toContain(r.status);
     const log = logText(root, "state-1-run-1.log");
     expect(log).toContain("Routing (kcc-route): spawn the idea-interrogator subagent on tier balanced, effort high");
     const cmd = log.split(String.fromCharCode(10))[1] ?? "";

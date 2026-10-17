@@ -27,15 +27,15 @@ const check = () => runTool(root, "check-run-conformance", ["--scope", "specs", 
 describe("fast-track spec budget and spec status", () => {
   test("setup", () => {
     applyPayload(root);
-    for (let i = 1; i <= 6; i++) spec(i);
-    roadmap(6);
+    for (let i = 1; i <= 9; i++) spec(i);
+    roadmap(9);
   });
-  test("more specs than the budget (default 5) is rejected under fast track", () => {
-    expect(check().stdout).toContain("SPEC-009");
+  test("more specs than the budget (default 8) is rejected under fast track", () => {
+    expect(check().stdout).toContain("fast-track budget is 8");
   });
   test("a split the human approved in ROADMAP.md is accepted", () => {
-    roadmap(6, "Spec budget: 6 (human approved)");
-    expect(check().stdout).not.toContain("SPEC-009");
+    roadmap(9, "Spec budget: 9 (human approved)");
+    expect(check().stdout).not.toContain("fast-track budget");
   });
   test("a spec without a status in its frontmatter is rejected", () => {
     spec(2, false);

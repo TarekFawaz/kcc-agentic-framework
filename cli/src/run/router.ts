@@ -26,6 +26,8 @@ export interface RouteInput {
   maxTier?: Tier;
   /** A ceiling for the effort: a quick diff review (REVIEW) and a scoped re-verification never go above it (high). */
   maxEffort?: Effort;
+  /** What made the item risky, in words for the reasons line (e.g. "security-sensitive (auth)"); default "CR-7 risk". */
+  riskCause?: string;
 }
 export interface Route {
   tier: Tier;
@@ -42,23 +44,65 @@ const atMost = (t: Tier, cap: Tier): Tier => (TIERS.indexOf(t) > TIERS.indexOf(c
 const effUp = (e: Effort): Effort => EFFORTS[Math.min(EFFORTS.indexOf(e) + 1, EFFORTS.indexOf("xhigh"))]!;
 const effAtLeast = (e: Effort, f: Effort): Effort => (EFFORTS.indexOf(e) < EFFORTS.indexOf(f) ? f : e);
 
+/** Tasks that never run below the balanced tier, whatever the domain says (a fast model skipped the plan file in round 11). */
+export const BALANCED_FLOOR_TASKS: readonly Task[] = ["research", "architecture", "security", "spec", "plan"];
+/** Tasks a common domain lowers by one tier (writing well-known, mechanical things). spec and plan are not here on purpose. */
+export const COMMON_DOMAIN_STEP_DOWN_TASKS: readonly Task[] = ["docs", "scaffold"];
+
+/**
+ * What a retry (attempt >= 2) changes, per task. `tier`: whether the tier goes up one step; `effortCeiling`: the highest effort a
+ * retry may raise the effort to (a retry never lowers an effort the first run already had). `null` = a retry is routed like the
+ * first run. Round 10/11: a verifier retry on Opus at xhigh cost 25 minutes; a planning retry at Sonnet xhigh cost 10-19 minutes.
+ */
+export interface RetryRule { tier: boolean; effortCeiling: Effort }
+export const RETRY_RULES: Record<Task, RetryRule | null> = {
+  research: { tier: true, effortCeiling: "xhigh" },
+  architecture: { tier: true, effortCeiling: "xhigh" },
+  security: { tier: true, effortCeiling: "xhigh" },
+  implement: { tier: true, effortCeiling: "xhigh" },
+  scaffold: { tier: true, effortCeiling: "xhigh" },
+  docs: { tier: true, effortCeiling: "xhigh" },
+  close: { tier: true, effortCeiling: "xhigh" },
+  other: { tier: true, effortCeiling: "xhigh" },
+  spec: { tier: false, effortCeiling: "high" },
+  plan: { tier: false, effortCeiling: "high" },
+  review: null,
+};
+
 export function route(i: RouteInput): Route {
   const minTier = down(i.defaultTier, "fast");
   const maxTier = up(i.defaultTier, "strong");
   let tier = i.defaultTier;
   let effort: Effort = i.defaultEffort === "max" ? "xhigh" : i.defaultEffort;
-  const reasons: string[] = [];
+  // Every pick states its starting point first, so a reader can tell why a run deviates from the agent default.
+  const reasons: string[] = [`agent default: ${tier} / ${effort}`];
   const risk = !!i.risk || i.complexity === "high" || i.complexity === "extra-high";
-  if (["research", "architecture", "security"].includes(i.task) && TIERS.indexOf(tier) < 1) { tier = "balanced"; reasons.push(`${i.task} never runs below balanced`); }
-  if (i.domain === "novel") { tier = up(tier, maxTier); effort = effAtLeast(effort, "high"); reasons.push("novel domain"); }
-  else if (i.domain === "common" && ["spec", "plan", "docs", "scaffold"].includes(i.task)) { tier = down(tier, minTier); reasons.push(`common domain, ${i.task}`); }
-  if (risk) { tier = atLeast(tier, "balanced"); effort = effAtLeast(effort, "high"); reasons.push(i.risk ? "CR-7 risk" : `complexity ${i.complexity}`); }
-  if (i.complexity === "extra-high") { effort = effAtLeast(effort, "xhigh"); reasons.push("extra-high complexity: xhigh effort"); }
-  if ((i.items ?? 0) > 3 || (i.files ?? 0) > 5) { effort = effUp(effort); reasons.push("large unit"); }
-  // A retry escalates the agent that is fixing something (implementer, spec-writer ...). A verifier or critic (task review) is
-  // never escalated for a retry: its second run is a re-check of the fixes, not harder work, and its cost was the problem in round 10.
-  if ((i.attempt ?? 1) >= 2 && i.task !== "review") { tier = up(tier, maxTier); effort = effUp(effort); reasons.push(`attempt ${i.attempt}`); }
-  if (i.budgetLeftPct !== undefined && i.budgetLeftPct < 20 && !risk) { tier = atMost(tier, "balanced"); reasons.push("budget under 20%"); }
+  if (BALANCED_FLOOR_TASKS.includes(i.task) && TIERS.indexOf(tier) < 1) { tier = "balanced"; reasons.push(`${i.task} never runs below balanced: tier raised`); }
+  if (i.domain === "novel") { tier = up(tier, maxTier); effort = effAtLeast(effort, "high"); reasons.push("novel domain: tier up, effort high"); }
+  else if (i.domain === "common" && COMMON_DOMAIN_STEP_DOWN_TASKS.includes(i.task)) { tier = down(tier, minTier); reasons.push(`common domain, ${i.task}: tier down`); }
+  if (risk) {
+    const lifted = TIERS.indexOf(tier) < 1;
+    tier = atLeast(tier, "balanced"); effort = effAtLeast(effort, "high");
+    reasons.push(`${i.risk ? (i.riskCause ?? "CR-7 risk") : `complexity ${i.complexity}`}: effort ${effort}${lifted ? ", tier raised to balanced" : ""}`);
+  }
+  if (i.complexity === "extra-high") { effort = effAtLeast(effort, "xhigh"); reasons.push("extra-high complexity: effort xhigh"); }
+  if ((i.items ?? 0) > 3 || (i.files ?? 0) > 5) { effort = effUp(effort); reasons.push("large unit: effort up"); }
+  // A retry escalates the agent that is fixing something (implementer ...) by RETRY_RULES. A planning retry (spec, plan) keeps the
+  // tier and raises the effort to at most high; a verifier or critic (task review) is never escalated.
+  const retry = (i.attempt ?? 1) >= 2 ? RETRY_RULES[i.task] : null;
+  if (retry) {
+    if (retry.tier) {
+      const t0 = tier, e0 = effort;
+      tier = up(tier, maxTier);
+      effort = effUp(effort);
+      reasons.push(`attempt ${i.attempt}: tier ${tier !== t0 ? "up" : "unchanged"}, effort ${effort !== e0 ? "up" : "unchanged"}`);
+    } else {
+      const before = effort;
+      if (EFFORTS.indexOf(effort) < EFFORTS.indexOf(retry.effortCeiling)) effort = EFFORTS[EFFORTS.indexOf(effort) + 1]!;
+      reasons.push(effort !== before ? `attempt ${i.attempt}: effort raised to ${effort}, tier unchanged for planning` : `attempt ${i.attempt}: effort stays ${effort}, tier unchanged for planning`);
+    }
+  }
+  if (i.budgetLeftPct !== undefined && i.budgetLeftPct < 20 && !risk) { tier = atMost(tier, "balanced"); reasons.push("budget under 20%: tier capped at balanced"); }
   tier = atMost(atLeast(tier, minTier), maxTier);
   if (i.maxTier && TIERS.indexOf(tier) > TIERS.indexOf(i.maxTier)) { tier = i.maxTier; reasons.push(`capped at ${i.maxTier} for ${i.task}`); }
   if (i.maxEffort && EFFORTS.indexOf(effort) > EFFORTS.indexOf(i.maxEffort)) { effort = i.maxEffort; reasons.push(`effort capped at ${i.maxEffort} for ${i.task}`); }

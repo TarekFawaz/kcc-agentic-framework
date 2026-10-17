@@ -18,7 +18,9 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 
     Exit codes: 0 done (or dry-run / -Only / -Until finished), 2 usage or environment
     error, 4 paused at a human gate, 5 suspended (usage limit; restore point
-    written and kcc-limit-watch armed), 6 stopped or aborted.
+    written and kcc-limit-watch armed), 6 stopped or aborted, 7 finished or stopped
+    with items that need a human (only under -Silent -Assume, which never pauses:
+    every gate is answered by policy and the open items are in coordination/NeedsAttention.md).
 
     PowerShell 5.1 compatible, ASCII-only source. No python/jq.
 
@@ -386,9 +388,65 @@ function Quote-Native([string]$a) {
     $e = [regex]::Replace($e, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })
     return ('"' + $e + '"')
 }
+# Starting a PowerShell process costs 0.5-0.9 s here, and a run asks for one per dispatch (the router) and per exit check. These tools
+# run in this process instead, each in a fresh runspace (its own variables and functions, so nothing leaks either way), with the
+# console streams captured the way the child's stdout was. Everything else (and any argument list that is not -Name value pairs) still
+# runs as a child process. KCC_TOOLS_CHILD=1 forces the child for every tool.
+$script:InProcTools = @('kcc-route', 'kcc-checkpoint', 'check-traceability', 'check-run-conformance', 'quality-gate', 'build-dashboard', 'repo-bootstrap')
+function ConvertTo-ParamTable([string[]]$toolArgs) {
+    $h = @{}
+    $i = 0
+    $n = @($toolArgs).Count
+    while ($i -lt $n) {
+        $t = [string]$toolArgs[$i]
+        if ($t -notmatch '^-([A-Za-z][A-Za-z0-9]*)$') { return $null }
+        $name = $Matches[1]
+        if (($i + 1) -lt $n -and ([string]$toolArgs[$i + 1]) -notmatch '^-[A-Za-z][A-Za-z0-9]*$') { $h[$name] = [string]$toolArgs[$i + 1]; $i += 2 }
+        else { $h[$name] = $true; $i++ }
+    }
+    return $h
+}
+function Invoke-ToolIsolated([string]$path, $params, [string[]]$tokens, [string]$outFile) {
+    $oldOut = [Console]::Out; $oldErr = [Console]::Error
+    $swo = New-Object System.IO.StringWriter
+    $swe = New-Object System.IO.StringWriter
+    $rc = 0
+    $lines = @()
+    $ps = $null
+    try {
+        [Console]::SetOut($swo); [Console]::SetError($swe)
+        $ps = [powershell]::Create()
+        # A script with a param block gets its arguments by name (a hashtable); one without (a stub, a user's own tool) gets them as the
+        # tokens of a command line in $args, as it would from a child process.
+        $null = $ps.AddScript('param($p, $h, $tok, $root) $ErrorActionPreference = "Continue"; Set-Location -LiteralPath $root; $global:LASTEXITCODE = 0; $cmd = Get-Command -Name $p -CommandType ExternalScript; if ($cmd.ScriptBlock.Ast.ParamBlock) { & $p @h 2>$null } else { & $p @tok 2>$null }; $global:LASTEXITCODE')
+        $null = $ps.AddArgument($path)
+        $null = $ps.AddArgument($params)
+        $null = $ps.AddArgument($tokens)
+        $null = $ps.AddArgument($RepoRoot)
+        $res = @($ps.Invoke())
+        if ($res.Count -gt 0) {
+            $rc = [int]($res[$res.Count - 1]).ToString()
+            if ($res.Count -gt 1) { $lines = @($res[0..($res.Count - 2)] | ForEach-Object { [string]$_ }) }
+        }
+        $info = @($ps.Streams.Information | ForEach-Object { [string]$_ })
+        $lines = @($info) + @($lines)
+    } catch { $rc = 1 } finally {
+        [Console]::SetOut($oldOut); [Console]::SetError($oldErr)
+        if ($null -ne $ps) { $ps.Dispose() }
+    }
+    $con = $swo.ToString()
+    $text = ($lines -join "`n")
+    if ($con) { $text = $(if ($text) { $text + "`n" } else { '' }) + $con.TrimEnd("`r", "`n") }
+    if ($outFile) { Write-Lf $outFile ($text + "`n") }
+    return @{ rc = [int]$rc; text = $text }
+}
 function Invoke-Tool([string]$tool, [string[]]$toolArgs, [string]$outFile) {
     $path = Join-Path $ToolsDir ($tool + '.ps1')
     if (-not (Test-Path -LiteralPath $path)) { return @{ rc = 2; text = "tool not found: $tool" } }
+    if ($script:InProcTools -contains $tool -and $env:KCC_TOOLS_CHILD -ne '1') {
+        $params = ConvertTo-ParamTable $toolArgs
+        if ($null -ne $params) { $params['RepoRoot'] = $RepoRoot; return (Invoke-ToolIsolated $path $params (@($toolArgs) + @('-RepoRoot', $RepoRoot)) $outFile) }
+    }
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $path) + @($toolArgs | ForEach-Object { Quote-Native $_ })
     if ($tool -ne 'toolchain-preflight') { $a += @('-RepoRoot', $RepoRoot) }
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -405,12 +463,12 @@ function Parse-JsonText([string]$text) {
     if ($a -lt 0 -or $b -le $a) { return $null }
     try { return ($text.Substring($a, $b - $a + 1) | ConvertFrom-Json) } catch { return $null }
 }
-# Best-effort dashboard refresh (a child process, so a failure can never stop the run).
+# Best-effort dashboard refresh (isolated from this run's state, so a failure can never stop it).
 function Refresh-Dashboard {
     if ($DryRun -or $env:KCC_SKIP_DASHBOARD -eq '1') { return }
     $b = Join-Path $ToolsDir 'build-dashboard.ps1'
     if (-not (Test-Path -LiteralPath $b)) { return }
-    try { & $psExe -NoProfile -ExecutionPolicy Bypass -File $b -RepoRoot $RepoRoot *> $null } catch { }
+    try { $null = Invoke-Tool 'build-dashboard' @() '' } catch { }
 }
 # ---- dashboard: opened once per run, only with the human's permission -------------------
 # Permission comes from -OpenDashboard / -NoOpenDashboard, else settings dashboard.auto_open
@@ -554,11 +612,11 @@ function Get-OpenBugList([string]$entry) { # 'Bug-003 (major, blocked); Bug-004 
     }
     return ($out -join '; ')
 }
-function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | TOOLCHAIN_DEFERRED | BLOCKED | ''
+function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED | BLOCKED | ''
     if (-not (Test-Path -LiteralPath $rf)) { return '' }
     $rtxt = [System.IO.File]::ReadAllText($rf)
     $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
-    if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
+    if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
     if ($vm.Success) { return ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
     return ''
 }
@@ -566,12 +624,14 @@ function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | TOOLCH
 # full pass; once a review.md with the verdict CHANGES_NEEDED exists, the next TEST re-verifies only what changed. At most
 # $VerifyFullMax full passes per spec; the counter lives in run.json -> attempts under the key full:SPEC-ID.
 $VerifyFullMax = 2
-$script:VmMode = ''; $script:VmBase = ''
+$script:VmMode = ''; $script:VmBase = ''; $script:VmVerdict = ''
 function Set-VerifyMode([string]$entry) { # sets VmMode (full|scoped) and VmBase (the commit the last review recorded, or '')
-    $script:VmMode = 'full'; $script:VmBase = ''
+    $script:VmMode = 'full'; $script:VmBase = ''; $script:VmVerdict = ''
     $rf = Join-Path (Get-SpecDir $entry) 'review.md'
-    if ((Get-ReviewVerdictOf $rf) -eq 'CHANGES_NEEDED') {
-        $script:VmMode = 'scoped'
+    $pv = Get-ReviewVerdictOf $rf
+    # A QUALITY_DEFERRED review (everything verified, only a scanner missing) is re-verified like CHANGES_NEEDED: scoped, so a deferred-only outcome never uses a full pass.
+    if ($pv -eq 'CHANGES_NEEDED' -or $pv -eq 'QUALITY_DEFERRED') {
+        $script:VmMode = 'scoped'; $script:VmVerdict = $pv
         $m = [regex]::Match([System.IO.File]::ReadAllText($rf), '(?im)^\s*(?:reviewed[-_ ]?)?commit\s*:\s*"?([0-9a-f]{7,40})')
         if ($m.Success) { $script:VmBase = $m.Groups[1].Value }
         else {
@@ -582,7 +642,7 @@ function Set-VerifyMode([string]$entry) { # sets VmMode (full|scoped) and VmBase
 function Get-ScopedPrompt($ctx) { # the sentence added to the verifier's prompt in a scoped re-verification
     if ($script:VmBase) { $base = 'the diff since commit ' + $script:VmBase + ' (git diff ' + $script:VmBase + '..HEAD, plus uncommitted changes)' }
     else { $base = 'the diff since the last review.md was written (no commit is recorded in it: use git log and git status, and the Bug files'' Status)' }
-    return ('RE-VERIFICATION MODE (agents/verifier.md -> Re-verification mode): this is not the first verification of ' + $ctx.SPEC + '; a review.md with the verdict CHANGES_NEEDED exists. Do NOT run a full pass. Re-verify only (a) every Bug item whose Status changed since that review (fixed, wontfix, blocked), and (b) the acceptance criteria and Test IDs whose files changed in ' + $base + '. Always run the mandatory mechanical checks: quality-gate and check-traceability. Copy every other verdict row from the previous review.md unchanged, and state in the new review.md that those rows were carried over from the previous review and not re-run. Verify a fix for real (run its regression test and the commands that exercise it); file a new Bug only for a failure in the re-verified scope or in a changed file. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent''s handover packet.')
+    return ('RE-VERIFICATION MODE (agents/verifier.md -> Re-verification mode): this is not the first verification of ' + $ctx.SPEC + '; a review.md with the verdict ' + $script:VmVerdict + ' exists. Do NOT run a full pass. Re-verify only (a) every Bug item whose Status changed since that review (fixed, wontfix, blocked), and (b) the acceptance criteria and Test IDs whose files changed in ' + $base + '. Always run the mandatory mechanical checks: quality-gate and check-traceability. Copy every other verdict row from the previous review.md unchanged, and state in the new review.md that those rows were carried over from the previous review and not re-run. Verify a fix for real (run its regression test and the commands that exercise it); file a new Bug only for a failure in the re-verified scope or in a changed file. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent''s handover packet.')
 }
 function Open-RulingGate($st, $ctx, [string]$blocked) { # opens the ruling gate for the blocked Bug items; no attempt is used
     $d = @(); $sd = Join-Path (Get-SpecDir $ctx.ENTRY) 'Backlog'
@@ -592,6 +652,234 @@ function Open-RulingGate($st, $ctx, [string]$blocked) { # opens the ruling gate 
     }
     $q = 'Bug item(s) ' + (($blocked -split ' ' | Where-Object { $_ }) -join ', ') + ' of ' + $ctx.SPEC + ' are blocked: the fix cannot proceed without a human ruling, so the implementer is not run again and no attempt is used. Read each ''## Ruling needed'' section (the options and the recommended one), then answer: revise (retry the fix with your ruling; give it with -Note, without a note the recommended option applies), waive (record the bug as wontfix, a human decision), escalate (reopen it and retry, recorded as an escalation), or abort. A silent run never answers this gate itself.'
     return (Open-Gate 'ruling' 'ruling' $q $st $ctx ($d -join "`n`n"))
+}
+# ---- needs attention: a silent run never stops for a human -------------------------------------------------------
+# Under -Silent -Assume every gate is answered by policy (Policy-Gate) and the decision is recorded in
+# coordination/NeedsAttention.md (one section per item). status 'decided' = the run went on, check the decision;
+# status 'open' = the spec had to be left and a human must act. Exit code 7 = the run ended with open items.
+$AttentionFile = Join-Path $Coord 'NeedsAttention.md'
+$script:AnsweredBy = 'human'
+function Flat([string]$s) { return ((Str $s) -replace '\s+', ' ').Trim() }
+function Get-LaneName { if ($RepoRoot -match '[\\/]\.kcc-lanes[\\/]([^\\/]+)$') { return $Matches[1] }; return '' }
+function Get-AttentionCounts {
+    $items = 0; $open = 0
+    if (Test-Path -LiteralPath $AttentionFile) {
+        foreach ($al in [System.IO.File]::ReadAllLines($AttentionFile)) {
+            if ($al -match '^## \[(open|decided)\]') { $items++; if ($Matches[1] -eq 'open') { $open++ } }
+        }
+    }
+    return @{ items = $items; open = $open }
+}
+function Show-Attention {
+    $c = Get-AttentionCounts
+    if ($c.items -gt 0) { Say ('kcc-run: needs attention: ' + (Rel $AttentionFile) + ' - ' + $c.items + ' item(s), ' + $c.open + ' open') }
+}
+function Add-Attention([string]$spec, $st, [string]$gate, [string]$status, [string]$decided, [string]$why, [string]$todo, [string]$links) {
+    if ($DryRun) { return }
+    $when = Iso
+    $stl = ''; if ($st) { $stl = [string]$st.id + ' ' + [string]$st.name }
+    $who = $spec; if (-not $who) { $who = 'run' }
+    $sb = New-Object System.Text.StringBuilder
+    if (-not (Test-Path -LiteralPath $AttentionFile)) {
+        [void]$sb.Append("# Needs attention`n`nWritten by kcc-run under --silent --assume, which never stops for a human: every gate is answered by policy and recorded here.`n`n- status: decided = the run went on with the safest continuing choice; check the decision.`n- status: open = the spec could not continue and was left; a human must act (the run finished everything else, exit code 7).`n`n")
+    }
+    [void]$sb.Append('## [' + $status + '] ' + $who + ' | ' + $gate + ' | state ' + $stl + ' | ' + $when + "`n`n")
+    [void]$sb.Append('- when: ' + $when + "`n- spec: " + $who + "`n- state: " + $stl + "`n- gate: " + $gate + "`n- status: " + $status + "`n")
+    [void]$sb.Append('- decided: ' + (Flat $decided) + "`n- why: " + (Flat $why) + "`n- todo: " + (Flat $todo) + "`n- links: " + (Flat $links) + "`n`n")
+    Append-Lf $AttentionFile $sb.ToString()
+    [void](Emit 'needs-attention' $spec ([ordered]@{ state = $(if ($st) { [int]$st.id } else { 0 }); state_name = $(if ($st) { [string]$st.name } else { '' }); gate = $gate; status = $status; decided = (Flat $decided); reason = (Flat $why); todo = (Flat $todo); file = (Rel $AttentionFile); source = 'kcc-run' }))
+}
+function Get-ResumeHint([string]$spec, $st) {
+    $from = ''; if ($st) { $from = ' --from ' + $st.id }
+    $lane = Get-LaneName
+    if ($lane) { return ('fix the cause, then: kcc run --lane ' + $lane + $from + ' ; kcc run --resume') }
+    return ('fix the cause, then: kcc-run' + $from + ' (kcc-run -Resume continues)')
+}
+function Find-Entry([string]$specId) {
+    foreach ($e in (Get-SpecEntries)) { if ((Get-SpecId (($e -split '/', 2)[1])) -eq $specId) { return $e } }
+    return ''
+}
+# The unit cannot go on and a silent run does not wait: record it as open, then move to the next spec (a bare multi-spec run),
+# stop here with exit 7 (a lane, -Until or -Only run), or on to the states after the per-spec ones (last spec of a bare run).
+function Block-Unit($st, [string]$spec, [string]$gate, [string]$why, [string]$todo, [string]$links) {
+    $key = [string]$st.id; if ($spec) { $key += ':' + $spec }
+    $waveKey = ''; if ($R.wave) { $waveKey = $key + ':' + $R.wave }
+    Set-Att $key 0; if ($waveKey) { Set-Att $waveKey 0 }
+    if ($spec) { Set-Att ('cap:' + $spec) 0 }
+    Add-Attention $spec $st $gate 'open' ('the spec was left (needs attention); the run goes on with whatever else can run') $why $todo $links
+    $R.last_violations = ''; $R.pending_action = ''
+    $ents = Get-SpecEntries; $i = [int]$R.spec_index
+    $isSpec = ($spec -and [string]$st.scope -ne 'run')
+    if ($isSpec -and ($i + 1) -lt $ents.Count -and $onlyIdx -lt 0) {
+        $R.spec_index = [string]($i + 1); $R.state = [string]$States[$SpecFirst].id; $R.wave = ''; $R.force = ''
+        Say ('kcc-run: NEEDS ATTENTION ' + $spec + ' (' + $gate + '): ' + (Flat $why) + ' - continuing with the next spec')
+        Save-Run
+        return
+    }
+    if (-not $isSpec -or $Until -or $onlyIdx -ge 0) {
+        $R.status = 'stopped'; $R.reason = 'needs attention: ' + $(if ($spec) { $spec + ' ' } else { '' }) + $gate + ' at state ' + $st.id + ' ' + $st.name
+        Save-Run
+        Say ('kcc-run: NEEDS ATTENTION ' + $spec + ' (' + $gate + '): ' + (Flat $why))
+        Show-Attention
+        Finish 'needs-attention' 7
+    }
+    $R.wave = ''; $R.force = ''
+    if ($SpecLast + 1 -lt $States.Count) { $R.state = [string]$States[$SpecLast + 1].id } else { $R.state = '-1' }
+    Say ('kcc-run: NEEDS ATTENTION ' + $spec + ' (' + $gate + '): ' + (Flat $why) + ' - moving on')
+    Save-Run
+}
+function Close-GateByPolicy([string]$answer, [string]$note) {
+    $gid = $R.gate_id; $gname = $R.gate_name
+    $gf = Join-Path $GateDir ($gid + '.md')
+    if (Test-Path -LiteralPath $gf) {
+        $t = [System.IO.File]::ReadAllText($gf) -replace "`r`n", "`n"
+        $t = $t -replace "(?m)^status: open$", ("status: answered`nanswer: " + $answer + "`nanswered: " + (Iso))
+        $t += "`n## Decision`n`n- " + (Iso) + ': `' + $answer + '` (kcc-run, policy: silent run) - ' + $note + "`n"
+        Write-Lf $gf $t
+    }
+    [void](Emit 'human-gate-decision' $R.gate_spec ([ordered]@{ gate = $gname; gate_id = $gid; answer = $answer; answered_by = 'policy'; state = [int]$R.gate_state; wave = $R.gate_wave; trigger_event_id = $R.gate_event; note = $note; source = 'kcc-run' }) -Dashboard)
+    $R.gate_id = ''; $R.gate_name = ''; $R.gate_kind = ''; $R.gate_answers = ''; $R.gate_event = ''
+    $R.status = 'running'; $R.pending_action = ''
+    Save-Run
+}
+function Policy-Gate {
+    $g = [string]$R.gate_name; $gid = [string]$R.gate_id; $gspec = [string]$R.gate_spec
+    $sidx = Get-Idx ([int]$R.gate_state); $gst = $States[$sidx]
+    $gateFile = 'coordination/gates/' + $gid + '.md'
+    $logL = ''; if ($R.last_log) { $logL = ', ' + $R.last_log }
+    $ans = ''; $note = ''; $decided = ''; $todo = ''; $why = Flat (Str $R.last_violations)
+    switch ($g) {
+        'quality-deferred-on-exit-3' {
+            $ans = 'accept-deferred'
+            $note = 'silent run: deferred quality check accepted by policy (not a pass); install the missing tool and re-run the gate to close it'
+            $decided = 'accepted the deferred check by policy (not a pass)'
+            $tools = Get-ViolTools $why
+            $todo = 'install the missing tool' + $(if ($tools) { ' (' + $tools + ')' } else { '' }) + ' and re-run the quality gate: .KCC/tools/quality-gate -Spec ' + $(if ($gspec) { $gspec } else { 'SPEC-ID' })
+        }
+        'toolchain' {
+            $ans = 'defer'
+            $note = 'silent run: toolchain missing -> defer (the declared-stack code is written, build and test are marked TOOLCHAIN_DEFERRED, never a pass)'
+            $decided = 'deferred the missing toolchain by policy (TOOLCHAIN_DEFERRED, not a pass)'
+            $todo = 'install the missing toolchain (' + (Get-ViolTools $why) + ') and re-run the TEST state for ' + $gspec
+        }
+        'roi-gate' {
+            $ans = 'proceed'
+            $note = 'silent run: ROI confidence is below the minimum or not recorded; proceeding on the recorded assumption'
+            $decided = 'proceeded despite low or missing ROI confidence'
+            $todo = 'review ideation/' + $R.idea + '/ROI.md and decide whether the idea is worth building'
+        }
+        'repo-bootstrap' {
+            $ans = 'skip'
+            $note = 'silent run: no usable git repository; skipped the bootstrap (no repository was created or changed)'
+            $decided = 'skipped repo-bootstrap'
+            $todo = 'run .KCC/tools/repo-bootstrap to create the repository and the protected-main workflow'
+        }
+        'confirm' { $ans = 'confirm'; $note = 'silent run: interrogation answers confirmed as assumed'; $decided = 'confirmed the assumed answers'; $todo = 'review the assumptions recorded in ideation/' + $R.idea + '/Assumptions.md' }
+        'budget' { $ans = 'approve'; $note = 'silent run: estimate approved by policy'; $decided = 'approved the estimate'; $todo = 'compare the estimate with the actual cost' }
+        'windows' { $ans = 'sequential'; $note = 'silent run: parallel windows not approved, running sequentially'; $decided = 'ran sequentially'; $todo = 'none unless parallel windows are wanted' }
+        'ruling' {
+            $n = Get-Att ('ruled:' + $gspec)
+            if ($n -lt 2) {
+                Set-Att ('ruled:' + $gspec) ($n + 1)
+                $ans = 'revise'
+                $note = 'silent run: no human ruling; apply the recommended option of the Ruling needed section of each reopened Bug item'
+                $decided = 'applied the recommended option of the ruling (as revise, ruling ' + ($n + 1) + ' of 2 allowed by policy)'
+                $todo = 'check that the Bug file(s) under Backlog/ and the Ruling section show the recommended option, and that it is acceptable (an architect-owned change such as a Decisions-table edit needs your approval)'
+            }
+        }
+    }
+    $links = $gateFile + $logL
+    if ($ans) {
+        $prevNote = $Note; $script:Note = $note; $script:AnsweredBy = 'policy'
+        Say ('kcc-run: silent run, gate ' + $g + ' answered by policy: ' + $ans)
+        Apply-Answer $ans
+        $script:AnsweredBy = 'human'; $script:Note = $prevNote
+        Add-Attention $gspec $gst $g 'decided' $decided $(if ($why) { $why } else { $note }) $todo $links
+        return 'answered'
+    }
+    # No safe continuing answer: the spec (or the run) is left and recorded as open.
+    $reason = $why
+    $d = 'stopped retrying; left the spec for a human'
+    switch ($g) {
+        'loop' { if (-not $reason) { $reason = 'the exit check kept failing' }; $reason = 'retry limit reached (CR-3): ' + $reason }
+        'budget-cap' { $reason = 'the estimate exceeds the budget cap and a silent run does not raise it: ' + $reason }
+        'ruling' { $reason = 'the automatic rulings allowed per spec (2) are used up and the bug is blocked again: ' + $reason }
+    }
+    $todo = Get-ResumeHint $gspec $gst
+    if ($g -eq 'budget-cap') { $todo = 'raise the cap or cut the scope, then: kcc-run -Answer increase -Budget NN, or re-run with a larger -Budget' }
+    Close-GateByPolicy 'needs-attention' ('silent run: ' + $d + '. ' + $reason)
+    Block-Unit $gst $gspec $g $reason $todo $links
+    return 'answered'
+}
+# ---- deferred checks: accepted, never a pass ----------------------------------------------------------------------
+function Get-ViolTools([string]$v) {
+    $m = [regex]::Match((Str $v), 'missing tools?:\s*(.*?)(?:\.\s|;|$)')
+    if ($m.Success) { return (Flat $m.Groups[1].Value) }
+    return ''
+}
+function Get-LastMissingTools([string]$spec) {
+    if (-not (Test-Path -LiteralPath $LogDir)) { return '' }
+    $f = Get-ChildItem -LiteralPath $LogDir -Filter ('check-*' + (Safe-Name $spec) + '*-quality-gate.out') -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if (-not $f) { return '' }
+    $m = [regex]::Match([System.IO.File]::ReadAllText($f.FullName), '"missing_tools"\s*:\s*\[([^\]]*)\]')
+    if (-not $m.Success) { return '' }
+    return ((($m.Groups[1].Value -replace '"', '') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ', ')
+}
+# Records that the human (or the silent policy) accepted a deferred external tool for this spec: REVIEW then closes the spec as
+# deferred-accepted instead of looping through FIX and another full test pass.
+function Register-Deferral([string]$spec, $st, [string]$gate, [string]$by) {
+    if (-not $spec) { return }
+    $viol = Str $R.last_violations
+    $tools = Get-ViolTools $viol
+    if (-not $tools) { $tools = Get-LastMissingTools $spec }
+    $verdict = 'QUALITY_DEFERRED'; if ($viol -match 'TOOLCHAIN_DEFERRED' -or $gate -eq 'toolchain') { $verdict = 'TOOLCHAIN_DEFERRED' }
+    $checks = ''; $cm = [regex]::Match($viol, 'deferred checks?\s+([A-Z0-9, -]+?)(?:,\s*not a pass|\.|;|$)'); if ($cm.Success) { $checks = (Flat $cm.Groups[1].Value) }
+    Set-Att ('defer:' + $spec) 1
+    [void](Emit 'deferral-accepted' $spec ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; gate = $gate; verdict = $verdict; by = $by; tools = $tools; checks = $checks; source = 'kcc-run' }))
+}
+function Get-DeferredItems {
+    $bc = Join-Path $Coord 'backchannel.jsonl'; $seen = @{}; $out = @()
+    if (-not (Test-Path -LiteralPath $bc)) { return @() }
+    $mine = @(Get-SpecEntries | ForEach-Object { Get-SpecId (($_ -split '/', 2)[1]) })
+    foreach ($l in [System.IO.File]::ReadAllLines($bc)) {
+        if ($l -notmatch '"kind"\s*:\s*"deferral-accepted"') { continue }
+        $sp = [regex]::Match($l, '"spec"\s*:\s*"([^"]*)"').Groups[1].Value
+        if ($mine.Count -gt 0 -and $mine -notcontains $sp) { continue }
+        $tl = [regex]::Match($l, '"tools"\s*:\s*"([^"]*)"').Groups[1].Value
+        $k = $sp + '|' + $tl
+        if ($seen.ContainsKey($k)) { continue }
+        $seen[$k] = 1
+        $out += [pscustomobject]@{ spec = $sp; tools = $tl; checks = [regex]::Match($l, '"checks"\s*:\s*"([^"]*)"').Groups[1].Value; verdict = [regex]::Match($l, '"verdict"\s*:\s*"([^"]*)"').Groups[1].Value }
+    }
+    return @($out)
+}
+function Get-DeferralLines($d) {
+    $t = $d.tools; if (-not $t) { $t = '(not recorded; see review.md -> Quality Gate Check)' }
+    $c = ''; if ($d.checks) { $c = ' (' + $d.checks + ' not run)' }
+    $sp = $d.spec; if (-not $sp) { $sp = 'SPEC-ID' }
+    $tl = ($d.tools -replace ',\s*', ','); if (-not $tl) { $tl = '<tool>' }
+    return @(
+        ('DEFERRED, NOT A PASS - ' + $sp + $c + ': missing tool(s) ' + $t + '.'),
+        ('  install (human-gated): powershell -ExecutionPolicy Bypass -File .KCC\tools\toolchain-preflight.ps1 -Tools ' + $tl + '   |   bash .KCC/tools/toolchain-preflight.sh ' + ($tl -replace ',', ' ')),
+        ('  then re-run the gate : powershell -ExecutionPolicy Bypass -File .KCC\tools\quality-gate.ps1 -Spec ' + $sp + '   |   bash .KCC/tools/quality-gate.sh --spec ' + $sp))
+}
+function Show-Deferred {
+    foreach ($d in @(Get-DeferredItems)) { foreach ($ln in (Get-DeferralLines $d)) { Say ('kcc-run: ' + $ln) } }
+}
+function Add-ClosedDeferred {
+    $f = Join-Path $RunDir 'closed.md'
+    if (-not (Test-Path -LiteralPath $f)) { return }
+    if ([System.IO.File]::ReadAllText($f).Contains('<!-- kcc-run:deferred -->')) { return }
+    $items = @(Get-DeferredItems); $c = Get-AttentionCounts
+    if ($items.Count -eq 0 -and $c.items -eq 0) { return }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("`n<!-- kcc-run:deferred -->`n")
+    if ($items.Count -gt 0) {
+        [void]$sb.Append("## Deferred checks (NOT a pass)`n`n")
+        foreach ($d in $items) { foreach ($ln in (Get-DeferralLines $d)) { [void]$sb.Append('- ' + $ln.Trim() + "`n") } }
+    }
+    if ($c.items -gt 0) { [void]$sb.Append("`n## Needs attention`n`n- " + (Rel $AttentionFile) + ': ' + $c.items + ' item(s), ' + $c.open + " open`n") }
+    Append-Lf $f $sb.ToString()
 }
 function Set-RulingOnBugs([string]$ans) { # applies the human's ruling to every blocked Bug item of the gate's spec (revise|escalate -> open, waive -> wontfix) and records it in the bug file
     $ents = Get-SpecEntries; $i = [int]$R.spec_index
@@ -641,11 +929,19 @@ function Run-Check($chk, $ctx, [string]$label) {
         $rtxt = [System.IO.File]::ReadAllText($rf)
         $v = ''
         $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
-        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
+        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
         # The review template writes the verdict lower-case with hyphens (status/toolchain-deferred); read it the same as TOOLCHAIN_DEFERRED.
         if ($vm.Success) { $v = ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
         if ($v -eq 'APPROVED') { return @{ rc = 0; viol = '' } }
-        if ($v -eq 'TOOLCHAIN_DEFERRED') { return @{ rc = 3; viol = 'REVIEW-003 (human): review verdict TOOLCHAIN_DEFERRED (a required scanner is missing); this is not a pass' } }
+        if ($v -eq 'QUALITY_DEFERRED' -or $v -eq 'TOOLCHAIN_DEFERRED') {
+            # Deferred = every check that could run has run and the only blocker is an external tool that is missing (quality-gate exit 3).
+            # With every bug fixed, verified or waived that is exit 3 (closed as deferred-accepted, never a pass, no FIX and no second full pass);
+            # with a bug still open the implementer has work, so it is a failure like CHANGES_NEEDED.
+            $ob = Get-OpenBugList $ctx.ENTRY
+            if ($ob) { return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + ' but these bug items are not closed: ' + $ob + '; fix them, then re-test') } }
+            $mt = Get-LastMissingTools $ctx.SPEC
+            return @{ rc = 3; viol = ('REVIEW-003 (human): review verdict ' + $v + '; every bug is closed and the only blocker is a deferred external tool, so this is not a pass' + $(if ($mt) { '. missing tools: ' + $mt } else { '' })) }
+        }
         if (-not $v) { $v = 'missing' }
         return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + '; fix the open bugs and failing acceptance criteria listed in review.md, then re-review') }
     }
@@ -685,7 +981,11 @@ function Run-Check($chk, $ctx, [string]$label) {
         }
         if ($ids.Count -eq 0) { return @{ rc = 1; viol = 'SPEC-005 (spec-writer): ROADMAP.md lists no SPEC-NNN in its Execution Plan' } }
         $miss = @($ids | Where-Object { $sid = $_; -not (Get-ChildItem -LiteralPath $rd -Directory -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq $sid -or $_.Name.StartsWith($sid + '-')) -and (Get-ChildItem -LiteralPath $_.FullName -Filter ($sid + '*.md') -File -ErrorAction SilentlyContinue) }) })
-        if ($miss.Count -eq 0) { return @{ rc = 0; viol = '' } }
+        if ($miss.Count -eq 0) {
+            # The split also writes the per-idea index (IDEA-NNN-slug-Specs.md): the planners and the LINK-002/003 checks read it.
+            if (-not (Test-Path -LiteralPath (Join-Path $rd ($ctx.IDEA + '-Specs.md')))) { return @{ rc = 1; viol = ('SPEC-006 (spec-writer): missing the per-idea index specs/' + $ctx.IDEA + '-Specs/' + $ctx.IDEA + '-Specs.md (a table of the SPEC notes that wikilinks the idea note)') } }
+            return @{ rc = 0; viol = '' }
+        }
         return @{ rc = 1; viol = ('SPEC-005 (spec-writer): ROADMAP.md lists ' + ($miss -join ', ') + ' but there is no folder with a SPEC-NNN-slug.md stub note for it') }
     }
     if ($tool -eq 'internal:files-exist') {
@@ -710,6 +1010,14 @@ function Run-Check($chk, $ctx, [string]$label) {
     $rc = $tr.rc
     if ((Has $chk 'pass_when') -and $rc -ne 2) { if (Test-PassWhen (Str $chk.pass_when) $obj) { $rc = 0 } elseif ($rc -eq 0) { $rc = 1 } }
     $viol = Format-Violations $obj
+    # Exit 3 is a deferred check (an external tool is missing): name the tool and the checks that did not run, so the gate, the
+    # NeedsAttention item and the closing message can say exactly what to install.
+    if ($rc -eq 3 -and -not $viol -and $null -ne $obj -and $obj.PSObject.Properties.Name -contains 'missing_tools') {
+        $mt = (@($obj.missing_tools) | Where-Object { $_ }) -join ', '
+        $dc = @(); if ($obj.PSObject.Properties.Name -contains 'checks') { foreach ($c in @($obj.checks)) { if ((Str $c.status) -eq 'deferred' -and (Str $c.id) -and $dc -notcontains (Str $c.id)) { $dc += (Str $c.id) } } }
+        if ($mt) { $viol = ('QG-DEFERRED (human): ' + $tool + ' deferred' + $(if ($dc.Count -gt 0) { ' checks ' + ($dc -join ', ') } else { '' }) + ', not a pass. missing tools: ' + $mt + '. Install them through toolchain-preflight, then re-run ' + $tool) }
+    }
+    if ($tool -eq 'toolchain-preflight' -and $rc -ne 0 -and $tr.text -match 'MISSING TOOLS:\s*([^\r\n]+)') { $viol = ('TC-001 (human): toolchain preflight failed. missing tools: ' + (Flat $Matches[1]) + '. Install them or defer.') }
     if ($rc -ne 0 -and -not $viol) {
         $viol = ($tool + ' exited ' + $rc + ' (output: ' + (Rel $outFile) + ')')
         if ($null -ne $obj -and $tool -eq 'repo-bootstrap') { $viol = 'RB-GATE (human): git ' + (Str $obj.git) + ', commits ' + (Str $obj.commits) + ', decision ' + (Str $obj.decision) }
@@ -1035,22 +1343,14 @@ function Open-Gate([string]$name, [string]$kind, [string]$question, $st, $ctx, [
     $R.gate_id = $gid; $R.gate_name = $name; $R.gate_kind = $kind; $R.gate_answers = ($answers -join '/'); $R.gate_state = [string]$st.id
     $R.gate_spec = $ctx.SPEC; $R.gate_wave = $ctx.WAVE; $R.gate_event = $ev; $R.status = 'paused'
     Save-Run
-    Show-Pause
+    if ($R.silent -ne '1') { Show-Pause }
     return (Prompt-Gate)
 }
 function Prompt-Gate {
-    # A silent run has no human. The one gate it answers itself is a deferred quality check (a scanner that is not
-    # installed): accepting it is recorded in the gate file, the decision event and closed.md, and is never a pass.
-    # Every other gate pauses the run, and a silent run never waits on a console that nobody answers.
-    if ($R.silent -eq '1') {
-        if ($R.gate_name -eq 'quality-deferred-on-exit-3') {
-            $script:Note = 'silent run: deferred quality check accepted by policy (not a pass); install the missing tool and re-run the gate to close it'
-            Say ('kcc-run: ' + $script:Note)
-            Apply-Answer 'accept-deferred'
-            return 'answered'
-        }
-        return 'paused'
-    }
+    # A silent run has no human and never stops for one: every gate is answered by policy with the safest continuing choice
+    # (Policy-Gate), recorded in the gate file, the human-gate-decision event (answered_by policy) and coordination/NeedsAttention.md.
+    # A spec that cannot continue is left as an open item and the run goes on with the rest. A deferred check is never a pass.
+    if ($R.silent -eq '1') { return (Policy-Gate) }
     $tty = $false
     try { $tty = (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected) -and [Environment]::UserInteractive } catch { $tty = $false }
     if ($Json -or -not $tty -or $env:KCC_RUN_NO_PROMPT -eq '1') { return 'paused' }
@@ -1080,7 +1380,7 @@ function Apply-Answer([string]$ans) {
         $t += "`n## Decision`n`n- " + (Iso) + ': `' + $ans + '` (kcc-run)' + $(if ($Note) { ' - ' + $Note } else { '' }) + "`n"
         Write-Lf $gf $t
     }
-    [void](Emit 'human-gate-decision' $R.gate_spec ([ordered]@{ gate = $gname; gate_id = $gid; answer = $ans; state = [int]$R.gate_state; wave = $R.gate_wave; trigger_event_id = $R.gate_event; note = (Str $Note); source = 'kcc-run' }) -Dashboard)
+    [void](Emit 'human-gate-decision' $R.gate_spec ([ordered]@{ gate = $gname; gate_id = $gid; answer = $ans; answered_by = $script:AnsweredBy; state = [int]$R.gate_state; wave = $R.gate_wave; trigger_event_id = $R.gate_event; note = (Str $Note); source = 'kcc-run' }) -Dashboard)
     $orch = Join-Path $Coord 'orchestrator.json'
     if (Test-Path -LiteralPath $orch) {
         $ot = [System.IO.File]::ReadAllText($orch)
@@ -1118,14 +1418,18 @@ function Apply-Answer([string]$ans) {
             'toolchain' {
                 if ($ans -eq 'install') { $pa = 'install' } elseif ($ans -eq 'defer') {
                     [void](Emit 'toolchain-gate-decision' $R.gate_spec ([ordered]@{ choice = 'defer'; verdict = 'TOOLCHAIN_DEFERRED'; source = 'kcc-run' })); $pa = 'done'
+                    Register-Deferral $R.gate_spec $st 'toolchain' $script:AnsweredBy
                 } else { $pa = 'recheck' }
             }
-            'quality-deferred-on-exit-3' { if ($ans -eq 'install') { $pa = 'install' } else { $pa = 'done' } }
+            'quality-deferred-on-exit-3' {
+                if ($ans -eq 'install') { $pa = 'install' } else { $pa = 'done'; Register-Deferral $R.gate_spec $st 'quality-deferred-on-exit-3' $script:AnsweredBy }
+            }
             'ruling' {
                 # revise and escalate reopen the blocked bugs and re-run the fix with the ruling as the note; waive records them as wontfix
                 if ($ans -eq 'waive') { $pa = 'recheck' } else {
                     $pa = 'rerun'; Set-Att $key 0
-                    if (-not $Note) { $R.note = 'the human answered ' + $ans + ' without a note: apply the recommended option of the Ruling needed section of each reopened Bug item, then set its Status to fixed' }
+                    if ($script:AnsweredBy -eq 'policy') { $R.note = 'no human is available (silent run): ruling by policy (' + $ans + '): apply the recommended option of the Ruling needed section of each reopened Bug item, then set its Status to fixed' }
+                    elseif (-not $Note) { $R.note = 'the human answered ' + $ans + ' without a note: apply the recommended option of the Ruling needed section of each reopened Bug item, then set its Status to fixed' }
                     else { $R.note = 'human ruling (' + $ans + '): ' + $Note + '. Follow it for the reopened Bug items, then set their Status to fixed' }
                 }
                 Set-RulingOnBugs $ans; $R.last_violations = ''
@@ -1208,6 +1512,7 @@ function Complete-Unit($st, $ctx, [bool]$skipped) {
     $cpReason = ''
     if (Has $st 'checkpoint') { $cpReason = [string]$st.checkpoint } elseif ([string]$st.name -eq 'REVIEW') { $cpReason = 'spec-reviewed' }
     if ($cpReason) { Invoke-Checkpoint $cpReason ('kcc-run: ' + (Unit-Label $st $ctx) + ' completed; run kcc-run -Resume') }
+    if ([string]$st.name -eq 'CLOSE') { Add-ClosedDeferred }
     Say ('kcc-run: done   ' + (Unit-Label $st $ctx) + $(if ($skipped) { ' (exit check already passes)' } else { '' }))
     Refresh-Dashboard
 }
@@ -1248,7 +1553,7 @@ function Process-Unit($st, $ctx) {
     $force = (Test-Force ([int]$st.id)) -or $pa -eq 'rerun'
     if ($pa -eq 'rerun') { Set-Att $key 0 }
     $skipDispatch = ($pa -eq 'recheck' -or $pa -eq 'approved' -or $pa -eq 'gatecheck')
-    $script:LastHarnessRc = -1
+    $script:LastHarnessRc = -1; $script:DispatchNo = 0
 
     if ($pa -eq 'install') {
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + '. Follow coordination/orchestrator.md Spawn protocol. The human approved INSTALL of the missing toolchain for ' + $ctx.SPEC + ' (.KCC/kernel/protocols/toolchain-preflight.md): install the declared stack tools, re-detect, then stop. Do only this, then stop.'
@@ -1287,6 +1592,13 @@ function Process-Unit($st, $ctx) {
     if ($hasCheck -and $chk.tool -eq 'internal:no-open-bugs' -and $ctx.ENTRY) {
         $bres = Run-Check $chk $ctx $key
         if ($bres.blocked -and -not $bres.open) { $R.last_violations = (Sanitize-Prompt (Str $bres.viol)); return (Open-RulingGate $st $ctx ([string]$bres.blocked)) }
+        # Nothing for the implementer to do: no open bug, and the check or review that sent the spec back names no violation an
+        # implementer owns (round 11: a FIX run of 86 s found "nothing in scope remains"). No agent runs; the unit completes as skipped.
+        if (-not $bres.open -and -not $bres.blocked -and $hasCmd -and -not $skipDispatch -and $pa -ne 'rerun' -and (Test-Force ([int]$st.id)) -and $R.last_violations -and $R.last_violations -notmatch '\((implementer|infrastructure-implementer)\)') {
+            Say ('kcc-run: skip   ' + $label + ': no open bug and no violation an implementer can fix (' + (Flat $R.last_violations) + ')')
+            Complete-Unit $st $ctx $true
+            return 'next'
+        }
     }
     if (-not $skipDispatch -and ($hasCmd -or $needFix)) {
         $body = ''
@@ -1329,19 +1641,25 @@ function Process-Unit($st, $ctx) {
         elseif ((Test-Force $st.id) -and $R.last_violations) { $prompt += ' A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: ' + $R.last_violations }
         if ($R.note) { $prompt += ' Human note: ' + $R.note; $R.note = '' }
         if ($st.scope -eq 'wave' -and $att -eq 0) { Invoke-Checkpoint 'manual' ('kcc-run: baseline before ' + $label) }
-        $log = Join-Path $LogDir ('state-' + $st.id + '-' + (Safe-Name $(if ($ctx.SPEC) { $ctx.SPEC + $(if ($ctx.WAVE) { '-w' + $ctx.WAVE } else { '' }) } else { 'run' })) + '-' + ($att + 1) + '.log')
+        # One log per dispatch: the first dispatch of a unit keeps the name state-<id>-<unit>-<attempt>.log; when that file exists (a second
+        # TEST pass, FIX again after a review) the suffix counts up to the next free number, so no run overwrites an earlier log.
+        $logTag = Safe-Name $(if ($ctx.SPEC) { $ctx.SPEC + $(if ($ctx.WAVE) { '-w' + $ctx.WAVE } else { '' }) } else { 'run' })
+        $dispatchNo = $att + 1
+        while (Test-Path -LiteralPath (Join-Path $LogDir ('state-' + $st.id + '-' + $logTag + '-' + $dispatchNo + '.log'))) { $dispatchNo++ }
+        $script:DispatchNo = $dispatchNo
+        $log = Join-Path $LogDir ('state-' + $st.id + '-' + $logTag + '-' + $dispatchNo + '.log')
         Say ('kcc-run: run    ' + $label + ' (attempt ' + ($att + 1) + '/' + $cfgMax + ') -> ' + ($log.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'))
         Save-Run
         Refresh-Dashboard
         # Every dispatch records a start and an end with its spec and agent, so the dashboard can show runs that overlap (one agent per spec).
-        $arAgent = 'orchestrator'; $arModel = ''; $arEffort = ''
-        if ($am) { if ($am.agent) { $arAgent = [string]$am.agent }; $arModel = [string]$am.model; $arEffort = [string]$am.effort }
+        $arAgent = 'orchestrator'; $arModel = ''; $arEffort = ''; $arTier = ''; $arWhy = ''
+        if ($am) { if ($am.agent) { $arAgent = [string]$am.agent }; $arModel = [string]$am.model; $arEffort = [string]$am.effort; $arTier = [string]$am.tier; $arWhy = [string]$am.why }
         $arLog = ($log.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/')
         $arT0 = [DateTime]::UtcNow
-        [void](Emit 'agent-run-started' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; model = $arModel; effort = $arEffort; attempt = ($att + 1); wave = [string]$ctx.WAVE; log = $arLog; started = $arT0.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
+        [void](Emit 'agent-run-started' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; model = $arModel; effort = $arEffort; tier = $arTier; reasons = $arWhy; pass = [string]$script:VmMode; attempt = ($att + 1); dispatch = $dispatchNo; wave = [string]$ctx.WAVE; log = $arLog; started = $arT0.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
         $rc = Invoke-Harness $prompt $log
         $script:HarnessExtra = ''
-        [void](Emit 'agent-run-ended' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; attempt = ($att + 1); wave = [string]$ctx.WAVE; log = $arLog; exit = [int]$rc; seconds = [int]([DateTime]::UtcNow - $arT0).TotalSeconds; ended = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
+        [void](Emit 'agent-run-ended' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; agent = $arAgent; attempt = ($att + 1); dispatch = $dispatchNo; wave = [string]$ctx.WAVE; log = $arLog; exit = [int]$rc; seconds = [int]([DateTime]::UtcNow - $arT0).TotalSeconds; ended = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'kcc-run' }))
         if (Test-LimitHit $script:LastHarnessLines $rc) { Suspend-Run $st $ctx $script:LastHarnessLines }
         if ($rc -eq 124) { Say ('kcc-run: harness timed out for ' + $label) }
         $preResult = $null
@@ -1382,7 +1700,9 @@ function Process-Unit($st, $ctx) {
     $res = $preResult
     # A check that names {IDEA} (files-exist, -Spec paths) needs the idea the dispatch just created.
     if ($null -eq $res -and -not $R.idea) { Detect-Idea; if ($R.idea) { $ctx = New-Ctx $ctx.ENTRY $ctx.WAVE } }
-    if ($null -eq $res) { $res = Run-Check $chk $ctx ($key + '-' + ((Get-Att $key) + 1)) }
+    # The check output carries the same number as the dispatch log it belongs to (check-<state>_<spec>-<n>-<tool>.out next to state-<id>-<spec>-<n>.log).
+    $ckNo = (Get-Att $key) + 1; if ($script:DispatchNo -gt 0) { $ckNo = $script:DispatchNo }
+    if ($null -eq $res) { $res = Run-Check $chk $ctx ($key + '-' + $ckNo) }
     # A passing check proves nothing when the state's artifact was never written (a conformance scope with
     # nothing in it passes): precheck_requires is also the state's required output.
     if ($res.rc -eq 0 -and (Has $st 'precheck_requires') -and -not $R.idea) { Detect-Idea; $ctx = New-Ctx $ctx.ENTRY $ctx.WAVE }
@@ -1392,10 +1712,20 @@ function Process-Unit($st, $ctx) {
     if ($res.rc -eq 0) { Complete-Unit $st $ctx $false; return 'next' }
     $R.last_violations = (Sanitize-Prompt (Str $res.viol))
     if ($R.last_violations.Length -gt 1500) { $R.last_violations = $R.last_violations.Substring(0, 1500) + ' ...' }
-    if ($res.rc -eq 2) { Stop-Run 'stopped' ('exit check for ' + $label + ' returned a usage/environment error: ' + $R.last_violations) 6 }
+    if ($res.rc -eq 2) {
+        # A silent run does not stop for a check that cannot run: the spec is left as an open item and the rest goes on.
+        if ($R.silent -eq '1' -and $ctx.SPEC) { Block-Unit $st $ctx.SPEC 'check-error' ('the exit check returned a usage/environment error: ' + $R.last_violations) (Get-ResumeHint $ctx.SPEC $st) ($(if ($R.last_log) { $R.last_log } else { '' })); return 'goto' }
+        Stop-Run 'stopped' ('exit check for ' + $label + ' returned a usage/environment error: ' + $R.last_violations) 6
+    }
     # Only blocked bugs are left (the pass fixed the others): they need a human ruling, so no retry and no attempt is used.
     if ($res.blocked -and -not $res.open) { return (Open-RulingGate $st $ctx ([string]$res.blocked)) }
     if ($res.rc -eq 3) {
+        # A deferral already accepted for this spec (at TEST, or at the toolchain gate) is not asked again: the spec closes as deferred-accepted.
+        if ($ctx.SPEC -and (Get-Att ('defer:' + $ctx.SPEC)) -gt 0) {
+            Say ('kcc-run: deferred check for ' + $ctx.SPEC + ' was accepted earlier (not a pass): ' + (Flat $R.last_violations))
+            Complete-Unit $st $ctx $false
+            return 'next'
+        }
         $g = $gname; if (-not $g -or $gkind -eq 'approval') { $g = 'quality-deferred-on-exit-3' }
         return (Open-Gate $g 'failure' ('Exit check for ' + $label + ' is DEFERRED (exit 3): a required external tool is missing. This is not a pass.') $st $ctx $R.last_violations)
     }
@@ -1460,7 +1790,10 @@ function Resolve-Unit {
     $wave = ''
     if ($st.scope -eq 'wave') {
         $waves = @(Get-Waves $entry)
-        if ($waves.Count -eq 0) { Stop-Run 'stopped' ('plan.md for ' + $entry + ' has no ## Waves table') 6 }
+        if ($waves.Count -eq 0) {
+            if ($R.silent -eq '1') { $sid = Get-SpecId (($entry -split '/', 2)[1]); Block-Unit $st $sid 'no-waves' ('plan.md for ' + $entry + ' has no ## Waves table, so there is nothing to implement') (Get-ResumeHint $sid (@{ id = 11; name = 'PLAN' })) ''; return @{ skip = $true } }
+            Stop-Run 'stopped' ('plan.md for ' + $entry + ' has no ## Waves table') 6
+        }
         if (-not $R.wave -or ($waves -notcontains $R.wave)) { $R.wave = $waves[0] }
         $wave = $R.wave
     }
@@ -1528,6 +1861,7 @@ function Plan-Line($st, $ctx) {
 
 # ---- main ------------------------------------------------------------------------------------------
 $script:HarnessName = 'claude'
+$onlyIdx = -1
 $runExists = Test-Path -LiteralPath $RunFile
 $R = $null
 if ($runExists) { try { $R = Load-Run } catch { Fail-Usage "cannot parse $RunFile" } }
@@ -1544,6 +1878,8 @@ if ($InputText -and -not $Resume) {
 
 if ($startNew) {
     if ($runExists -and -not $DryRun) { Move-Item -LiteralPath $RunFile -Destination (Join-Path $RunDir ('run-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmss') + '.json')) -Force }
+    # A new run starts a new NeedsAttention.md; the previous one is kept next to it.
+    if (-not $DryRun -and (Test-Path -LiteralPath $AttentionFile)) { Move-Item -LiteralPath $AttentionFile -Destination (Join-Path $Coord ('NeedsAttention-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmss') + '.md')) -Force }
     $R = New-Run
     $txt = $InputText.Trim()
     if ($txt -match '^<(.*)>$') { $txt = $Matches[1].Trim() }
@@ -1667,10 +2003,15 @@ while ($true) {
         $last = $States[$States.Count - 1]
         if (-not ((Has $last 'event') -and $last.event -eq 'session-closed')) { [void](Emit 'session-closed' (Str $R.idea) ([ordered]@{ terminal = 'DONE'; source = 'kcc-run' })) }
         Say 'kcc-run: DONE'
+        Show-Deferred
+        $na = Get-AttentionCounts
+        if ($na.open -gt 0) { Show-Attention; Finish 'needs-attention' 7 }
+        if ($na.items -gt 0) { Show-Attention }
         Finish 'done' 0
     }
     $u = Resolve-Unit
     if ($null -eq $u) { Stop-Run 'stopped' ('unknown state ' + $R.state) 6 }
+    if ($u.skip) { Save-Run; continue }
     $out = Process-Unit $u.st $u.ctx
     if ($out -eq 'paused') { Save-Run; Finish 'paused' 4 }
     if ($out -eq 'answered') { Save-Run; continue }
@@ -1693,6 +2034,8 @@ while ($true) {
                     $R.status = 'stopped'; $R.reason = 'until ' + $Until; $R.until = ''
                     Save-Run
                     Say ('kcc-run: -Until ' + $Until + ' reached; run stopped (resume with -Resume)')
+                    Show-Deferred
+                    if ((Get-AttentionCounts).items -gt 0) { Show-Attention }
                     Finish 'until-done' 0
                 }
             }
