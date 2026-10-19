@@ -96,9 +96,11 @@ architect fixes.
 
 Read the run profile first (`coordination/run/run.json` -> `fasttrack`, or `--fasttrack` in the
 packet). Under fast track, validate against the `fasttrack` column of the artifact matrix in
-`architecture-documentation.md`: `architecture.md` with C1, C2, `## Decisions` and `## Toolchain`,
-flowcharts, `quality-gates.md`. ADR files, `c4-component.md`, `dfds/` or `sequences/` are **DRIFT**
-(over-production), not extra credit. One pass, one verdict; never ask for a second cycle for prose
+`architecture-documentation.md`: `architecture.md` with C1, C2, `## Decisions` and `## Toolchain`
+(and a `## Flows` flowchart only when the idea has a non-trivial workflow), `quality-gates.md`. ADR
+files, `c4-component.md`, `dfds/` or `sequences/` are **DRIFT** (over-production), not extra credit;
+a standalone `c4-context.md`, `c4-container.md` or `flowcharts/` folder is a duplicate of the
+embedded diagram (a warning), and no spec `arch.md` exists, so never ask for one. One pass, one verdict; never ask for a second cycle for prose
 length, and never ask the human.
 
 ## Output Format

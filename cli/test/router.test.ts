@@ -73,7 +73,7 @@ describe("model router (model-routing.md)", () => {
     expect(r.reasons.join("; ").length).toBeLessThan(170);
     expect(route({ defaultTier: "fast", defaultEffort: "medium", task: "implement", risk: true }).reasons).toContain("CR-7 risk: effort high, tier raised to balanced");
     expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "review", risk: true, files: 6, attempt: 2, maxTier: "balanced", maxEffort: "high" }).reasons.join("; ")).toBe(
-      "agent default: balanced / high; CR-7 risk: effort high; large unit: effort up; effort capped at high for review");
+      "agent default: balanced / high; CR-7 risk: effort high; large unit: effort up; review: effort capped at high (xhigh only for extra-high complexity)");
     expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "plan", domain: "common", attempt: 2 }).reasons.join("; ").length).toBeLessThan(160);
     expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "plan", budgetLeftPct: 10 }).reasons).toContain("budget under 20%: tier capped at balanced");
   });
@@ -85,7 +85,10 @@ describe("model router (model-routing.md)", () => {
   });
   test("a verifier or critic is never escalated for a retry (round 10: Opus at xhigh on the second full pass); a first pass keeps its signals", () => {
     const first = route({ defaultTier: "balanced", defaultEffort: "high", task: "review", risk: true, files: 6 });
-    expect(first).toMatchObject({ tier: "balanced", effort: "xhigh" }); // a security-sensitive large spec, first pass: unchanged
+    expect(first).toMatchObject({ tier: "balanced", effort: "high" }); // a security-sensitive large spec, first pass: high, never xhigh (round 12)
+    expect(first.reasons).toContain("review: effort capped at high (xhigh only for extra-high complexity)");
+    expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "review", complexity: "extra-high" }).effort).toBe("xhigh"); // the one exception
+    expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "implement", risk: true, files: 6 }).effort).toBe("xhigh"); // the cap is for reviews only
     for (const attempt of [2, 3]) {
       const r = route({ defaultTier: "balanced", defaultEffort: "high", task: "review", attempt });
       expect(r).toEqual({ tier: "balanced", effort: "high", reasons: ["agent default: balanced / high"] });
@@ -97,7 +100,8 @@ describe("model router (model-routing.md)", () => {
     const r = route({ defaultTier: "balanced", defaultEffort: "high", task: "review", domain: "novel", risk: true, files: 6, maxTier: "balanced", maxEffort: "high" });
     expect(r.tier).toBe("balanced");
     expect(r.effort).toBe("high");
-    expect(r.reasons).toEqual(expect.arrayContaining(["capped at balanced for review", "effort capped at high for review"]));
+    expect(r.reasons).toEqual(expect.arrayContaining(["capped at balanced for review", "review: effort capped at high (xhigh only for extra-high complexity)"]));
+    expect(route({ defaultTier: "balanced", defaultEffort: "high", task: "review", complexity: "extra-high", maxEffort: "high" }).reasons).toContain("effort capped at high for review"); // the caller ceiling still applies to the extra-high exception
     expect(route({ defaultTier: "balanced", defaultEffort: "medium", task: "review", maxEffort: "high" }).reasons).toEqual(["agent default: balanced / medium"]); // no cap reason when nothing is above it
   });
   test("a large unit raises effort; a low budget caps the tier unless there is risk", () => {

@@ -323,7 +323,7 @@ review_verdict() { # review-file -> APPROVED | CHANGES_NEEDED | TOOLCHAIN_DEFERR
     { sub(/\r$/, "") }
     !found {
       l = tolower($0)
-      if (l ~ /verdict/ && match(l, /(^|[^a-z0-9_])(changes_needed|approved|toolchain-deferred|quality-deferred)([^a-z0-9_]|$)/)) {
+      if (l ~ /verdict/ && match(l, /(^|[^a-z0-9_])(changes_needed|approved|toolchain-deferred|quality-deferred|waiver-needed|waiver_needed)([^a-z0-9_]|$)/)) {
         s = substr(l, RSTART, RLENGTH); gsub(/[^a-z_-]/, "", s); gsub(/-/, "_", s); print toupper(s); found = 1
       }
     }' "$1"
@@ -378,7 +378,7 @@ EOF
 # ---------------------------------------------------------------------------
 check_architecture() {
   [ -d "$ARCH_DIR" ] || return 0
-  local md_count mmd_files doc size f sa name
+  local md_count mmd_files doc size f sa name dup
   md_count=$(find "$ARCH_DIR" -type f -name '*.md' ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')
   mmd_files=$(find "$ARCH_DIR" -type f -name '*.mmd' 2>/dev/null || true)
   if [ "$md_count" -eq 0 ] && [ -z "$mmd_files" ]; then return 0; fi
@@ -411,8 +411,10 @@ EOF
   done
 
   # Fast-track profile (architecture-documentation.md -> required artifacts, column `fasttrack`): the
-  # Architecture Document carries C1, C2, a Decisions table and the toolchain; flowcharts and quality
-  # gates exist; ADR files, component diagrams, DFDs and sequences do not (over-production is drift).
+  # Architecture Document carries C1, C2, a Decisions table, the toolchain and, when the idea has a
+  # non-trivial workflow, one embedded `## Flows` flowchart; quality gates exist; ADR files, component
+  # diagrams, DFDs and sequences do not (over-production is drift). A standalone c4-context.md,
+  # c4-container.md or flowcharts/ folder duplicates the embedded diagram (nobody downstream reads it): a warning.
   if [ "$FASTTRACK" -eq 1 ]; then
     if [ -f "$doc" ]; then
       grep -q 'C4Context' "$doc" || violation "ARCH-FT-001" "error" "architect" "fast track: architecture.md has no embedded C1 context diagram (C4Context)." "architecture/architecture.md"
@@ -420,7 +422,10 @@ EOF
       grep -qE '^##+[[:space:]]+Decisions' "$doc" || violation "ARCH-FT-003" "error" "architect" "fast track: architecture.md has no '## Decisions' table (decision, library and version range, catalogue citation, status)." "architecture/architecture.md"
       grep -qE '^##+[[:space:]]+Toolchain' "$doc" || violation "ARCH-FT-004" "error" "architect" "fast track: architecture.md has no '## Toolchain' table." "architecture/architecture.md"
     fi
-    if [ -z "$(find "$ARCH_DIR/flowcharts" -maxdepth 1 -type f -name '*.md' 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-005" "error" "architect" "fast track: architecture/flowcharts/ has no business flowchart." "architecture/flowcharts"; fi
+    for dup in c4-context.md c4-container.md; do
+      [ -f "$ARCH_DIR/$dup" ] && violation "ARCH-FT-005" "warning" "architect" "fast track: architecture/$dup is a duplicate of the embedded diagram in architecture.md; nobody downstream reads it. Remove it." "architecture/$dup"
+    done
+    if [ -n "$(find "$ARCH_DIR/flowcharts" -maxdepth 1 -type f 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-005" "warning" "architect" "fast track: architecture/flowcharts/ is a duplicate of the embedded diagram; a business flow that matters is one '## Flows' flowchart inside architecture.md. Remove the folder." "architecture/flowcharts"; fi
     [ -f "$ARCH_DIR/quality-gates.md" ] || violation "ARCH-FT-006" "error" "architect" "fast track: architecture/quality-gates.md is missing." "architecture/quality-gates.md"
     if [ -n "$(find "$ARCH_DIR/adrs" -maxdepth 1 -type f -name 'ADR-*.md' 2>/dev/null | head -n 1)" ]; then violation "ARCH-FT-007" "error" "architect" "fast track records decisions in architecture.md -> ## Decisions, not in ADR files; remove architecture/adrs/." "architecture/adrs"; fi
     [ -f "$ARCH_DIR/c4-component.md" ] && violation "ARCH-FT-008" "error" "architect" "fast track writes no component diagram; remove architecture/c4-component.md." "architecture/c4-component.md"
@@ -595,7 +600,7 @@ EOH
     fi
     dir="$(dirname "$idea")"
     idea_artifacts="Questionnaire.md HumanAnswers.md Research.md ROI.md Conclusion.md QuickRoadmap.md SpecWriterStarter.md"
-    if [ "$FASTTRACK" -eq 1 ]; then idea_artifacts="Research.md QuickRoadmap.md SpecWriterStarter.md"; fi
+    if [ "$FASTTRACK" -eq 1 ]; then idea_artifacts="Research.md SpecWriterStarter.md"; fi
     for a in $idea_artifacts; do
       if [ ! -f "$dir/$a" ]; then
         violation "IDEA-004" "error" "idea-interrogator" "$(rel "$dir") is missing required artifact $a." "$(rel "$dir")/$a"
@@ -651,8 +656,37 @@ resolve_link() { # spec-dir link -> resolved path (or nothing)
   return 0
 }
 
+roadmap_serial() { # roadmap-file -> prints "serial" when the Execution Plan lists 3+ specs and every spec after the first depends on exactly the previous one
+  awk '
+    function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
+    { sub(/\r$/, "") }
+    /^##[ \t]/ { insec = ($0 ~ /^##[ \t]+[Ee]xecution [Pp]lan/); hdr = 0; next }
+    insec && /^[ \t]*\|/ {
+      line = $0; gsub(/\\\|/, "/", line)
+      n = split(line, c, "|")
+      if (!hdr) {
+        si = 0; di = 0
+        for (i = 1; i <= n; i++) { t = tolower(trim(c[i])); if (t == "spec") si = i; if (t == "depends on") di = i }
+        hdr = 1; next
+      }
+      if (line ~ /^[ \t]*\|[ \t:|-]*$/) next
+      if (!si || !di || si > n || di > n) next
+      sc = c[si]; if (!match(sc, /SPEC-[0-9]+/)) next
+      id = substr(sc, RSTART, RLENGTH)
+      dc = c[di]; k = 0; deps = ""; delete seen
+      while (match(dc, /SPEC-[0-9]+/)) { d = substr(dc, RSTART, RLENGTH); dc = substr(dc, RSTART + RLENGTH); if (d in seen) continue; seen[d] = 1; k++; deps = deps (k > 1 ? "," : "") d }
+      cnt++; ids[cnt] = id; dep[cnt] = deps; ndep[cnt] = k
+      next
+    }
+    END {
+      if (cnt < 3) exit
+      for (i = 2; i <= cnt; i++) if (ndep[i] != 1 || dep[i] != ids[i - 1]) exit
+      print "serial"
+    }' "$1"
+}
+
 check_specs() {
-  local specs id name dir file group idea legacy r sev h n rows key type link why counted it_key it_type it_file ir nf
+  local specs id name dir file group idea legacy r sev h n rows key type link why counted it_key it_type it_file ir nf arch_heading sz5_where
   local groups g gsev all_legacy rm rt done6 dupes
   specs="$(target_specs)"
   if [ -n "$SPEC" ] && [ -z "$specs" ]; then
@@ -668,7 +702,10 @@ check_specs() {
       sev="warning"
       violation "SPEC-LEGACY" "warning" "spec-writer" "$name uses the legacy v5 layout (backlog.md). Findings are warnings; migrate per spec-layout 'Legacy v5 specs'." "$r"
     else
-      for h in "Delivery Brief" "Acceptance Criteria" "Backlog" "Architecture"; do
+      # Fast track has no arch.md: the note's `## Architecture references` (Decision ids, C2 containers, the
+      # Architecture Document wikilink) is what the planner and the verifier read.
+      arch_heading="Architecture"; if [ "$FASTTRACK" -eq 1 ]; then arch_heading="Architecture references"; fi
+      for h in "Delivery Brief" "Acceptance Criteria" "Backlog" "$arch_heading"; do
         if ! has_heading "$file" "$h"; then
           violation "SPEC-001" "error" "spec-writer" "$r is missing required section '## $h'." "$r"
         fi
@@ -679,10 +716,17 @@ check_specs() {
       fi
       n="$(awk 'END { print NR }' "$file")"
       if [ "$n" -gt "$MAX_SPEC_LINES" ]; then
-        violation "SZ-5" "error" "spec-writer" "$r has $n lines (max $MAX_SPEC_LINES). Move detail into backlog items or arch.md." "$r"
+        sz5_where="backlog items or arch.md"; if [ "$FASTTRACK" -eq 1 ]; then sz5_where="backlog items"; fi
+        violation "SZ-5" "error" "spec-writer" "$r has $n lines (max $MAX_SPEC_LINES). Move detail into $sz5_where." "$r"
       fi
     fi
-    if [ ! -f "$dir/arch.md" ]; then
+    # SPEC-003 applies to the full lifecycle only: fast track writes no per-spec arch.md (the note's
+    # `## Architecture references` and architecture/architecture.md are what the planner and verifier read).
+    if [ "$FASTTRACK" -eq 1 ]; then
+      if [ -f "$dir/arch.md" ]; then
+        violation "SPEC-003" "warning" "spec-writer" "$name has an arch.md; fast track writes none (the spec note's '## Architecture references' carries the design pointers). Remove it." "$(rel "$dir")/arch.md"
+      fi
+    elif [ ! -f "$dir/arch.md" ]; then
       violation "SPEC-003" "$sev" "spec-writer" "$name has no arch.md." "$(rel "$dir")/arch.md"
     fi
     rows="$(backlog_rows "$dir" "$file" "$legacy")"
@@ -756,6 +800,11 @@ EOF
       nspecs="$(printf '%s\n' "$specs" |awk -F'\t' -v g="$g" '$5 == g && $1 != "" && !seen[$1]++' | awk 'END { print NR }')"
       if [ "$nspecs" -gt "$budget" ]; then
         violation "SPEC-009" "error" "spec-writer" "$(rel "$g") has $nspecs specs; the fast-track budget is $budget. Merge specs into user-visible slices, or record the human's 'Spec budget: N (human approved)' in ROADMAP.md." "$(rel "$rm")"
+      fi
+      # SPEC-011: a split whose Execution Plan is one chain (every spec after the first depends on exactly the previous
+      # one) builds serially; only build-time dependencies belong in `Depends on`, so independent specs build in parallel.
+      if [ "$(roadmap_serial "$rm")" = "serial" ]; then
+        violation "SPEC-011" "warning" "spec-writer" "the split is serial: every feature spec depends on the previous one; name only build-time dependencies so independent specs build in parallel." "$(rel "$rm")"
       fi
     fi
     done6=""
@@ -1087,7 +1136,7 @@ check_review() {
     fi
     verdict="$(review_verdict "$rev")"
     if [ -z "$verdict" ]; then
-      violation "REV-002" "error" "verifier" "$rrel has no verdict line (APPROVED | CHANGES_NEEDED | toolchain-deferred | quality-deferred)." "$rrel"
+      violation "REV-002" "error" "verifier" "$rrel has no verdict line (APPROVED | CHANGES_NEEDED | toolchain-deferred | quality-deferred | waiver-needed)." "$rrel"
     fi
     if ! has_heading "$rev" "Evidence"; then
       violation "REV-003" "error" "verifier" "$rrel has no '## Evidence' section." "$rrel"

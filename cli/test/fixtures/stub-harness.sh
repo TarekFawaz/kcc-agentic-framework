@@ -64,12 +64,6 @@ common
 ## Findings
 - Well-known CRUD web app.
 EOF
-    w "$ID/QuickRoadmap.md" <<'EOF'
-# Quick roadmap
-| Order | Epic | Depends on |
-|--|--|--|
-| 1 | Skeleton | None |
-EOF
     w "$ID/SpecWriterStarter.md" <<'EOF'
 # Spec writer starter
 ## Epics
@@ -81,14 +75,23 @@ EOF
 EOF
     ;;
   4)
-    for b in TechnicalDecisionBrief InfrastructureDecisionBrief UXDecisionBrief SecurityDecisionBrief; do
-      w "$ID/$b.md" <<EOF
-# $b
+    # Fast track runs two specialists: the technical brief carries the UX and infrastructure sections, the security brief stands alone.
+    w "$ID/TechnicalDecisionBrief.md" <<'EOF'
+# TechnicalDecisionBrief
+- Decision: defaults from the standards catalogue.
+## UX and UI
+- Plain server-rendered pages, system font, no design system.
+## Infrastructure and packaging
+- One container image, config from the environment, no registry push.
+## Open questions
+- none
+EOF
+    w "$ID/SecurityDecisionBrief.md" <<'EOF'
+# SecurityDecisionBrief
 - Decision: defaults from the standards catalogue.
 ## Open questions
 - none
 EOF
-    done
     ;;
   5)
     w "$ID/Assumptions.md" <<'EOF'
@@ -118,7 +121,6 @@ C4Context
   System(app, "Demo app")
   Rel(user, app, "uses")
 ```
-Source: [[c4-context]]
 
 ## 3. Containers
 ```mermaid
@@ -127,10 +129,12 @@ C4Container
   ContainerDb(db, "SQLite", "file", "stores data")
   Rel(api, db, "reads/writes")
 ```
-Source: [[c4-container]]
 
-## 5. Key workflows
-See [[flowcharts/create-item]].
+## Flows
+```mermaid
+flowchart TD
+  A[Form] --> B[POST /items] --> C[(SQLite)]
+```
 
 ## Decisions
 | Decision | Library / version | Citation | Status |
@@ -145,13 +149,6 @@ See [[flowcharts/create-item]].
 
 ## 8. Quality attributes
 See [[quality-gates]].
-EOF
-    w "architecture/flowcharts/create-item.md" <<'EOF'
-# Create item
-```mermaid
-flowchart TD
-  A[Form] --> B[POST /items] --> C[(SQLite)]
-```
 EOF
     w "architecture/quality-gates.md" <<'EOF'
 # Quality gates
@@ -185,7 +182,7 @@ status: Draft
 - Depends on: $([ "$n" = 1 ] && echo None || echo SPEC-001)
 EOF
     }
-    full_note() { # n -> the whole spec: note, arch.md, one Story
+    full_note() { # n -> the whole spec: note (with its Architecture references; fast track writes no arch.md), one Story
       local n="$1" s; s="SPEC-00$1-$(slug_of "$1")"
       w "$SPECS/$s/$s.md" <<EOF
 ---
@@ -210,12 +207,10 @@ status: Draft
 |--|--|--|--|--|
 | [[Backlog/Story-001-create-item|Story-001]] | Story | Create and list an item | Draft | 1 |
 
-## Architecture
-See [[arch]].
-EOF
-      w "$SPECS/$s/arch.md" <<EOF
-# SPEC-00$n architecture slice
-Skeleton: API + SQLite, see [[../../../architecture/architecture|Architecture Document]].
+## Architecture references
+- Decisions: D-1 (HTTP framework), D-2 (password storage)
+- Containers: API, SQLite
+- Architecture Document: [[../../../architecture/architecture|Architecture Document]]
 EOF
       w "$SPECS/$s/Backlog/Story-001-create-item.md" <<EOF
 # Story-001: Create and list an item

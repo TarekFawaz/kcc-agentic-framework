@@ -377,7 +377,7 @@ if (Test-Path -LiteralPath $specsDir) {
                 $review.exists = $true
                 # The verdict is the review's own word: its frontmatter "verdict:", else the "Verdict" section, else the first one named anywhere
                 # (a review quotes earlier verdicts in its text). QUALITY_DEFERRED (TOOLCHAIN_DEFERRED is the older name) is its own state.
-                $vre = '(?i)\b(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|BLOCKED)\b'
+                $vre = '(?i)\b(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|WAIVER_NEEDED|BLOCKED)\b'
                 $vm = $null
                 $fmv = Get-Frontmatter $rvt 'verdict'
                 if ($fmv) { $vm = [regex]::Match($fmv, $vre) }

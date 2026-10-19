@@ -77,6 +77,11 @@ interaction.
 
 ## Fast track and depth
 
+The fast-track run does not spawn you: the technical-interrogator writes a `## UX and UI` section
+(at most 15 lines, catalogue defaults) into `TechnicalDecisionBrief.md`, and the architect and the
+spec-writer read that section in place of `UXDecisionBrief.md`. The rules below apply when a human
+invokes `/ux-ui-interrogator --fasttrack` on request.
+
 Under `fasttrack`: do not ask the human (no AskUserQuestion). Decide from the idea, the other
 briefs and `standards-catalog.md` (cite the rule you follow), write the brief within
 `spec_sizing.max_brief_lines`, and list at most 5 genuinely blocking questions under

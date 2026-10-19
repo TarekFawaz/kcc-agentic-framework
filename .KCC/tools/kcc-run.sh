@@ -324,6 +324,7 @@ derived_tools() {
   if printf '%s' "$txt" | grep -Eq 'backend-dotnet|fullstack-dotnet'; then addt dotnet; fi
   if printf '%s' "$txt" | grep -q 'flutter'; then addt dart,flutter; fi
   if printf '%s' "$txt" | grep -q 'mobile-kotlin'; then addt java; fi
+  if printf '%s' "$txt" | grep -Eq 'docker|compose\.ya?ml|containerfile'; then addt docker; fi
   if printf '%s' "$txt" | grep -q 'mobile-swift'; then addt swift; fi
   if printf '%s' "$txt" | grep -q 'backend-ruby'; then addt ruby; fi
   if printf '%s' "$txt" | grep -q 'scripting-lua'; then addt lua; fi
@@ -513,12 +514,65 @@ open_bug_list() { # spec entry -> "Bug-003 (major, blocked); Bug-004 (major, ope
   done
   printf '%s' "$out"
 }
-review_verdict_of() { # review.md -> APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED | BLOCKED | empty
+review_verdict_of() { # review.md -> APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED | WAIVER_NEEDED | BLOCKED | empty
   local rv
   [[ -f "$1" ]] || return 0
   rv="$(tr -d '\r' < "$1" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_-]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_')"
-  if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED' "$1" | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_' || true)"; fi
+  if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|WAIVER[_-]NEEDED|BLOCKED' "$1" | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_' || true)"; fi
   printf '%s' "$rv"
+}
+# ---- what keeps a gate red, and who owns it ---------------------------------------------------------------------------
+# gate_owner_summary SPEC -> GATE_IMPL_FAILS (failing checks an implementer owns) and GATE_ITEMS (every failing or deferred check with
+# its owner and message) from the newest quality-gate output of the spec. Round 12: a gate red for a tool error and a stale image
+# sent the implementer back three times for nothing; the owner column says whether a FIX pass can change anything.
+GATE_IMPL_FAILS=0; GATE_ITEMS=""
+gate_owner_summary() {
+  local f flat res; GATE_IMPL_FAILS=0; GATE_ITEMS=""
+  f="$(ls -t "$LOG_DIR"/check-*"$(safe_name "$1")"*-quality-gate.out 2>/dev/null | head -n 1 || true)"
+  [[ -n "$f" ]] || return 0
+  flat="$(sed -n '/{/,$p' "$f" | json_flat 2>/dev/null || true)"
+  [[ -n "$flat" ]] || return 0
+  res="$(awk -F'\t' '
+    $1 ~ /^checks\.[0-9]+\.(id|status|fix_owner|message)$/ { split($1, p, "."); n = p[2] + 0; v[n, p[3]] = $2; if (n > mx) mx = n }
+    END { impl = 0; items = ""
+      for (n = 0; n <= mx; n++) { st = v[n, "status"]; if (st != "fail" && st != "deferred") continue
+        o = v[n, "fix_owner"]; if (st == "fail" && (o == "implementer" || o == "infrastructure-implementer")) impl++
+        m = v[n, "message"]; if (length(m) > 110) m = substr(m, 1, 110) "..."
+        items = items (items == "" ? "" : "; ") v[n, "id"] " (" st ", " o "): " m }
+      printf "%d\t%s", impl, items }' <<< "$flat")"
+  GATE_IMPL_FAILS="${res%%$'\t'*}"; GATE_ITEMS="${res#*$'\t'}"
+}
+traceability_errors() { # spec -> the error count of the newest check-traceability output, or empty
+  local f; f="$(ls -t "$LOG_DIR"/check-*"$(safe_name "$1")"*-check-traceability.out 2>/dev/null | head -n 1 || true)"
+  [[ -n "$f" ]] || return 0
+  tr -d '\r\n' < "$f" | sed -nE 's/.*"errors"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p'
+}
+# review_waiver_only ENTRY SPEC -> 0 when a CHANGES_NEEDED review leaves the implementer nothing: no open Bug, no failing gate check an
+# implementer owns, no traceability error. What is left needs a human (environment, waiver), so the spec is not sent back to FIX.
+review_waiver_only() {
+  [[ -z "$(open_bug_list "$1")" ]] || return 1
+  gate_owner_summary "$2"
+  [[ "$GATE_IMPL_FAILS" -eq 0 ]] || return 1
+  local te; te="$(traceability_errors "$2")"
+  [[ -z "$te" || "$te" -eq 0 ]]
+}
+test_state_id() { local j; for ((j = 0; j < S_COUNT; j++)); do if [[ "${S_NAME[$j]}" == "TEST" ]]; then printf '%s' "${S_ID[$j]}"; return 0; fi; done; printf '16'; }
+# nothing_to_verify ENTRY -> 0 when HEAD is the reviewed commit, nothing changed under src/ and no Bug is open or fixed-but-unverified:
+# a scoped TEST would re-read an unchanged tree (round 12: a third verifier pass for nothing), so only the mechanical checks run.
+nothing_to_verify() {
+  local head bf
+  head="$(cd "$ROOT" && git rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$VM_BASE" && -n "$head" && "$head" == "$VM_BASE"* ]] || return 1
+  [[ -z "$(cd "$ROOT" && git status --porcelain -- src 2>/dev/null)" ]] || return 1
+  [[ -z "$(open_bug_list "$1")" ]] || return 1
+  for bf in "$(spec_dir "$1")"/Backlog/Bug-*.md; do [[ -f "$bf" ]] || continue; if [[ "$(bug_status_of "$bf")" == "fixed" ]]; then return 1; fi; done
+  return 0
+}
+# env_limits SPEC -> the LIMIT lines of the newest toolchain-preflight output (a Docker daemon that cannot reach a registry, ...), joined
+env_limits() {
+  local f; f="$(ls -t "$LOG_DIR"/check-*"$(safe_name "$1")"*-toolchain-preflight.out 2>/dev/null | head -n 1 || true)"
+  [[ -n "$f" ]] || return 0
+  { grep -E '^LIMIT ' "$f" 2>/dev/null || true; } | sed 's/^LIMIT //' | tr -d '\r' | tr '\n' ';' | sed 's/;$//; s/;/; /g'
 }
 # Scoped re-verification (kernel/protocols/model-routing.md, agents/verifier.md -> Re-verification mode): the first TEST of a spec is a
 # full pass; once a review.md with the verdict CHANGES_NEEDED exists, the next TEST re-verifies only what changed. At most
@@ -530,7 +584,7 @@ verify_mode() { # spec entry -> sets VM_MODE (full|scoped) and VM_BASE (the comm
   rf="$(spec_dir "$1")/review.md"
   pv="$(review_verdict_of "$rf")"
   # A QUALITY_DEFERRED review (everything verified, only a scanner missing) is re-verified like CHANGES_NEEDED: scoped, so a deferred-only outcome never uses a full pass.
-  if [[ "$pv" == "CHANGES_NEEDED" || "$pv" == "QUALITY_DEFERRED" ]]; then
+  if [[ "$pv" == "CHANGES_NEEDED" || "$pv" == "QUALITY_DEFERRED" || "$pv" == "WAIVER_NEEDED" ]]; then
     VM_MODE=scoped; VM_VERDICT="$pv"
     VM_BASE="$(tr -d '\r' < "$rf" | sed -nE 's/^[[:space:]]*(reviewed[-_ ]?)?commit[[:space:]]*:[[:space:]]*"?([0-9a-fA-F]{7,40}).*/\2/p' | head -n 1)"
     if [[ -z "$VM_BASE" ]]; then VM_BASE="$(cd "$ROOT" && git log -1 --format=%H -- "$(rel "$rf")" 2>/dev/null || true)"; fi
@@ -565,9 +619,18 @@ run_check() { # $1 idx, $2 label, $3 = "then"
       local rf rv=""
       rf="$(spec_dir "$C_ENTRY")/review.md"
       if [[ -z "$C_ENTRY" || ! -f "$rf" ]]; then CHK_RC=1; CHK_VIOL="REVIEW-001 (verifier): review.md not found for $C_SPEC"; return 0; fi
-      rv="$(tr -d '\r' < "$rf" | sed -nE 's/^[Vv][Ee][Rr][Dd][Ii][Cc][Tt][[:space:]]*:[[:space:]]*"?([A-Za-z_-]+).*/\1/p' | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_')"
-      if [[ -z "$rv" ]]; then rv="$(grep -oiwE 'APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED' "$rf" | head -n 1 | tr 'a-z' 'A-Z' | tr '-' '_' || true)"; fi
+      rv="$(review_verdict_of "$rf")"
       if [[ "$rv" == "APPROVED" ]]; then CHK_RC=0
+      elif [[ "$rv" == "WAIVER_NEEDED" ]] || { [[ "$rv" == "CHANGES_NEEDED" ]] && review_waiver_only "$C_ENTRY" "$C_SPEC"; }; then
+        # The code is done: no open Bug, no failing check an implementer owns. What keeps the gate red (an environment limit, a stale
+        # artifact, a gate tool error, a check the architecture excluded) needs a human: exit 3 opens the waiver gate, never FIX.
+        local ob how; ob="$(open_bug_list "$C_ENTRY")"
+        if [[ -n "$ob" ]]; then CHK_RC=1; CHK_VIOL="REVIEW-002 (implementer): $C_SPEC review verdict is $rv but these bug items are not closed: $ob; fix them, then re-test"
+        else
+          gate_owner_summary "$C_SPEC"
+          how="review verdict $rv"; if [[ "$rv" == "CHANGES_NEEDED" ]]; then how="review verdict CHANGES_NEEDED with no open bug and no failing check an implementer owns (read as WAIVER_NEEDED)"; fi
+          CHK_RC=3; CHK_VIOL="REVIEW-004 (human): $how; the code is done and what keeps the gate red needs an environment fix or a recorded waiver, not another fix pass: ${GATE_ITEMS:-see review.md -> Verdict}. not a pass"
+        fi
       elif [[ "$rv" == "QUALITY_DEFERRED" || "$rv" == "TOOLCHAIN_DEFERRED" ]]; then
         # Deferred = every check that could run has run and the only blocker is an external tool that is missing (quality-gate exit 3).
         # With every bug fixed, verified or waived that is exit 3 (closed as deferred-accepted, never a pass, no FIX and no second full pass);
@@ -635,7 +698,7 @@ run_check() { # $1 idx, $2 label, $3 = "then"
         [[ -n "$fp" ]] || continue
         fcnt=$((fcnt + 1)); fpp="$(render "$fp")"; fall="${fall:+$fall, }$fpp"
         if [[ -e "$ROOT/$fpp" ]]; then fok=$((fok + 1)); else fmiss="${fmiss:+$fmiss, }$fpp"; fi
-      done < <(printf '%s' "${S_CPS[$i]:-}" | tr '\037' '\n')
+      done < <(printf '%s\n' "${S_CPS[$i]:-}" | tr '\037' '\n') # the trailing newline matters: read drops an unterminated last line, so ASK's second path was never checked
       if [[ $fcnt -eq 0 ]]; then CHK_RC=2; CHK_VIOL="FILE-000: internal:files-exist needs a paths list"
       elif [[ "${S_CANY[$i]:-}" == "true" ]]; then if [[ $fok -gt 0 ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-002 (agent): none of $fall exists"; fi
       elif [[ -z "$fmiss" ]]; then CHK_RC=0; else CHK_RC=1; CHK_VIOL="FILE-001 (agent): missing $fmiss"; fi
@@ -1129,6 +1192,11 @@ policy_gate() { # sets OUTCOME answered
       decided="accepted the deferred check by policy (not a pass)"
       tools="$(viol_tools "$why")"
       todo="install the missing tool${tools:+ ($tools)} and re-run the quality gate: .KCC/tools/quality-gate --spec ${gspec:-SPEC-ID}" ;;
+    waiver)
+      ans=waive
+      note="silent run: the code is done and what keeps the gate red needs an environment fix or a human waiver; closed as WAIVER_NEEDED by policy (not a pass)"
+      decided="closed the spec as WAIVER_NEEDED by policy (not a pass): the code is done, the remaining gate items need an environment fix or your waiver"
+      todo="fix the environment (or record a waiver in review.md -> ## Waivers), then run the verification again: $(resume_hint "$gspec" "$(test_state_id)")" ;;
     toolchain)
       ans=defer
       note="silent run: toolchain missing -> defer (the declared-stack code is written, build and test are marked TOOLCHAIN_DEFERRED, never a pass)"
@@ -1194,6 +1262,7 @@ register_deferral() { # spec idx gate by
   if [[ -z "$tools" ]]; then tools="$(last_missing_tools "$spec")"; fi
   if printf '%s' "$R_last_violations" | grep -q 'TOOLCHAIN_DEFERRED' || [[ "$gate" == "toolchain" ]]; then verdict=TOOLCHAIN_DEFERRED; fi
   checks="$(printf '%s' "$R_last_violations" | sed -nE 's/.*deferred checks?[[:space:]]+([A-Z0-9, -]+)(,[[:space:]]*not a pass|\.|;).*/\1/p' | head -n 1)"
+  if [[ "$gate" == "waiver" ]]; then verdict=WAIVER_NEEDED; tools=""; gate_owner_summary "$spec"; checks="$GATE_ITEMS"; fi
   set_att "defer:$spec" 1
   emit deferral-accepted "$spec" "{\"state\":${S_ID[$i]},\"state_name\":\"${S_NAME[$i]}\",\"gate\":\"$gate\",\"verdict\":\"$verdict\",\"by\":\"$by\",\"tools\":\"$(jesc "$tools")\",\"checks\":\"$(jesc "$(flat "$checks")")\",\"source\":\"kcc-run\"}"
 }
@@ -1207,12 +1276,22 @@ deferred_items() { # one line per accepted deferral of this run's specs: spec<TA
     tl="$(printf '%s' "$line" | sed -nE 's/.*"tools"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')"
     ck="$(printf '%s' "$line" | sed -nE 's/.*"checks"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')"
     vd="$(printf '%s' "$line" | sed -nE 's/.*"verdict"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')"
-    printf '%s\t%s\t%s\t%s\n' "$sp" "$tl" "$ck" "$vd"
-  done | awk -F'\t' '!seen[$1 "|" $2]++'
+    printf '%s\t%s\t%s\t%s\n' "$sp" "${tl:--}" "${ck:--}" "${vd:--}"
+  done | awk -F'\t' '!seen[$1 "|" $2 "|" $4]++'
 }
-deferral_lines() { # spec tools checks
+unmark() { if [[ "$1" == "-" ]]; then printf ''; else printf '%s' "$1"; fi; }
+deferral_lines() { # spec tools checks verdict
   local sp="${1:-SPEC-ID}" t="$2" c="" tl
-  if [[ -z "$t" ]]; then t="(not recorded; see review.md -> Quality Gate Check)"; fi
+  if [[ "${4:-}" == "WAIVER_NEEDED" ]]; then
+    printf 'WAIVER NEEDED, NOT A PASS - %s: the code is done; these gate items need an environment fix or your waiver: %s\n' "$sp" "${3:-see review.md -> Verdict}"
+    printf '  fix the environment or record the waiver in review.md -> ## Waivers, then run the verification again: kcc-run --from %s   |   kcc run --lane %s\n' "$(test_state_id)" "$sp"
+    return 0
+  fi
+  if [[ -z "$t" ]]; then
+    printf 'DEFERRED, NOT A PASS - %s%s: a check could not run on this machine (a tool or service the tests need is unusable here; see review.md -> Test Status and Quality Gate Check).\n' "$sp" "${3:+ ($3 not run)}"
+    printf '  fix the environment, then re-run the verification: kcc-run --from %s   |   kcc run --lane %s\n' "$(test_state_id)" "$sp"
+    return 0
+  fi
   if [[ -n "$3" ]]; then c=" ($3 not run)"; fi
   tl="$(printf '%s' "$2" | sed -E 's/,[[:space:]]*/,/g')"; if [[ -z "$tl" ]]; then tl='<tool>'; fi
   printf 'DEFERRED, NOT A PASS - %s%s: missing tool(s) %s.\n' "$sp" "$c" "$t"
@@ -1222,8 +1301,9 @@ deferral_lines() { # spec tools checks
 show_deferred() {
   local sp tl ck vd ln
   while IFS=$'\t' read -r sp tl ck vd; do
+    tl="$(unmark "$tl")"; ck="$(unmark "$ck")"; vd="$(unmark "$vd")"
     [[ -n "$sp$tl" ]] || continue
-    while IFS= read -r ln; do say "kcc-run: $ln"; done < <(deferral_lines "$sp" "$tl" "$ck")
+    while IFS= read -r ln; do say "kcc-run: $ln"; done < <(deferral_lines "$sp" "$tl" "$ck" "$vd")
   done < <(deferred_items)
 }
 add_closed_deferred() {
@@ -1232,9 +1312,10 @@ add_closed_deferred() {
   if grep -q '<!-- kcc-run:deferred -->' "$f"; then return 0; fi
   attention_counts
   while IFS=$'\t' read -r sp tl ck vd; do
+    tl="$(unmark "$tl")"; ck="$(unmark "$ck")"; vd="$(unmark "$vd")"
     [[ -n "$sp$tl" ]] || continue
     n=$((n + 1))
-    while IFS= read -r ln; do out="$out- $(printf '%s' "$ln" | sed 's/^ *//')"$'\n'; done < <(deferral_lines "$sp" "$tl" "$ck")
+    while IFS= read -r ln; do out="$out- $(printf '%s' "$ln" | sed 's/^ *//')"$'\n'; done < <(deferral_lines "$sp" "$tl" "$ck" "$vd")
   done < <(deferred_items)
   if [[ $n -eq 0 && "$ATTN_ITEMS" -eq 0 ]]; then return 0; fi
   { printf '\n<!-- kcc-run:deferred -->\n'
@@ -1311,6 +1392,11 @@ answered: $(iso)/" "$gf" && rm -f "$gf.bak"
         elif [[ "$ans" == "defer" ]]; then emit toolchain-gate-decision "$R_gate_spec" '{"choice":"defer","verdict":"TOOLCHAIN_DEFERRED","source":"kcc-run"}'; pa=done; register_deferral "$R_gate_spec" "$idx" toolchain "$ANSWERED_BY"
         else pa=recheck; fi ;;
       quality-deferred-on-exit-3) if [[ "$ans" == "install" ]]; then pa=install; else pa=done; register_deferral "$R_gate_spec" "$idx" quality-deferred-on-exit-3 "$ANSWERED_BY"; fi ;;
+      waiver)
+        # waive: the spec closes as WAIVER_NEEDED (recorded like a deferral, never a pass) and the run goes on; recheck: the human
+        # changed the environment, so the verification runs again (scoped) and the review after it.
+        if [[ "$ans" == "waive" ]]; then pa=done; register_deferral "$R_gate_spec" "$idx" waiver "$ANSWERED_BY"
+        else pa="goto:$(test_state_id)"; set_att "$key" 0; fi ;;
       ruling)
         # revise and escalate reopen the blocked bugs and re-run the fix with the ruling as the note; waive records them as wontfix
         if [[ "$ans" == "waive" ]]; then pa=recheck; else
@@ -1526,6 +1612,14 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
       complete_unit "$i" 1; return 0
     fi
   fi
+  if [[ "${S_NAME[$i]}" == "TEST" && -n "$C_ENTRY" && $has_cmd -eq 1 && $skip_dispatch -eq 0 ]]; then
+    verify_mode "$C_ENTRY"
+    if [[ "$VM_MODE" == "scoped" ]] && nothing_to_verify "$C_ENTRY"; then
+      say "kcc-run: skip   $label: nothing changed since the last review (HEAD $VM_BASE, no change under src/, no Bug awaiting verification); mechanical checks only"
+      emit test-skipped "$C_SPEC" "{\"state\":${S_ID[$i]},\"state_name\":\"${S_NAME[$i]}\",\"reason\":\"unchanged since the last review\",\"commit\":\"$VM_BASE\",\"source\":\"kcc-run\"}"
+      skip_dispatch=1
+    fi
+  fi
   if [[ $skip_dispatch -eq 0 && ( $has_cmd -eq 1 || $need_fix -eq 1 ) ]]; then
     local body prompt log where
     # TEST: the first verification of a spec is a full pass; later ones re-verify only what changed. At most VERIFY_FULL_MAX full passes.
@@ -1567,6 +1661,10 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
     prompt="KCC run state ${S_ID[$i]} ${S_NAME[$i]}$where$lead$body"
     if [[ "$VM_MODE" == "scoped" ]]; then prompt="$prompt $(scoped_prompt)"; fi
     if [[ "$VM_MODE" == "full" ]]; then prompt="$prompt FULL VERIFICATION PASS $(get_att "full:$C_SPEC") of at most $VERIFY_FULL_MAX for $C_SPEC: run every check in this one pass (acceptance criteria, Test IDs, the compose or runtime smoke test, container image scans, every scan the quality gate lists) and file every finding now, because a later pass re-verifies only what changed. Record the HEAD commit you verified as 'commit: <sha>' in review.md frontmatter. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent's handover packet."; fi
+    if [[ "${S_NAME[$i]}" == "TEST" && -n "$C_SPEC" ]]; then
+      local lim; lim="$(env_limits "$C_SPEC")"
+      if [[ -n "$lim" ]]; then prompt="$prompt KNOWN ENVIRONMENT LIMITS (recorded by PREFLIGHT on this machine): $lim. Do not attempt what they rule out (no docker build or compose up --build while the registry is unreachable): record each AC and Test ID that needs it as DEFERRED with that reason at once, and spend the time on the checks that can run."; fi
+    fi
     if [[ $att -gt 0 && -n "$R_last_violations" ]]; then prompt="$prompt RETRY $((att + 1))/$CFG_MAX - fix these exit-check violations: $R_last_violations"; fi
     if [[ $att -eq 0 && -n "$R_last_violations" ]] && test_force "${S_ID[$i]}"; then prompt="$prompt A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: $R_last_violations"; fi
     if [[ -n "$R_note" ]]; then prompt="$prompt Human note: $R_note"; R_note=""; fi
@@ -1653,8 +1751,13 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
       say "kcc-run: deferred check for $C_SPEC was accepted earlier (not a pass): $(flat "$R_last_violations")"
       complete_unit "$i" 0; return 0
     fi
-    local g="$gname"; if [[ -z "$g" || "$gkind" == "approval" ]]; then g=quality-deferred-on-exit-3; fi
-    open_gate "$g" failure "Exit check for $label is DEFERRED (exit 3): a required external tool is missing. This is not a pass." "$i" "$R_last_violations"
+    local g="$gname" q="Exit check for $label is DEFERRED (exit 3): a required external tool is missing. This is not a pass."
+    if [[ -z "$g" || "$gkind" == "approval" ]]; then g=quality-deferred-on-exit-3; fi
+    if [[ "$R_last_violations" == REVIEW-004* ]]; then
+      g=waiver
+      q="Review of $C_SPEC: every bug is closed and what still keeps the gate red is outside the code (an environment limit, a stale artifact, a gate tool error, or a check the architecture excluded). This is not a pass. waive (close the spec as WAIVER_NEEDED and go on; record the waiver in review.md -> ## Waivers), recheck (you fixed the environment: run the verification again), or abort?"
+    fi
+    open_gate "$g" failure "$q" "$i" "$R_last_violations"
     return 0
   fi
   if [[ -n "$gname" && "$gkind" == "failure" && "$gname" != "quality-deferred-on-exit-3" ]]; then

@@ -46,7 +46,10 @@ Verify implementation of spec <ARGS>.
    diagrams inline. There are **NO `.mmd` files** and **NO
    `architecture/diagrams/` folder** - flag any such file/folder as a
    deprecated-layout violation. Confirm each spec `arch.md` embeds at least one
-   ```mermaid``` block.
+   ```mermaid``` block. Under `--fasttrack` the required set is the `fasttrack`
+   column of the artifact matrix: `architecture.md` (C1, C2, `## Decisions`,
+   `## Toolchain`) and `quality-gates.md`; there is no spec `arch.md`, no
+   standalone `c4-*.md` and no `flowcharts/`, and none of them is a finding.
 4. Confirm the implementation lives under `src/IDEA-{ID}-{slug}/`. Flag
    anything written outside that workspace as scope creep before
    delegating.
@@ -103,8 +106,9 @@ Verify implementation of spec <ARGS>.
    `check-run-conformance -Scope review`.
 7. Display the verdict: APPROVED (only if traceability pass, quality-gate
    exit 0, no open blocker/major bug, QG-PROD + QG-ARCH-DOCS pass),
-   CHANGES_NEEDED, QUALITY_DEFERRED, or TOOLCHAIN_DEFERRED (deferred = NOT a
-   pass) with a summary of:
+   CHANGES_NEEDED, WAIVER_NEEDED (every bug closed, the red gate items are
+   outside the code: a human waives or fixes the environment), QUALITY_DEFERRED,
+   or TOOLCHAIN_DEFERRED (deferred and waiver = NOT a pass) with a summary of:
    - failing spec ACs and open Bug items;
    - failing story/enabler ACs (per `Story-NNN` / `Enabler-NNN`);
    - failing Test IDs from the atomic test-case table;

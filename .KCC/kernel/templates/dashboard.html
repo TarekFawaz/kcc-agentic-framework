@@ -391,9 +391,9 @@ function itemsOf(s){return s.items.filter(function(i){return i.type!=='Bug';});}
 function builtWaves(id){var w={};D.events.forEach(function(e){if(e.spec===id&&/^implement-completed/.test(e.kind||'')&&e.payload&&e.payload.wave!=null&&e.payload.wave!=='')w[String(e.payload.wave)]=1;});return w;}
 function itemBuilt(s,i){return isDone(i.status)||(i.wave!==''&&i.wave!=null&&builtWaves(s.id)[String(i.wave)]===1);}
 function itemBuilding(s,i){return !itemBuilt(s,i)&&D.run&&D.run.currentSpec===s.id&&D.run.state===15&&String(D.run.wave)===String(i.wave)&&/running/.test(D.run.status||'');}
-/* Review verdicts the verifier writes: each is its own state. QUALITY_DEFERRED (a scanner is missing; TOOLCHAIN_DEFERRED is the older name) is not a pass and not a failure. */
-var VERDICTS=['APPROVED','CHANGES_NEEDED','QUALITY_DEFERRED','TOOLCHAIN_DEFERRED','BLOCKED'];
-function verdictKey(v){var m=/(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|BLOCKED)/i.exec(String(v||''));return m?m[1].toUpperCase():'';}
+/* Review verdicts the verifier writes: each is its own state. QUALITY_DEFERRED (a scanner is missing; TOOLCHAIN_DEFERRED is the older name) and WAIVER_NEEDED (the code is done, the gate needs an environment fix or a human waiver) are not a pass and not a failure. */
+var VERDICTS=['APPROVED','CHANGES_NEEDED','QUALITY_DEFERRED','TOOLCHAIN_DEFERRED','WAIVER_NEEDED','BLOCKED'];
+function verdictKey(v){var m=/(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|WAIVER_NEEDED|BLOCKED)/i.exec(String(v||''));return m?m[1].toUpperCase():'';}
 function verdictLabel(v){var k=verdictKey(v);return k?k.toLowerCase().replace(/_/g,' '):(v?String(v):'written');}
 function verdictTone(v){var k=verdictKey(v);return k==='APPROVED'?'ok':(k==='CHANGES_NEEDED'||k==='BLOCKED')?'bad':k?'warn':'';}
 function approved(s){return isDone(s.status)||(s.review&&/APPROVED/i.test(s.review.verdict||''));}
@@ -1059,7 +1059,7 @@ function flowScopes(D,rb,now){
 
 /* ---- drawing: pure string builders (SVG), escaped ---- */
 var GATE_STATIC={PREFLIGHT:'toolchain',TEST:'quality-deferred-on-exit-3',FIX:'ruling',REPO:'repo-bootstrap',ROI:'roi-gate',CONFIRM:'confirm','BUDGET-0':'budget','BUDGET-P':'budget','BUDGET-I':'budget',WINDOWS:'windows',ASK:'prohibited-assumption'};
-var GATE_LABEL={'toolchain':'toolchain','quality-deferred-on-exit-3':'deferred tool','ruling':'ruling','loop':'loop CR-3','repo-bootstrap':'repo','roi-gate':'ROI','confirm':'confirm','budget':'budget','budget-cap':'budget cap','windows':'windows','prohibited-assumption':'assumption'};
+var GATE_LABEL={'toolchain':'toolchain','quality-deferred-on-exit-3':'deferred tool','waiver':'waiver','ruling':'ruling','loop':'loop CR-3','repo-bootstrap':'repo','roi-gate':'ROI','confirm':'confirm','budget':'budget','budget-cap':'budget cap','windows':'windows','prohibited-assumption':'assumption'};
 var FLOW_NW=88,FLOW_NH=48,FLOW_STEP=112,FLOW_X0=72,FLOW_CY=112;
 function fx(i){return FLOW_X0+i*FLOW_STEP+FLOW_NW/2;}
 function pathArc(xs,xt,yb,d){return 'M'+xs+','+yb+' C'+xs+','+(yb+d)+' '+xt+','+(yb+d)+' '+xt+','+(yb+4);}

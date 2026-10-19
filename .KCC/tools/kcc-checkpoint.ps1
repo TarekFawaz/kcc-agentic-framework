@@ -251,9 +251,16 @@ if ($isGit) {
     $gitMode = 'git'
     $gitHead = Str (Invoke-KccGit rev-parse HEAD 2>$null)
     if ($LASTEXITCODE -ne 0) { $gitHead = '' }
-    $gitTag = 'kcc/cp-' + $cpId.Substring(3)
+    # Tags are repository-wide: a lane (a worktree of the workspace repository, or a copy) names its own after its spec.
+    $tagNs = 'kcc/'
+    $laneMeta = Join-Path (Join-Path $RepoRoot '.kcc-lane') 'base.json'
+    if (Test-Path -LiteralPath $laneMeta) {
+        $lm = [regex]::Match([IO.File]::ReadAllText($laneMeta), '"spec"\s*:\s*"([^"]+)"')
+        if ($lm.Success) { $tagNs = 'kcc/' + $lm.Groups[1].Value + '/' }
+    }
+    $gitTag = $tagNs + 'cp-' + $cpId.Substring(3)
     $prevTag = ''
-    if ($prevId) { $prevTag = 'kcc/cp-' + $prevId.Substring(3); $null = Invoke-KccGit rev-parse -q --verify "refs/tags/$prevTag" 2>$null; if ($LASTEXITCODE -ne 0) { $prevTag = '' } }
+    if ($prevId) { $prevTag = $tagNs + 'cp-' + $prevId.Substring(3); $null = Invoke-KccGit rev-parse -q --verify "refs/tags/$prevTag" 2>$null; if ($LASTEXITCODE -ne 0) { $prevTag = '' } }
     if ($prevTag) {
         foreach ($l in @(Invoke-KccGit diff --name-status $prevTag -- 2>$null)) { $p = $l -split "`t"; [void]$changes.Add(@($p[0], $p[-1])) }
         foreach ($l in @(Invoke-KccGit ls-files --others --exclude-standard 2>$null)) { [void]$changes.Add(@('?', $l)) }

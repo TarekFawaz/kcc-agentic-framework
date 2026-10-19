@@ -278,7 +278,7 @@ The framework supports human-led and Human On The Loop modes:
 | Operating scenario | Trigger | Behavior |
 |---|---|---|
 | Default HOTL | `auto <idea>` | Starts with human interrogation, then runs until a required gate is hit. |
-| Full hand-off HOTL | `auto <idea> --silent --assume` | Agents make allowed decisions and document assumptions. Stops only on safety, confidence, loop, or prohibited-assumption gates. |
+| Full hand-off HOTL | `auto <idea> --silent --assume` (chat) or `kcc run --input <idea> --silent --assume` (terminal) | Agents make allowed decisions and document assumptions. A chat run stops only on safety, confidence, loop, or prohibited-assumption gates; a terminal run never waits: it answers each gate by policy, parks a spec it cannot continue (exit code 7) and writes every decision to `coordination/NeedsAttention.md`. See `docs/unattended-runs.md`. |
 | Controlled hand-off HOTL | `auto <idea> --silent --assume --accuracy 99% --budget 200` | Full hand-off with explicit confidence and budget controls. |
 | Direct HITL | `/idea-interrogator <idea>` | Human-led idea interrogation. |
 | Individual skills | `/spec-create`, `/spec-plan`, etc. | Human starts at a specific lifecycle step. |

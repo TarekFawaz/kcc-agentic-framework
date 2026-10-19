@@ -12,14 +12,17 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 
     Run profile `fasttrack` (or a run started with `auto --fasttrack`, read from
     coordination/run/run.json) skips the trace, memory, and token scopes and
-    relaxes the idea checks to the lean file set (Research.md, QuickRoadmap.md,
-    SpecWriterStarter.md; no ROI, questionnaire, answers, or conclusion).
+    relaxes the idea checks to the lean file set (Research.md,
+    SpecWriterStarter.md; no ROI, questionnaire, answers, conclusion or
+    QuickRoadmap), expects no per-spec arch.md (the spec note's
+    `## Architecture references` instead) and treats standalone C4 files or a
+    flowcharts/ folder as duplicates of the embedded diagrams (warnings).
 
     Checks (by scope):
       architecture - architecture/architecture.md exists, is non-trivial, and has
                      >=1 fenced ```mermaid``` block; zero *.mmd files under
                      architecture/; no architecture/README.md hub; every spec
-                     arch.md has >=1 fenced ```mermaid``` block.
+                     arch.md has >=1 fenced ```mermaid``` block (full lifecycle).
       linking      - idea file wikilinks its specs index; specs index wikilinks
                      the idea and each SPEC; SPEC note wikilinks its Backlog items
                      and architecture.md; specs contain no architecture/README
@@ -399,7 +402,7 @@ function Get-ReviewVerdict([string]$reviewFile) {
     if (-not (Test-Path -LiteralPath $reviewFile)) { return '' }
     foreach ($l in (Read-Lines $reviewFile)) {
         if ($l -match '(?i)verdict') {
-            $m = [regex]::Match($l, '(?i)\b(CHANGES_NEEDED|APPROVED|toolchain-deferred|quality-deferred)\b')
+            $m = [regex]::Match($l, '(?i)\b(CHANGES_NEEDED|APPROVED|toolchain-deferred|quality-deferred|waiver-needed|waiver_needed)\b')
             if ($m.Success) { return $m.Groups[1].Value.ToUpper().Replace('-', '_') }
         }
     }
@@ -485,8 +488,10 @@ function Invoke-ArchitectureChecks {
     }
 
     # Fast-track profile (architecture-documentation.md -> required artifacts, column `fasttrack`): the
-    # Architecture Document carries C1, C2, a Decisions table and the toolchain; flowcharts and quality
-    # gates exist; ADR files, component diagrams, DFDs and sequences do not (over-production is drift).
+    # Architecture Document carries C1, C2, a Decisions table, the toolchain and, when the idea has a
+    # non-trivial workflow, one embedded `## Flows` flowchart; quality gates exist; ADR files, component
+    # diagrams, DFDs and sequences do not (over-production is drift). A standalone c4-context.md,
+    # c4-container.md or flowcharts/ folder duplicates the embedded diagram (nobody downstream reads it): a warning.
     if ($FastTrack) {
         if (Test-Path -LiteralPath $archDoc) {
             $ft = Read-Text $archDoc
@@ -495,8 +500,11 @@ function Invoke-ArchitectureChecks {
             if ($ft -notmatch '(?m)^##+\s+Decisions') { Add-Violation 'ARCH-FT-003' 'error' 'architect' "fast track: architecture.md has no '## Decisions' table (decision, library and version range, catalogue citation, status)." 'architecture/architecture.md' }
             if ($ft -notmatch '(?m)^##+\s+Toolchain') { Add-Violation 'ARCH-FT-004' 'error' 'architect' "fast track: architecture.md has no '## Toolchain' table." 'architecture/architecture.md' }
         }
+        foreach ($dup in @('c4-context.md', 'c4-container.md')) {
+            if (Test-Path -LiteralPath (Join-Path $archDir $dup)) { Add-Violation 'ARCH-FT-005' 'warning' 'architect' ("fast track: architecture/{0} is a duplicate of the embedded diagram in architecture.md; nobody downstream reads it. Remove it." -f $dup) ('architecture/' + $dup) }
+        }
         $fc = Join-Path $archDir 'flowcharts'
-        if (-not (Test-Path -LiteralPath $fc) -or @(Get-ChildItem -LiteralPath $fc -File -Filter '*.md' -ErrorAction SilentlyContinue).Count -eq 0) { Add-Violation 'ARCH-FT-005' 'error' 'architect' 'fast track: architecture/flowcharts/ has no business flowchart.' 'architecture/flowcharts' }
+        if ((Test-Path -LiteralPath $fc) -and @(Get-ChildItem -LiteralPath $fc -File -ErrorAction SilentlyContinue).Count -gt 0) { Add-Violation 'ARCH-FT-005' 'warning' 'architect' "fast track: architecture/flowcharts/ is a duplicate of the embedded diagram; a business flow that matters is one '## Flows' flowchart inside architecture.md. Remove the folder." 'architecture/flowcharts' }
         if (-not (Test-Path -LiteralPath (Join-Path $archDir 'quality-gates.md'))) { Add-Violation 'ARCH-FT-006' 'error' 'architect' 'fast track: architecture/quality-gates.md is missing.' 'architecture/quality-gates.md' }
         $adrDir = Join-Path $archDir 'adrs'
         if ((Test-Path -LiteralPath $adrDir) -and @(Get-ChildItem -LiteralPath $adrDir -File -Filter 'ADR-*.md' -ErrorAction SilentlyContinue).Count -gt 0) { Add-Violation 'ARCH-FT-007' 'error' 'architect' 'fast track records decisions in architecture.md -> ## Decisions, not in ADR files; remove architecture/adrs/.' 'architecture/adrs' }
@@ -662,7 +670,7 @@ function Invoke-IdeaChecks {
         }
         $dir = Split-Path -Parent $idea.FullName
         $ideaArtifacts = @('Questionnaire.md', 'HumanAnswers.md', 'Research.md', 'ROI.md', 'Conclusion.md', 'QuickRoadmap.md', 'SpecWriterStarter.md')
-        if ($FastTrack) { $ideaArtifacts = @('Research.md', 'QuickRoadmap.md', 'SpecWriterStarter.md') }
+        if ($FastTrack) { $ideaArtifacts = @('Research.md', 'SpecWriterStarter.md') }
         foreach ($a in $ideaArtifacts) {
             if (-not (Test-Path -LiteralPath (Join-Path $dir $a))) {
                 Add-Violation 'IDEA-004' 'error' 'idea-interrogator' ("{0} is missing required artifact {1}." -f (Get-RelPath $dir), $a) ((Get-RelPath $dir) + '/' + $a)
@@ -719,6 +727,38 @@ function Resolve-BacklogLink($sp, [string]$link) {
     return $null
 }
 
+function Test-RoadmapSerial([string[]]$Lines) {
+    # True when the `## Execution Plan` table lists 3+ specs and every spec after the first depends on exactly the previous one.
+    $inSec = $false; $hdr = $false; $si = -1; $di = -1
+    $ids = New-Object System.Collections.ArrayList; $deps = New-Object System.Collections.ArrayList
+    foreach ($raw in $Lines) {
+        $l = $raw -replace "`r$", ''
+        if ($l -match '^##[ \t]') { $inSec = ($l -match '^##[ \t]+[Ee]xecution [Pp]lan'); $hdr = $false; continue }
+        if (-not $inSec -or $l -notmatch '^[ \t]*\|') { continue }
+        $cells = ($l -replace '\\\|', '/') -split '\|'
+        if (-not $hdr) {
+            for ($i = 0; $i -lt $cells.Count; $i++) {
+                $t = ($cells[$i] -replace '^[ \t*`]+|[ \t*`]+$', '').ToLowerInvariant()
+                if ($t -eq 'spec') { $si = $i }
+                if ($t -eq 'depends on') { $di = $i }
+            }
+            $hdr = $true; continue
+        }
+        if ($l -match '^[ \t]*\|[ \t:|-]*$') { continue }
+        if ($si -lt 0 -or $di -lt 0 -or $si -ge $cells.Count -or $di -ge $cells.Count) { continue }
+        $m = [regex]::Match($cells[$si], 'SPEC-\d+')
+        if (-not $m.Success) { continue }
+        [void]$ids.Add($m.Value)
+        [void]$deps.Add(@([regex]::Matches($cells[$di], 'SPEC-\d+') | ForEach-Object { $_.Value } | Sort-Object -Unique))
+    }
+    if ($ids.Count -lt 3) { return $false }
+    for ($i = 1; $i -lt $ids.Count; $i++) {
+        $d = @($deps[$i])
+        if ($d.Count -ne 1 -or $d[0] -ne $ids[$i - 1]) { return $false }
+    }
+    return $true
+}
+
 function Invoke-SpecsChecks {
     $specs = Get-TargetSpecs
     if ($Spec -and $specs.Count -eq 0) {
@@ -735,7 +775,10 @@ function Invoke-SpecsChecks {
         }
         else {
             $lines = Read-Lines $sp.File
-            foreach ($h in @('Delivery Brief', 'Acceptance Criteria', 'Backlog', 'Architecture')) {
+            # Fast track has no arch.md: the note's `## Architecture references` (Decision ids, C2 containers, the
+            # Architecture Document wikilink) is what the planner and the verifier read.
+            $archHeading = 'Architecture'; if ($FastTrack) { $archHeading = 'Architecture references' }
+            foreach ($h in @('Delivery Brief', 'Acceptance Criteria', 'Backlog', $archHeading)) {
                 if (-not (Test-Heading $lines $h)) {
                     Add-Violation 'SPEC-001' 'error' 'spec-writer' ("{0} is missing required section '## {1}'." -f $rel, $h) $rel
                 }
@@ -745,10 +788,19 @@ function Invoke-SpecsChecks {
                 Add-Violation 'SPEC-010' 'error' 'spec-writer' ("{0} has no 'status:' in its frontmatter." -f $rel) $rel
             }
             if ($lines.Count -gt $MaxSpecLines) {
-                Add-Violation 'SZ-5' 'error' 'spec-writer' ("{0} has {1} lines (max {2}). Move detail into backlog items or arch.md." -f $rel, $lines.Count, $MaxSpecLines) $rel
+                $sz5Where = 'backlog items or arch.md'; if ($FastTrack) { $sz5Where = 'backlog items' }
+                Add-Violation 'SZ-5' 'error' 'spec-writer' ("{0} has {1} lines (max {2}). Move detail into {3}." -f $rel, $lines.Count, $MaxSpecLines, $sz5Where) $rel
             }
         }
-        if (-not (Test-Path -LiteralPath (Join-Path $sp.Dir 'arch.md'))) {
+        # SPEC-003 applies to the full lifecycle only: fast track writes no per-spec arch.md (the note's
+        # `## Architecture references` and architecture/architecture.md are what the planner and verifier read).
+        $specArch = Join-Path $sp.Dir 'arch.md'
+        if ($FastTrack) {
+            if (Test-Path -LiteralPath $specArch) {
+                Add-Violation 'SPEC-003' 'warning' 'spec-writer' ("{0} has an arch.md; fast track writes none (the spec note's '## Architecture references' carries the design pointers). Remove it." -f $sp.Name) ((Get-RelPath $sp.Dir) + '/arch.md')
+            }
+        }
+        elseif (-not (Test-Path -LiteralPath $specArch)) {
             Add-Violation 'SPEC-003' $sev 'spec-writer' ("{0} has no arch.md." -f $sp.Name) ((Get-RelPath $sp.Dir) + '/arch.md')
         }
         $rows = Get-BacklogRows $sp
@@ -810,6 +862,11 @@ function Invoke-SpecsChecks {
             $n = @($gspecs | ForEach-Object { $_.Id } | Sort-Object -Unique).Count
             if ($n -gt $budget) {
                 Add-Violation 'SPEC-009' 'error' 'spec-writer' ("{0} has {1} specs; the fast-track budget is {2}. Merge specs into user-visible slices, or record the human's 'Spec budget: N (human approved)' in ROADMAP.md." -f (Get-RelPath $g), $n, $budget) (Get-RelPath $rm)
+            }
+            # SPEC-011: a split whose Execution Plan is one chain (every spec after the first depends on exactly the previous
+            # one) builds serially; only build-time dependencies belong in `Depends on`, so independent specs build in parallel.
+            if (Test-RoadmapSerial (Read-Lines $rm)) {
+                Add-Violation 'SPEC-011' 'warning' 'spec-writer' 'the split is serial: every feature spec depends on the previous one; name only build-time dependencies so independent specs build in parallel.' (Get-RelPath $rm)
             }
         }
         $done6 = @{}
@@ -1126,7 +1183,7 @@ function Invoke-ReviewChecks {
         }
         $verdict = Get-ReviewVerdict $rev
         if (-not $verdict) {
-            Add-Violation 'REV-002' 'error' 'verifier' ("{0} has no verdict line (APPROVED | CHANGES_NEEDED | toolchain-deferred | quality-deferred)." -f $rrel) $rrel
+            Add-Violation 'REV-002' 'error' 'verifier' ("{0} has no verdict line (APPROVED | CHANGES_NEEDED | toolchain-deferred | quality-deferred | waiver-needed)." -f $rrel) $rrel
         }
         $ev = Get-Section (Read-Lines $rev) 'evidence'
         if (-not (Test-Heading (Read-Lines $rev) 'Evidence')) {

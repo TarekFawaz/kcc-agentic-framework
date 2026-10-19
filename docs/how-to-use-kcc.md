@@ -70,17 +70,25 @@ What happens:
 1. Agents document low-risk assumptions instead of asking routine questions.
 2. Specialist decision briefs are still produced.
 3. Architecture defaults to a production-leaning standard depth unless the idea indicates otherwise.
-4. The run continues until a non-silent-able gate appears.
+4. In a chat session the run continues until a non-silent-able gate appears
+   and asks you. From a terminal (`kcc run --input ... --silent --assume`)
+   nobody can answer, so the driver never pauses: it answers each gate by
+   policy, records the answer in `coordination/NeedsAttention.md`, and parks
+   a spec it cannot answer for while the other specs finish (exit code 7).
 
-Non-silent-able gates:
+Non-silent-able gates, and what the terminal run does with them:
 
-| Gate | Why it stops |
-|---|---|
-| Prohibited assumptions | Legal, security posture, privacy, compliance, destructive actions, external spend, and production-impacting choices require a human. |
-| Toolchain install | KCC can detect missing tools, but installation is always human-gated. |
-| Low confidence | Any agent below the confidence floor triggers `/critical-human-gate`. |
-| Loop detection | Repeated failure for the same agent and step stops the chain. |
-| Budget cap | Controlled hand-off stops if estimates exceed `--budget`. |
+| Gate | Why it stops | Unattended (`kcc run --silent --assume`) |
+|---|---|---|
+| Prohibited assumptions | Legal, security posture, privacy, compliance, destructive actions, external spend, and production-impacting choices require a human. | Never assumed: a decision with no catalogue default stays `Proposed` and is listed for you; the run goes on with what it may decide. |
+| Toolchain install | KCC can detect missing tools, but installation is always human-gated. | `defer`: nothing is installed; the checks that need the tool are deferred, never passed. |
+| Low confidence | Any agent below the confidence floor triggers `/critical-human-gate`. | `proceed`, with the assumption recorded. |
+| Loop detection | Repeated failure for the same agent and step stops the chain. | The spec is parked as an `[open]` item. |
+| Budget cap | Controlled hand-off stops if estimates exceed `--budget`. | A silent run never raises a cap; the spec is parked. |
+| Waiver | Every Bug is closed, but a gate stays red for a reason outside the code (a stale image, a registry the build cannot reach, a tool error). | `waive`: the spec closes as `WAIVER_NEEDED`, never a pass; you re-verify with `recheck` after fixing the environment. |
+
+Each outcome, where it is written and what you do afterwards:
+[unattended-runs.md](./unattended-runs.md).
 
 Useful flags:
 
@@ -91,7 +99,7 @@ Useful flags:
 | `--accuracy NN%` | Sets the confidence floor. Default is 95%. |
 | `--budget NN [CCY]` | Sets hosted-model spend cap. Local models remain token-only. |
 | `--parallel` | Forces spec fan-out and later implementation wave fan-out when safe. |
-| `--fasttrack` | Developer fast path: no budget gates, no traces, lite ideation and architecture, small specs, then straight to build, test, and review. Safety gates stay. |
+| `--fasttrack` | Developer fast path: no budget gates, no traces, lite ideation and architecture, small specs, then straight to build, test, and review. Safety gates stay. The run writes only what a later agent or a check reads: three idea files (no `QuickRoadmap.md`), two briefs (technical with its UX and infrastructure sections, and security), one answers file, `architecture.md` with embedded diagrams (no standalone C4 files, `flowcharts/` or spec `arch.md`), and a roadmap whose `Depends on` names build-time dependencies only. |
 | `--depthlevel N` | 1-5 (default 5, `--fasttrack` implies 2). Lower means shorter documents and fewer output tokens; required sections are never dropped. |
 
 ### Option C: Interrogate first, then resume with `auto`
@@ -244,6 +252,7 @@ KCC skill from `AGENTS.md`.
 | Maximum guidance | `/idea-interrogator <idea>`, then `auto IDEA-{ID}` |
 | Fast but governed automation | `auto <idea>` |
 | Mostly hands-off automation | `auto <idea> --silent --assume --accuracy 95% --budget 200 USD` |
+| An unattended run from a terminal | `kcc run --input "<idea>" --fasttrack --silent --assume`, then read `coordination/NeedsAttention.md` ([unattended-runs.md](./unattended-runs.md)) |
 | Existing codebase baseline | `/solution-onboard . --depth=standard` |
 | Direct spec from detailed notes | `/spec-create <file path>` |
 | Import existing prompts/rules | `/adapt-workflow <path>` |

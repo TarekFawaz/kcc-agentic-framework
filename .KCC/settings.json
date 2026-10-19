@@ -62,6 +62,7 @@
       "sast": "semgrep",
       "sast_runner": "local"
     },
+    "sast_rules": "auto",
     "fail_on": {
       "secrets": "any",
       "dependencies": "high",

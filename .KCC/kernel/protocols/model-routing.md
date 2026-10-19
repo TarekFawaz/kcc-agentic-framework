@@ -46,7 +46,8 @@ No signal, no move. The registry of what each tier is on each harness is `kernel
    (`agent default: balanced / high`); each later reason names one adjustment and its cause.
 2. **Task floor.** `research`, `architecture`, `security`, `spec`, `plan` never run below `balanced`, whatever the domain
    says (round 11: the per-spec spec-writers and planners ran on `fast`, four of five planners exited without writing
-   `plan.md`, and Haiku costs the same per token as Sonnet on this account, so the step down saved nothing).
+   `plan.md`; the step down bought little, and the "same price per token" that was measured for Haiku and Sonnet then was a Claude
+   Code fallback price for ids that build did not know, see `models.json -> tier_cost_observed`).
 3. **Domain.** `novel`: one tier up and effort `high`. `common`: one tier down for `docs` and `scaffold` only
    (mechanical text: PR drafts, config scaffolds), effort unchanged. `spec` and `plan` are not lowered by a common domain.
 4. **Risk.** Never below `balanced`; effort `high`.
@@ -61,8 +62,10 @@ No signal, no move. The registry of what each tier is on each harness is `kernel
 7. **Budget.** Under 20% left: never above `balanced` unless risk.
 8. Effort is clamped to `low` .. `xhigh`; `max` is a human choice only.
 9. **Caller ceilings.** `kcc-route -MaxTier / -MaxEffort` (`--max-tier / --max-effort`) cap the result. `kcc-run` caps REVIEW
-   (`/spec-review` is a quick diff review) and a scoped TEST re-verification at `balanced` tier and `high` effort. The first,
-   full TEST pass keeps what rules 1-7 give (a security-sensitive large spec still gets `high` or `xhigh`).
+   (`/spec-review` is a quick diff review) and a scoped TEST re-verification at `balanced` tier and `high` effort.
+10. **Review ceiling.** A `review` task (verifier, critic) never runs above `high` unless the item's Complexity is `extra-high`:
+   a verification reads and runs what exists, and round 12's 51-minute first TEST pass at `xhigh` found the same four bugs a
+   `high` pass finds. Reason: `review: effort capped at high (xhigh only for extra-high complexity)`.
 
 Examples: an implementer (`fast`, `medium`) on a common CRUD wave stays `fast / medium`; the same
 implementer on an auth module (risk) runs `balanced / high`; a spec-writer or planner (`balanced`, `high`) on a

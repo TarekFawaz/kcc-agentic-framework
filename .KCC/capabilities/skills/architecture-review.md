@@ -37,7 +37,7 @@ architect back to standard.
 
 ## Flags
 
-`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: one lean pass. Read `architecture.md`, `arch.md`, and the ADRs only; return the verdict and the drift findings in 150 words or less. If it says DRIFT the architect fixes those findings once; there is no re-review loop (the verifier's QG-ARCH-CONFORMANCE check still compares the code to the design).
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: one lean pass. Read `architecture.md` (its `## Decisions` table stands in for ADRs) and `quality-gates.md` only; no spec `arch.md` exists in that profile, so never ask for one. Return the verdict and the drift findings in 150 words or less. If it says DRIFT the architect fixes those findings once; there is no re-review loop (the verifier's QG-ARCH-CONFORMANCE check still compares the code to the design).
 
 ## Steps
 

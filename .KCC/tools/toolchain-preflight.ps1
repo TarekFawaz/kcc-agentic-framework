@@ -138,6 +138,59 @@ foreach ($spec in $toolList) {
     }
 }
 
+# Environment limits a run should know before it spends time on them. A Docker daemon that cannot reach a registry (TLS interception by
+# a proxy or antivirus, no network) fails every image pull and build; one tiny pull here tells the verifier to defer those checks at
+# once instead of finding out after a 20-minute build attempt (round 12). Printed as `LIMIT <what>: <why>`; never a missing tool.
+function Test-DockerRegistry {
+    $outFile = [IO.Path]::GetTempFileName(); $errFile = [IO.Path]::GetTempFileName()
+    $rc = 1; $last = 'no output'
+    try {
+        $p = Start-Process -FilePath 'docker' -ArgumentList 'pull -q hello-world:latest' -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        if (-not $p.WaitForExit(90000)) { try { $p.Kill() } catch { }; $rc = 124; $last = 'timed out after 90 s' }
+        else { $rc = $p.ExitCode }
+        if ($rc -ne 124) {
+            $lines = @()
+            foreach ($f in @($outFile, $errFile)) { try { $lines += [IO.File]::ReadAllLines($f) } catch { } }
+            $lines = @($lines | Where-Object { $_.Trim() })
+            if ($lines.Count -gt 0) { $last = $lines[-1]; if ($last.Length -gt 200) { $last = $last.Substring(0, 200) } }
+        }
+    } catch { $rc = 127; $last = $_.Exception.Message }
+    finally { Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue }
+    if ($rc -ne 0) {
+        Write-Output ("LIMIT docker-registry unreachable: the Docker daemon cannot pull from the registry (exit {0}: {1}); image builds and compose up --build will fail on this machine" -f $rc, $last)
+        return
+    }
+    Write-Output 'PROBE    docker-registry reachable (docker pull hello-world)'
+    # The daemon may trust the proxy's certificate while the build containers do not (Docker Desktop behind an antivirus: npm ci inside
+    # RUN fails with UNABLE_TO_VERIFY_LEAF_SIGNATURE, BuildKit cannot fetch its frontend). One RUN that opens a TLS connection shows it.
+    $d = Join-Path ([IO.Path]::GetTempPath()) ('kcc-preflight-' + [Guid]::NewGuid().ToString('N'))
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    [IO.File]::WriteAllText((Join-Path $d 'Dockerfile'), "FROM alpine:3.21`nRUN wget -q -O /dev/null https://registry.npmjs.org/-/ping`n")
+    $outFile = [IO.Path]::GetTempFileName(); $errFile = [IO.Path]::GetTempFileName()
+    $rc = 1; $last = 'no matching output'
+    try {
+        $p = Start-Process -FilePath 'docker' -ArgumentList ('build --no-cache -q -t kcc-preflight-probe "' + $d + '"') -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        if (-not $p.WaitForExit(120000)) { try { $p.Kill() } catch { }; $rc = 124; $last = 'timed out after 120 s' } else { $rc = $p.ExitCode }
+        if ($rc -ne 124) {
+            $lines = @()
+            foreach ($f in @($outFile, $errFile)) { try { $lines += [IO.File]::ReadAllLines($f) } catch { } }
+            $hit = @($lines | Where-Object { $_ -match '(?i)certificate|x509|tls|ssl|unable to|could not resolve|network' })
+            if ($hit.Count -gt 0) { $last = $hit[-1]; if ($last.Length -gt 200) { $last = $last.Substring(0, 200) } }
+        }
+    } catch { $rc = 127; $last = $_.Exception.Message }
+    finally {
+        Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+        try { & docker image rm -f kcc-preflight-probe 2>$null | Out-Null } catch { }
+    }
+    if ($rc -eq 0) { Write-Output 'PROBE    docker-build-network reachable (a RUN step reached registry.npmjs.org over TLS)'; return }
+    Write-Output ("LIMIT docker-build-network unreachable: a RUN step inside a build cannot reach registries over TLS (exit {0}: {1}); npm ci / pip install / apk inside docker build and compose up --build will fail on this machine (a proxy or antivirus intercepts TLS; see KCC_CA_BUNDLE)" -f $rc, $last)
+}
+foreach ($spec in $toolList) {
+    $t = $spec; if ($spec -match '^([^@]+)@') { $t = $Matches[1] }
+    if ($t -eq 'docker' -and (Get-Command docker -ErrorAction SilentlyContinue)) { Test-DockerRegistry; break }
+}
+
 Write-Output "-----------------------------------"
 if ($missing.Count -gt 0) {
     Write-Output ("MISSING TOOLS: {0}" -f ($missing -join ', '))

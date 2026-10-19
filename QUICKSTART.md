@@ -334,7 +334,7 @@ so a step is done when its tool says so, not when an agent says so.
 | Operating scenario | Trigger | What happens |
 |---|---|---|
 | **1. Default HOTL** | `auto <idea>` | Starts with human interrogation, then runs the lifecycle. Required gates still pause for the human. Architecture docs produced. Upfront budget shown as awareness. |
-| **2. Full hand-off HOTL** | `auto <idea> --silent --assume` | Agents decide everything they are allowed to decide and document assumptions. No interrogation questions are asked. Unlimited budget. Max parallel agents. Only stops on confidence < threshold (95% default), agent loop > 3 trials, or prohibited assumption (legal, security, privacy, compliance, destructive, etc.). |
+| **2. Full hand-off HOTL** | `auto <idea> --silent --assume` | Agents decide everything they are allowed to decide and document assumptions. No interrogation questions are asked. Unlimited budget. Max parallel agents. Prohibited assumptions (legal, security, privacy, compliance, destructive, etc.) are never made silently. From a terminal (`kcc run`) the run never waits: each gate is answered by policy and recorded, and a spec that fails three times or needs a decision no policy can make is parked while the others finish (exit code 7). |
 | **3. Controlled hand-off HOTL** | `auto <idea> --silent --assume --accuracy 99% --budget 200` | Same as 2 plus accuracy and upfront budget controls. Stops if estimate exceeds cap or any decision falls below accuracy threshold. |
 | **4. Direct HITL** | `/idea-interrogator <idea>` | Human-led interrogation. Ends with "create specs / park / revise" question. |
 | **5. Individual skills** | `/spec-create`, `/spec-plan`, etc. | Human-led. Start anywhere. |
@@ -347,6 +347,24 @@ Plus two continuation modes:
 
 AutoPolicy typo aliases accepted: `--slient` -> `--silent`,
 `--acuuracy` -> `--accuracy`, `--parralel` -> `--parallel`.
+
+**How an unattended run ends.** A `--silent --assume` run (scenarios 2 and 3)
+closes each spec with a review verdict and leaves a record of every decision
+it took in `coordination/NeedsAttention.md`. `APPROVED` is the only pass.
+`QUALITY_DEFERRED` means a scanner was missing: install it and re-run
+`kcc tool quality-gate --spec SPEC-NNN`. `WAIVER_NEEDED` means the code is
+done and what keeps a gate red is outside the code (a stale image, a registry
+the build cannot reach, a tool error): fix the environment and re-verify
+(`kcc run --lane SPEC-NNN --answer recheck`, or `kcc run --lane SPEC-NNN --from 16`
+after an unattended run), or accept the waiver (`--answer waive`). A Bug that
+needed a ruling was answered with the Bug file's recommended option. A spec
+no policy could answer for is parked as an `[open]` item and the run exits 7.
+Each outcome, where it is written and what you do:
+[docs/unattended-runs.md](./docs/unattended-runs.md).
+
+![Dashboard overview: the Now strip, the stage table and the Needs attention list of a run](docs/images/dashboard-overview.png)
+
+![One spec on the dashboard: its lifecycle flowchart, the time per stage, the verdict state and Bugs](docs/images/dashboard-spec.png)
 
 ---
 
@@ -378,11 +396,11 @@ hits a usage limit, `kcc run` waits for the reset and resumes on its own.
 
 | Parameter | Default | Impact |
 |---|---|---|
-| `--silent` | off | Suppresses status interruptions. The run does not ask clarifying questions or narrate between steps. It still **stops at non-silent-able gates** (see below). Typo alias `--slient`. |
+| `--silent` | off | Suppresses status interruptions. The run does not ask clarifying questions or narrate between steps. In a chat session it still **stops at non-silent-able gates** (see below); from a terminal, `kcc run` answers them by policy or parks the spec. Typo alias `--slient`. |
 | `--assume` | off | Lets agents **document low-risk assumptions** instead of asking. Assumptions are written into the decision briefs and `architecture/assumptions.md`. Prohibited topics are never assumed (CR-7). |
 | `--accuracy NN%` | `95` | Sets the **per-decision confidence floor** (CR-4). Every agent ends with `Confidence: NN%`; below the floor triggers `/critical-human-gate`. In controlled mode (Scenario 3) this is a *refinement loop*, not a hard abort. Typo alias `--acuuracy`. Does **not** change the ROI gate. |
 | `--budget NN [CCY]` | unlimited | Sets the **hosted-model spend cap**. Currency defaults to USD. In Scenario 2 the budget is shown as awareness only; in **Scenario 3 it is a hard gate** - if the upfront or cumulative estimate crosses the cap, the run stops for `revise scope / increase cap / abort`. Local-model rows are token-only (no currency). |
-| `--fasttrack` | off | **Developer fast path.** Skips ROI, confirm, the architecture re-review loop (one lean review pass stays), every budget gate and the windows gate; no traces or token-guard, and only a memory-only butler (progress in `coordination/backchannel.jsonl`); lite ideation, 3-5 technical questions, architecture depth `lite`, small specs, the full quality gate (coverage, dependency audit, SAST, SBOM) - fasttrack is as production-ready as a full run. Safety gates stay (prohibited assumptions, toolchain install, repo bootstrap, review and traceability). `/spec-deploy` is offered at the end, never run. Implies `--depthlevel 2`. |
+| `--fasttrack` | off | **Developer fast path.** Skips ROI, confirm, the architecture re-review loop (one lean review pass stays), every budget gate and the windows gate; no traces or token-guard, and only a memory-only butler (progress in `coordination/backchannel.jsonl`); lite ideation (idea file, `Research.md`, `SpecWriterStarter.md`; no `QuickRoadmap.md`), two specialist briefs (the technical brief carries `## UX and UI` and `## Infrastructure and packaging`; the security brief stands alone), one answers file (`Assumptions.md` under `--silent --assume`, otherwise `HumanAnswers.md`), `architecture/architecture.md` with the C1 and C2 diagrams embedded (no standalone `c4-*.md`, no `flowcharts/`, no spec `arch.md`: the spec note's `## Architecture references` instead), small specs whose `Depends on` names build-time dependencies only so independent specs build in parallel, the full quality gate (coverage, dependency audit, SAST, SBOM) - fasttrack is as production-ready as a full run. Safety gates stay (prohibited assumptions, toolchain install, repo bootstrap, review and traceability). `/spec-deploy` is offered at the end, never run. Implies `--depthlevel 2`. |
 | `--depthlevel N` | `5` | **Detail level 1-5** for every agent's output (5 = full detail, 1 = essentials only). Lower levels cut output tokens; required sections, ACs, and test IDs are never dropped. Table: `.KCC/kernel/protocols/depth-levels.md`. |
 | `--parallel` | off | **Forces parallel agent sessions.** (1) Spec creation fans out **one subagent per selected epic** instead of running sequentially. (2) Standing consent: pre-authorizes opening parallel windows, so the Scenario-1 step-13 `approve windows` prompt is skipped. Scenario-independent - combine with any of 1/2/3. Typo alias `--parralel`. |
 
@@ -410,14 +428,21 @@ the `--parallel` flag:
 
 ### Gates that never go silent
 
-Even under `--silent --assume`, the run **always stops** for these:
+Even under `--silent --assume`, these gates are never assumed away. In a chat
+session the run asks you. From a terminal (`kcc run --silent --assume`) nobody
+can answer, so the driver takes the safest continuing choice where one exists
+(toolchain -> `defer`, confidence -> `proceed`, a waiver -> `waive`, a ruling
+-> the Bug file's recommended option) and writes it to
+`coordination/NeedsAttention.md`; where none exists (a loop, a budget cap, a
+check error) the spec is parked as an `[open]` item and the run exits 7. See
+[docs/unattended-runs.md](./docs/unattended-runs.md).
 
 | Gate | Rule |
 |---|---|
 | CR-7 prohibited assumptions | Legal, security posture, data sensitivity, privacy, compliance, audit, secrets, destructive actions, external spend, production-impacting decisions - always human-gated. |
 | CR-9 toolchain install | Detecting a missing build/test toolchain is fine; **installing** it is never silent - it routes to an `install / human-install / defer` gate logged to four sinks. |
 | CR-11 ROI gate | The idea's ROI confidence has a **fixed 60% floor** (not affected by `--accuracy`). Below it, the run pauses even in silent mode. |
-| CR-3 loop detection | Three consecutive failures for the same `(agent, step)` pair invoke `/critical-human-gate`. |
+| CR-3 loop detection | Three consecutive failures for the same `(agent, step)` pair invoke `/critical-human-gate`; under `kcc run --silent --assume` the spec is parked instead. A gate no code change can turn green does not count as a failure: it opens the `waiver` gate at once. |
 | CR-12 stack change | The implementation stack is fixed by the architecture ADR. Swapping it is a prohibited silent assumption - it requires a new ADR + human approval. |
 
 ### Silent-mode default ambition
@@ -457,7 +482,10 @@ Each specialist produces a typed decision brief
 `InfrastructureDecisionBrief.md`) in the idea folder. Under `--silent --assume`
 the specialists still run and still produce briefs - they document assumptions
 instead of asking - but never assume security posture, data sensitivity, or
-compliance.
+compliance. Under `--fasttrack` only two specialists run: the technical
+interrogator (its brief carries `## UX and UI` and `## Infrastructure and
+packaging`, at most 15 lines each) and the security analyst; the UX and
+infrastructure briefs do not exist in that profile.
 
 ### Architecture depth levels
 
@@ -499,7 +527,7 @@ A separate depth flag governs `/solution-onboard <path> --depth=...`:
 | Architecture depth | `standard` | declare in the idea file |
 | Solution-onboard depth | `standard` | `--depth=minimal\|deep` |
 | Validator mode | `cell` | `-Mode repo` / `--mode repo` |
-| Loop-detection threshold | 3 failures per `(agent, step)` | not tunable |
+| Loop-detection threshold | 3 failures per `(agent, step)` | fixed in a chat session; a terminal run reads `settings.json -> run.max_attempts` or `--max-attempts` |
 | Parallelism | sequential (Sc.1) / max (Sc.2-3); spec creation sequential | `--parallel` (forces spec-creation fan-out + window consent) |
 | Silent-mode ambition | mid-level, production-leaning, moderate research | (built in) |
 
@@ -596,7 +624,7 @@ after clone so the `.sh` tools are executable.
 | `build-dashboard` | Generates a self-contained offline `dashboard/index.html` from ideas, specs, backchannel, traces, verdicts, and memory. | `-Open` (launch in browser) | `.KCC\tools\build-dashboard.ps1 -Open` |
 | `show-backchannel` | Read-only human view of the backchannel log. | `-Last N` (default 20); `-From` `-Kind` `-Spec` `-Json` | `.KCC\tools\show-backchannel.ps1 -Last 20 -Kind approval` |
 | `start-agent-session` | Opens a visible local or Docker-sandboxed harness window for an agent role. Auto-engages sandbox on a Lethal-Trifecta match. | `-Agent` (req); `-Harness` `-Sandbox` `-DryRun` `-Prompt`/`-PromptFile` | `.KCC\tools\start-agent-session.ps1 -Harness claude -Agent idea-interrogator -Sandbox` |
-| `toolchain-preflight` | Detects whether build/test tools are present and suggests per-OS install commands. **Never installs** (install is human-gated). | `-Tools` (req, comma list) | `.KCC\tools\toolchain-preflight.ps1 -Tools node,pnpm,git` |
+| `toolchain-preflight` | Detects whether build/test tools are present and suggests per-OS install commands. **Never installs** (install is human-gated). When `docker` is required and present it also probes the registry and the build network and prints `PROBE` / `LIMIT` lines; a `LIMIT` never fails the preflight. | `-Tools` (req, comma list) | `.KCC\tools\toolchain-preflight.ps1 -Tools node,pnpm,git` |
 | `memory-append` | Butler's deterministic memory writer: adds one entry and updates the index + MOC. (PowerShell only.) | `-Type` `-Title` `-Summary` `-Body` (req); `-Tags` `-RelatedSpecs` | `.KCC\tools\memory-append.ps1 -Type decision -Title "Use SQLite" -Summary "..." -Body "..."` |
 | `kcc-inspect` | Basic Inspector detect/propose over real backchannel/trace/test signals; writes proposal stubs. Never fabricates patterns. (PowerShell only.) | `-MinEvents` (8) `-MinOccurrences` (2) | `.KCC\tools\kcc-inspect.ps1` |
 | `adapt-workflow` | Scaffolds a `migrations/IMPORT-{NNN}/` folder for importing an external agentic workflow. Semantic translation is the migrator agent's job. | `-SourcePath` (req); `-Format` (auto) `-DryRun` | `.KCC\tools\adapt-workflow.ps1 -SourcePath ../Other -Format cursor` |
@@ -612,12 +640,12 @@ Gate, continuity, and git tools added in release 0.5.0 (all follow
 | `check-traceability` | Acceptance criterion -> Test ID -> real test -> PASS. | `kcc tool check-traceability --spec SPEC-003` |
 | `check-wave-scope` | A wave's changes stay inside the files its items declared. | `kcc tool check-wave-scope --spec SPEC-003 --wave 2` |
 | `check-impl-lock` | Source may change only with an approved plan and budget. | `kcc tool check-impl-lock --staged` |
-| `quality-gate` | Build, lint, tests, coverage floor, secrets, dependency audit, SAST. | `kcc tool quality-gate --spec SPEC-003` |
+| `quality-gate` | Build, lint, tests, coverage floor, secrets, dependency audit, SAST, SBOM and image scans, in the scope the plan's `## Gates coverage` declares (`QG-SCOPE` row). Exit 3 is deferred with an owner, never a pass. | `kcc tool quality-gate --spec SPEC-003` |
 | `repo-bootstrap` | Git init / remote gate; installs the KCC git hooks. Never pushes. | `kcc tool repo-bootstrap --install-hook` |
 | `check-commit-msg` | Commit message convention (used by the `commit-msg` hook). | `kcc tool check-commit-msg --message "SPEC-003 Story-001: add parser"` |
 | `check-branch` | Branch naming and protected-branch push guard (used by `pre-push`). | `kcc tool check-branch` |
 | `kcc-checkpoint` | Writes a restore point. | `kcc tool kcc-checkpoint --reason manual` |
-| `kcc-run` | Deterministic lifecycle driver. Prefer `kcc run`, which adds wait-and-resume. | `kcc run --input "<idea>" --dry-run` |
+| `kcc-run` | Deterministic lifecycle driver. Prefer `kcc run`, which adds wait-and-resume and parallel lanes. Under `--silent --assume` it never pauses; exit 7 when `NeedsAttention.md` has open items. | `kcc run --input "<idea>" --dry-run` |
 | `kcc-limit-watch` | Detached resume after a usage limit, for use without the `kcc` binary. | see `session-continuity` protocol |
 | `kcc-handover` | Moves a run to another harness. | `kcc tool kcc-handover --to codex --dry-run` |
 | `kcc-statusline`, `kcc-limit-guard` | Claude Code status line and usage-limit hook. | configured in `.claude/settings.json` |
@@ -632,6 +660,7 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 - [README](./README.md) - KCC operating-model background + local-cell orientation
 - [How to use KCC](./docs/how-to-use-kcc.md) - scenarios for fresh ideas, existing solutions, and adapting workflows
 - [The kcc command line](./docs/cli.md) - install, init, tailor, upgrade, doctor, run, limits, mcp
+- [Operating an unattended run](./docs/unattended-runs.md) - what a `--silent --assume` run can end with, where each outcome is written, and what to do
 - [Tailoring](./docs/tailoring.md) - fitting agents, skills, and dialects to a solution
 - [Local MCP server](./docs/mcp.md) - section-level reads, gate tools, and skills over MCP
 - [Git workflow](./docs/git-workflow.md) - branches, commit messages, hooks, and pipeline templates
@@ -678,6 +707,8 @@ Root `tools/*.ps1` / `tools/*.sh` are thin compatibility wrappers - prefer the
 | `kcc upgrade` reports "Kept N locally edited file(s)" | You changed framework files; they were not overwritten | Keep them, or `kcc upgrade --force` to take the shipped versions |
 | An agent or skill you expected is missing | The workspace was tailored | `kcc tailor --show`; re-run `kcc tailor` or `kcc tailor --reset` |
 | A run stopped with exit code 5 | Usage limit and `max_resumes` used up, or `--no-wait` | `kcc limits`, then `kcc run --resume` |
+| A run ended with exit code 7 | An unattended run parked a spec; the others finished | Read the `[open]` item in `coordination/NeedsAttention.md`, fix the cause, run its `todo:` command ([docs/unattended-runs.md](./docs/unattended-runs.md)) |
+| The review says `WAIVER_NEEDED` | Every Bug is closed; a gate stays red for a reason outside the code | Read `review.md -> ## Waivers`; fix the environment and `kcc run --lane SPEC-NNN --answer recheck` (or `--from 16`), or accept with `--answer waive`. Never a pass. |
 | A commit is blocked by "kcc commit-msg" | Message does not follow the convention | Use `SPEC-003 Story-001: subject` or `chore: subject`; see `docs/git-workflow.md` |
 | Claude Code says "skill not found" | `.KCC/capabilities/skills/*.md` edited but sync not run | `powershell -ExecutionPolicy Bypass -File .KCC\tools\sync-adapters.ps1` |
 | Claude Code says "agent not found" | Same - sync not run, or malformed frontmatter | Rerun sync; if it errors, the error names the file. Fix and rerun. |

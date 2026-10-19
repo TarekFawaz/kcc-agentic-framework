@@ -527,7 +527,7 @@ collect_specs() {
       if [[ -f "$dir/review.md" ]]; then
         rexists=true
         # the review's own word: frontmatter "verdict:", else the "Verdict" section, else the first one named anywhere (QUALITY_DEFERRED; TOOLCHAIN_DEFERRED is the older name)
-        local vre='APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|BLOCKED' VA=()
+        local vre='APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|WAIVER_NEEDED|BLOCKED' VA=()
         rd "$dir/review.md"
         fm_in verdict; VA=("$FV"); first_word "$vre" VA; rverdict="$FW"
         if [[ -z "$rverdict" ]]; then sec_in '^Verdict'; first_word "$vre" SEC; rverdict="$FW"; fi

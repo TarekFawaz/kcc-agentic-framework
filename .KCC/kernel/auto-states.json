@@ -87,7 +87,7 @@
     "budget-cap": ["revise", "increase", "abort"],
     "windows": ["approve", "sequential", "abort"],
     "toolchain": ["install", "human-install", "defer"],
-    "quality-deferred-on-exit-3": ["install", "accept-deferred", "abort"],
+    "quality-deferred-on-exit-3": ["install", "accept-deferred", "abort"], "waiver": ["waive", "recheck", "abort"],
     "loop": ["revise", "escalate", "abort"],
     "ruling": ["revise", "waive", "escalate", "abort"]
   }

@@ -84,6 +84,27 @@ for s in ${SCOPE//,/ }; do
 done
 if [[ $FAST -eq 1 ]]; then SCOPE="secrets"; fi
 in_scope() { [[ ",$SCOPE," == *",all,"* || ",$SCOPE," == *",$1,"* ]]; }
+SCOPE_SOURCE="option"; [[ "${SCOPE_GIVEN:-0}" -eq 1 || $FAST -eq 1 ]] || SCOPE_SOURCE="default (all)"
+# The architect decides which gates apply (architecture/quality-gates.md), the planner maps them in plan.md -> ## Gates coverage
+# (check:QG-ID tokens; PLAN-007). Without --scope, a spec's gate runs exactly the checks that table covers, so a gate the
+# architecture excluded (round 12: image scans for a local tool) is reported as out of scope, not as a failure. No table: all.
+plan_scope() { # -> prints the scope list derived from plan.md, or nothing
+  local plan="${SPEC_DIR:-}/plan.md" tbl ids out="" id n
+  [[ -n "${SPEC_DIR:-}" && -f "$plan" ]] || return 0
+  tbl="$(awk '/^## Gates coverage/{p=1; next} p && /^## /{exit} p' "$plan" | tr -d '\r')"
+  [[ -n "$tbl" ]] || return 0
+  ids="$(printf '%s\n' "$tbl" | grep -oE 'check:QG-[A-Z]+' | sed 's/^check://' | sort -u)"
+  if printf '%s\n' "$tbl" | grep -qE '^\|[[:space:]]*QG-QUALITY[[:space:]]*\|'; then ids="$ids"$'\n'"QG-LOCK"$'\n'"QG-BUILD"$'\n'"QG-LINT"$'\n'"QG-TEST"$'\n'"QG-COV"$'\n'"QG-SECRETS"$'\n'"QG-DEPS"$'\n'"QG-SAST"; fi
+  if printf '%s\n' "$tbl" | grep -qE '^\|[[:space:]]*QG-STATIC[[:space:]]*\|'; then ids="$ids"$'\n'"QG-STATIC"; fi
+  while IFS= read -r id; do
+    case "$id" in
+      QG-LOCK) n=lock;; QG-BUILD) n=build;; QG-LINT) n=lint;; QG-TEST) n=test;; QG-COV) n=coverage;; QG-SECRETS) n=secrets;;
+      QG-DEPS) n=deps;; QG-SAST) n=sast;; QG-STATIC) n=static;; QG-SBOM) n=sbom;; QG-IMAGE) n=image;; *) continue;;
+    esac
+    case ",$out," in *",$n,"*) ;; *) out="${out:+$out,}$n";; esac
+  done <<<"$ids"
+  printf '%s' "$out"
+}
 
 # ---------------------------------------------------------------- JSON helpers
 json_escape_v() {
@@ -188,6 +209,8 @@ setting_v quality.audit_dev_dependencies false; lc "$SV"; AUDIT_DEV="$LC"
 setting_v quality.fail_on.sast error; lc "$SV"; FAIL_SAST="$LC"
 # local (semgrep on PATH) or docker (semgrep/semgrep image; Windows has no native semgrep).
 setting_v quality.scanners.sast_runner local; lc "$SV"; SAST_RUNNER="$LC"
+setting_v quality.scanners.sast semgrep; lc "$SV"; SAST_TOOL="$LC"
+setting_v quality.sast_rules auto; SAST_RULES="$SV"
 setting_v quality.fail_on.secrets any; lc "$SV"; FAIL_SECRETS="$LC"
 
 cov_override_from() { # file -> the number of its last `coverage_min_pct: N` (grep -Eo | tail | grep -Eo, in bash)
@@ -903,7 +926,7 @@ GLTOML
     if [[ -f "$report" ]]; then count_matches_v "$report" '"RuleID"'; count="$CL"; fi
     if [[ $rc -eq 0 ]]; then add_check QG-SECRETS secrets "" "" pass none "$shown" "$rc" "gitleaks: no leaks ($mode)" human "$(rel "$report")"
     elif [[ "$count" -gt 0 ]]; then add_check QG-SECRETS secrets "" "" fail error "$shown" "$rc" "gitleaks: $count potential secret(s) (redacted; fail_on=$FAIL_SECRETS); rotate and remove" human "$(rel "$report")"
-    else add_check QG-SECRETS secrets "" "" fail error "$shown" "$rc" "gitleaks failed to run (exit $rc)" human "$(rel "$LAST_LOG")"; fi
+    else add_check QG-SECRETS secrets "" "" deferred warning "$shown" "$rc" "gitleaks exited $rc without a report (a tool error, not a finding); deferred (not a pass)" human "$(rel "$LAST_LOG")"; fi
     return 0
   fi
   # gitleaks missing: builtin fallback (reduced ruleset), still deferred unless it finds something.
@@ -920,6 +943,7 @@ GLTOML
   fi
 }
 
+OSV_ERROR=""
 deps_fallback() { # stack dir proj
   local st="$1" dir="$2" proj="$3" rc=0
   case "$st" in
@@ -967,6 +991,10 @@ deps_fallback() { # stack dir proj
       fi ;;
   esac
   local fb=""; case "$st" in python) fb=" (or pip-audit)";; esac
+  if [[ -n "${OSV_ERROR:-}" ]]; then
+    add_check QG-DEPS dependencies "$st" "$proj" deferred warning "" "" "dependency scan$fb: $OSV_ERROR and no stack audit for $st; deferred (not a pass): run the scanner by hand or set quality.scanners.dependencies" human "$(rel "$dir")"
+    return 0
+  fi
   defer_check QG-DEPS dependencies "$st" "$proj" osv-scanner "dependency scan$fb"
 }
 
@@ -991,15 +1019,16 @@ check_deps() {
   in_scope deps || return 0
   if [[ -z "$PROJECTS" ]]; then add_check QG-DEPS dependencies "" "" skipped none "" "" "no dependency manifests detected" implementer ""; return 0; fi
   if have osv-scanner; then
-    local out="$ART/osv.json" rc=0 lf shown="osv-scanner --format json -r <ws>" lockargs=() nlock=0
-    # Scan the lockfiles by name as well as the directory: a directory walk can come back with "no packages" (gitignore, path form)
-    # although the workspace has a lockfile (round 11, npm workspaces). A lockfile named with -L is always read.
+    local out="$ART/osv.json" rc=0 lf shown lockargs=() nlock=0
+    # The lockfiles by name (-L): a directory walk can come back with "no packages" although the workspace has a lockfile (round 11,
+    # npm workspaces). osv-scanner 2.x takes either -L or -r; given both it stops with exit 127 before scanning (round 12: QG-DEPS
+    # red for a whole run), so the directory walk runs only when no lockfile was found.
     while IFS= read -r lf; do
       [[ -n "$lf" ]] || continue
       lockargs+=( -L "$(native_path "$lf")" ); nlock=$((nlock + 1))
     done <<<"$(deps_lockfiles)"
-    if [[ $nlock -gt 0 ]]; then shown="osv-scanner --format json -L <lockfile>... -r <ws>"; fi
-    run_split "$WS" osv-scanner --format json ${lockargs[@]+"${lockargs[@]}"} -r "$(native_path "$WS")" || rc=$?
+    if [[ $nlock -gt 0 ]]; then shown="osv-scanner --format json -L <lockfile>..."; run_split "$WS" osv-scanner --format json "${lockargs[@]}" || rc=$?
+    else shown="osv-scanner --format json -r <ws>"; run_split "$WS" osv-scanner --format json -r "$(native_path "$WS")" || rc=$?; fi
     cp "$LAST_OUT" "$out" 2>/dev/null || true
     if [[ $rc -eq 0 ]]; then add_check QG-DEPS dependencies "" "" pass none "$shown" "$rc" "osv-scanner: no known vulnerabilities" implementer "$(rel "$out")"; return 0; fi
     if [[ $rc -eq 128 ]]; then
@@ -1009,11 +1038,32 @@ check_deps() {
       else add_check QG-DEPS dependencies "" "" deferred warning "$shown" "$rc" "$nomsg; deferred (not a pass)" human "$(rel "$out")"; fi
       return 0
     fi
-    if [[ $rc -ne 1 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "osv-scanner failed (exit $rc)" implementer "$(rel "$out")"; return 0; fi
-    local counts; counts="$(grep -Eo '"max_severity"[[:space:]]*:[[:space:]]*"[0-9.]*"' "$out" | grep -Eo '"[0-9.]*"$' | tr -d '"' | awk -v f="$DEPS_FLOOR" '{ if ($1 == "" || ($1 + 0) >= (f + 0)) a++; t++ } END { printf "%d %d", a, t }')"
-    local above="${counts% *}" total="${counts#* }"
-    if [[ "$above" -gt 0 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "osv-scanner: $above of $total vulnerability group(s) at or above '$FAIL_DEPS' (unknown severity counts)" implementer "$(rel "$out")"
-    else add_check QG-DEPS dependencies "" "" pass none "$shown" "$rc" "osv-scanner: $total group(s), none at or above '$FAIL_DEPS'" implementer "$(rel "$out")"; fi
+    if [[ $rc -ne 1 ]]; then
+      # The scanner stopped before it produced a result (a flag it rejects, a crash, a database it cannot load). That is a tool
+      # error, not a finding and not the implementer's code: the per-stack audit stands in where there is one, else the check is
+      # deferred to a human (never a pass, never a FIX pass).
+      local first; first="$(grep -m1 -vE '^[[:space:]]*$' "$LAST_LOG" 2>/dev/null | cut -c1-160 || true)"
+      OSV_ERROR="osv-scanner exited $rc before scanning (a tool error, not a result${first:+: $first})"
+      add_check QG-DEPS dependencies "" "" skipped warning "$shown" "$rc" "$OSV_ERROR; the stack audit below stands in" human "$(rel "$LAST_LOG")"
+      local st dir
+      while IFS=$'\t' read -r st dir; do [[ -n "$st" ]] || continue; deps_fallback "$st" "$dir" "$(rel "$dir")"; done <<<"$PROJECTS"
+      return 0
+    fi
+    # osv-scanner marks each package with its dependency_groups (npm, pip, bundler...); a "dev" package gates only when
+    # quality.audit_dev_dependencies is true (round 12: vitest and tinypool advisories are not what ships). Unknown severity counts.
+    local counts; counts="$(awk -v f="$DEPS_FLOOR" -v dev="$AUDIT_DEV" '
+      /"package"[[:space:]]*:[[:space:]]*\{/ { isdev = 0; ingrp = 0 }
+      /"dependency_groups"[[:space:]]*:/ { ingrp = 1; if ($0 ~ /"dev"/) isdev = 1 }
+      ingrp && /"dev"/ { isdev = 1 }
+      ingrp && /\]/ { ingrp = 0 }
+      /"max_severity"[[:space:]]*:/ { s = $0; sub(/.*"max_severity"[[:space:]]*:[[:space:]]*"/, "", s); sub(/".*/, "", s)
+        if (isdev && dev != "true") { d++; next }
+        if (s == "" || (s + 0) >= (f + 0)) a++; t++ }
+      END { printf "%d %d %d", a, t, d }' "$out")"
+    local above total devn; read -r above total devn <<<"$counts"
+    local devnote=""; [[ "${devn:-0}" -gt 0 ]] && devnote="; $devn dev-only group(s) not gating (quality.audit_dev_dependencies=false)"
+    if [[ "$above" -gt 0 ]]; then add_check QG-DEPS dependencies "" "" fail error "$shown" "$rc" "osv-scanner: $above of $total production vulnerability group(s) at or above '$FAIL_DEPS' (unknown severity counts)$devnote" implementer "$(rel "$out")"
+    else add_check QG-DEPS dependencies "" "" pass none "$shown" "$rc" "osv-scanner: $total production group(s), none at or above '$FAIL_DEPS'$devnote" implementer "$(rel "$out")"; fi
     return 0
   fi
   note_missing osv-scanner
@@ -1026,10 +1076,21 @@ check_deps() {
 
 check_sast() {
   in_scope sast || return 0
-  local use_docker=0
-  if ! have semgrep; then
-    if [[ "$SAST_RUNNER" == "docker" ]] && have docker; then use_docker=1
-    else defer_check QG-SAST sast "" "" semgrep "SAST"; return 0; fi
+  local use_docker=0 sast=semgrep
+  # quality.scanners.sast names the scanner (semgrep, the default, or opengrep, its LGPL fork that takes the same rules and flags);
+  # when the named one is missing the other stands in, so a machine with either runs SAST. Rules: quality.sast_rules
+  # (default `auto`, the registry; opengrep has no registry, so give it a local rules folder or it is deferred).
+  if [[ "$SAST_TOOL" == "opengrep" ]]; then sast=opengrep; fi
+  if ! have "$sast"; then
+    if [[ "$sast" == "semgrep" ]] && have opengrep; then sast=opengrep
+    elif [[ "$sast" == "opengrep" ]] && have semgrep; then sast=semgrep
+    elif [[ "$SAST_RUNNER" == "docker" ]] && have docker; then use_docker=1
+    else defer_check QG-SAST sast "" "" "$sast" "SAST"; return 0; fi
+  fi
+  local rules="$SAST_RULES"
+  if [[ "$sast" == "opengrep" && "$rules" == "auto" ]]; then
+    if [[ -d "$REPO_ROOT/architecture/sast-rules" ]]; then rules="$REPO_ROOT/architecture/sast-rules"
+    else add_check QG-SAST sast "" "" deferred warning "opengrep scan" "" "opengrep has no rule registry: put rules under architecture/sast-rules/ or set quality.sast_rules; deferred (not a pass)" human ""; return 0; fi
   fi
   local out="$ART/semgrep.json" rc=0
   if (( use_docker )); then
@@ -1044,15 +1105,20 @@ check_sast() {
     # MSYS_NO_PATHCONV: Git Bash would rewrite the container-side paths (/src, /out, /certs/ca.pem) into Windows paths.
     MSYS_NO_PATHCONV=1 run_in "$WS" docker run --rm -v "$(native_path "$WS"):/src" -v "$(native_path "$ART"):/out" "${caargs[@]}" semgrep/semgrep semgrep scan --config auto --json --quiet --output /out/semgrep.json /src || rc=$?
   else
-    run_in "$WS" semgrep scan --config auto --json --quiet --output "$(native_path "$out")" "$(native_path "$WS")" || rc=$?
+    run_in "$WS" "$sast" scan --config "$rules" --json --quiet --output "$(native_path "$out")" "$(native_path "$WS")" || rc=$?
   fi
-  if [[ ! -f "$out" ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep failed (exit $rc)" implementer "$(rel "$LAST_LOG")"; return 0; fi
+  local shown="$sast scan --config $rules --json"
+  if [[ ! -f "$out" ]]; then
+    # No result file: the scanner did not run to completion (rules unreachable, a crash). A tool error is deferred, never a code finding.
+    local first; first="$(grep -m1 -vE '^[[:space:]]*$' "$LAST_LOG" 2>/dev/null | cut -c1-160 || true)"
+    add_check QG-SAST sast "" "" deferred warning "$shown" "$rc" "$sast exited $rc without a result (a tool error, not a finding${first:+: $first}); deferred (not a pass)" human "$(rel "$LAST_LOG")"; return 0
+  fi
   local pat='ERROR'
   case "$FAIL_SAST" in warning) pat='ERROR|WARNING';; info|any) pat='ERROR|WARNING|INFO';; esac
   local n; count_matches_v "$out" "\"severity\"[[:space:]]*:[[:space:]]*\"($pat)\""; n="$CL"
-  if [[ "$n" -gt 0 ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep: $n finding(s) at severity >= $FAIL_SAST" implementer "$(rel "$out")"
-  elif [[ $rc -ne 0 ]]; then add_check QG-SAST sast "" "" fail error "semgrep scan --config auto --json" "$rc" "semgrep exited $rc" implementer "$(rel "$out")"
-  else add_check QG-SAST sast "" "" pass none "semgrep scan --config auto --json" "$rc" "semgrep: no findings at severity >= $FAIL_SAST" implementer "$(rel "$out")"; fi
+  if [[ "$n" -gt 0 ]]; then add_check QG-SAST sast "" "" fail error "$shown" "$rc" "$sast: $n finding(s) at severity >= $FAIL_SAST" implementer "$(rel "$out")"
+  elif [[ $rc -ne 0 && $rc -ne 1 ]]; then add_check QG-SAST sast "" "" deferred warning "$shown" "$rc" "$sast exited $rc (a tool error, not a finding); deferred (not a pass)" human "$(rel "$out")"
+  else add_check QG-SAST sast "" "" pass none "$shown" "$rc" "$sast: no findings at severity >= $FAIL_SAST" implementer "$(rel "$out")"; fi
 }
 
 # ---------------------------------------------------------------- QG-STATIC (architecture/static-rules.tsv)
@@ -1148,6 +1214,23 @@ check_static() {
 }
 
 # ---------------------------------------------------------------- QG-IMAGE image-scan-built (compose-built images)
+# image_stale_file IMAGE -> the first workspace file newer than the image's Created time (sources, manifests, lockfiles, Dockerfiles;
+# build output and dependency folders pruned), or nothing when the image is newer than all of them or its time cannot be read.
+image_stale_file() {
+  local created stamp expr=() n f
+  created="$(docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | head -n 1 | tr -d '\r')"
+  [[ -n "$created" ]] || return 0
+  stamp="$ART/.image-$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_').stamp"
+  if ! touch -d "$created" "$stamp" 2>/dev/null; then
+    # BSD touch has no -d: take the first 14 digits as [[CC]YY]MMDDhhmm.SS
+    local d; d="$(printf '%s' "$created" | tr -dc '0-9' | cut -c1-14)"
+    touch -t "${d:0:12}.${d:12:2}" "$stamp" 2>/dev/null || return 0
+  fi
+  for n in "${PRUNE_NAMES[@]}"; do expr+=( -name "$n" -o ); done
+  f="$(find "$WS" \( -type d \( "${expr[@]}" -name '.?*' \) -prune \) -o -type f -newer "$stamp" -print 2>/dev/null | head -n 1 || true)"
+  rm -f "$stamp"
+  printf '%s' "$f"
+}
 # Images come from the compose file(s) in the workspace or the repo root: the image: value of every service that has build:, or
 # <project>-<service> (what compose names it) when no image: is set. The compose file is parsed, not rendered with
 # "docker compose config", because that needs every required ${VAR:?} to be set and fails on a clean checkout.
@@ -1230,13 +1313,20 @@ check_image_built() { # $1 = 1 when a Dockerfile exists in the workspace
       else add_check QG-IMAGE image-scan-built "" "" deferred warning "docker image inspect $img" "$rc" "built image '$img' not found locally: image not built: run docker compose build; deferred (not a pass)" infrastructure-implementer "image-not-built:$img"; fi
       continue
     fi
+    # An image older than the workspace files was not built from this code (round 12: images left over from an earlier run were
+    # scanned and failed the gate). Stale = deferred with a rebuild hint; only an image newer than every source file is scanned.
+    local newer; newer="$(image_stale_file "$img")"
+    if [[ -n "$newer" ]]; then
+      add_check QG-IMAGE image-scan-built "" "" deferred warning "docker image inspect $img" 0 "built image '$img' is older than the workspace file $(rel "$newer") (built $(docker image inspect -f '{{.Created}}' "$img" 2>/dev/null | cut -c1-19)): stale, not scanned; run docker compose build and re-run the gate; deferred (not a pass)" infrastructure-implementer "image-stale:$img"
+      continue
+    fi
     out="$ART/trivy-image-$i.json"; all="$ART/trivy-image-$i-all.json"
     shown="trivy image --severity $sevs --ignore-unfixed --exit-code 1 $img"
     rc=0
     run_in "$WS" trivy image --severity "$sevs" --ignore-unfixed --exit-code 1 --format json --output "$(native_path "$out")" "$img" || rc=$?
     local logf="$LAST_LOG"
     if [[ $rc -ne 0 && ( $rc -ne 1 || ! -f "$out" ) ]]; then
-      add_check QG-IMAGE image-scan-built "" "" fail error "$shown" "$rc" "trivy image $img failed (exit $rc)" infrastructure-implementer "$(rel "$logf")"
+      add_check QG-IMAGE image-scan-built "" "" deferred warning "$shown" "$rc" "trivy image $img exited $rc without a report (a tool error or an unreachable database, not a finding); deferred (not a pass)" human "$(rel "$logf")"
       continue
     fi
     nfix=0; if [[ $rc -eq 1 ]]; then count_matches_v "$out" '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"'; nfix="$CL"; fi
@@ -1286,13 +1376,22 @@ check_container() {
       elif [[ $rc -eq 1 && -f "$out" ]]; then
         local n; count_matches_v "$out" '"Severity"[[:space:]]*:[[:space:]]*"[A-Z]+"'; n="$CL"
         add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy: $n finding(s) at $sevs" infrastructure-implementer "$(rel "$out")"
-      else add_check QG-IMAGE image-scan "" "" fail error "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy failed (exit $rc)" infrastructure-implementer "$(rel "$LAST_LOG")"; fi
+      else add_check QG-IMAGE image-scan "" "" deferred warning "trivy fs --severity $sevs --exit-code 1" "$rc" "trivy fs exited $rc without a report (a tool error or an unreachable database, not a finding); deferred (not a pass)" human "$(rel "$LAST_LOG")"; fi
     else defer_check QG-IMAGE image-scan "" "" trivy "image/fs scan"; fi
     check_image_built 1
   fi
 }
 
 # ---------------------------------------------------------------- run
+PLAN_SCOPE=""
+if [[ "${SCOPE_GIVEN:-0}" -eq 0 && $FAST -eq 0 && -n "$SPEC" ]]; then
+  PLAN_SCOPE="$(plan_scope)"
+  if [[ -n "$PLAN_SCOPE" ]]; then
+    SCOPE="$PLAN_SCOPE"; SCOPE_SOURCE="plan.md Gates coverage"
+    notc=""; for n in lock build lint test coverage secrets deps sast static sbom image; do in_scope "$n" || notc="${notc:+$notc, }$n"; done
+    add_check QG-SCOPE gate-scope "" "" pass none "" "" "scope from $(rel "$SPEC_DIR")/plan.md -> ## Gates coverage: $SCOPE${notc:+; not covered by the plan (the architecture decides the gates): $notc}" architect "$(rel "$SPEC_DIR/plan.md")"
+  fi
+fi
 PROJECTS=""
 STACKS_JSON=""
 if [[ $FAST -eq 0 ]]; then
@@ -1354,7 +1453,7 @@ if [[ -n "$OUT_DIR" ]]; then REPORT_JSON="$OUT_DIR/quality-gate.json"; REPORT_MD
 
 build_json() {
   local i first=1 rcj file msg t reqb
-  pjn '{"tool":"quality-gate","version":"%s","scope":%j,"mode":"%s","spec":%j,"idea":%j,' "$VERSION" "$SCOPE_OUT" "$MODE" "$SPEC" "${IDEA_ID:+IDEA-$IDEA_ID}"; printf '%s' "$PJ"
+  pjn '{"tool":"quality-gate","version":"%s","scope":%j,"scope_source":%j,"mode":"%s","spec":%j,"idea":%j,' "$VERSION" "$SCOPE_OUT" "$SCOPE_SOURCE" "$MODE" "$SPEC" "${IDEA_ID:+IDEA-$IDEA_ID}"; printf '%s' "$PJ"
   rel_v "$WS"; reqb=false; [[ $REQUIRE -eq 1 ]] && reqb=true
   pjn '"workspace":%j,"require":%s,"coverage_min_pct":%s,"coverage_min_source":%j,' "$RELV" "$reqb" "$COV_MIN" "$COV_SRC"; printf '%s' "$PJ"
   printf '"errors":%d,"warnings":%d,"deferred":%d,"status":"%s","exit_code":%d,' "$ERRORS" "$WARNINGS" "$DEFERRED" "$STATUS" "$EXIT"

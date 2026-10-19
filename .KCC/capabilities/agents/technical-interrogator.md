@@ -15,7 +15,7 @@ tools-required:
   - edit
   - web
 inputs: A source idea folder, `SpecWriterStarter.md`, or ad-hoc spec request.
-outputs: `TechnicalDecisionBrief.md` plus recorded technical questions and answers, preferably in the source idea folder.
+outputs: `TechnicalDecisionBrief.md` plus recorded technical questions and answers, preferably in the source idea folder. Under `fasttrack` the brief also carries `## UX and UI` and `## Infrastructure and packaging` (at most 15 lines each), because the UX and infrastructure specialists are not spawned in that profile.
 maturity: L1
 maintainer: tarek.fawaz1983@gmail.com
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
@@ -86,7 +86,14 @@ turns your brief into ADRs, guardrails, and quality gates.
 
 ## Fast track and depth
 
-Under `fasttrack`: do not ask the human. Decide from the idea, the briefs and `standards-catalog.md`, write a short `TechnicalDecisionBrief.md` (within `spec_sizing.max_brief_lines`) with a `## Decisions` table (library + version range + citation), and list at most 5 genuinely blocking questions under `## Open questions`; the ASK state asks them once (or answers them from the catalogue under `--silent --assume`). Honour `depthlevel`.
+Under `fasttrack`: do not ask the human. Decide from the idea, the security brief (when it is already there) and `standards-catalog.md`, write a short `TechnicalDecisionBrief.md` (within `spec_sizing.max_brief_lines`) with a `## Decisions` table (library + version range + citation), and list at most 5 genuinely blocking questions under `## Open questions`; the ASK state asks them once (or answers them from the catalogue under `--silent --assume`). Honour `depthlevel`.
+
+Fast track spawns two specialists, not four: you and the security-analyst. `ux-ui-designer` and `infrastructure-planner` do not run, so your brief carries two extra sections, each at most 15 lines, filled from the catalogue defaults, with one line per decision and no questions the human is not asked:
+
+- `## UX and UI` (only when the idea has a user-facing surface; otherwise one line `n/a: no user interface`): the surface (web, mobile, CLI, TUI, report), the design-system or styling default, theme and colour defaults, accessibility floor (WCAG level, keyboard, contrast), responsive behaviour, and the assets the implementer may assume. The architect and the spec-writer read this in place of `UXDecisionBrief.md`.
+- `## Infrastructure and packaging`: deployment target (local, container, cloud, on-prem), environments, configuration from the environment, packaging (container image, package, binary), versioning and tagging, observability floor (structured logs, health endpoint), and whether QG-PROD applies. The architect reads this in place of `InfrastructureDecisionBrief.md` and the planner takes the toolchain from it.
+
+Anything in those two domains that is a CR-7 decision with no catalogue default goes to `## Open questions`.
 
 ## Output Format
 

@@ -67,8 +67,10 @@ quality-deferred (not a pass). Include QG-PROD (pass or `n/a` + reason); see
 ## Architecture Documentation Check
 {`architecture/architecture.md` embeds diagrams inline (```mermaid```); spec
 `arch.md` meets the content bar (>=1 mermaid block + narrative, not link-only
-or sub-1 KB); flag any `.mmd` / `architecture/diagrams/` as deprecated layout.
-Or "Architecture documentation OK."}
+or sub-1 KB) in the full lifecycle (under `fasttrack` no `arch.md` exists and
+its absence is never a finding; compare the code with `architecture.md ->
+## Decisions` and the embedded C2 diagram instead); flag any `.mmd` /
+`architecture/diagrams/` as deprecated layout. Or "Architecture documentation OK."}
 
 ## API Conformance Check
 {When the spec exposes an HTTP/REST API: confirm a valid OpenAPI 3.x document is
@@ -121,11 +123,21 @@ Every failing AC found here becomes `Backlog/Bug-*.md` (`Source: verifier`).
 - Screenshots: `TestResults/IDEA-{ID}/SPEC-{ID}/screenshots/`
 
 ## Verdict
-**APPROVED**, **CHANGES_NEEDED**, **QUALITY_DEFERRED**, or **TOOLCHAIN_DEFERRED**
+**APPROVED**, **CHANGES_NEEDED**, **WAIVER_NEEDED**, **QUALITY_DEFERRED**, or **TOOLCHAIN_DEFERRED**
 
 APPROVED only if: traceability pass, `quality-gate` exit 0, no open
 blocker/major bug, QG-PROD and QG-ARCH-DOCS pass. `quality-gate` exit 3 ->
 **QUALITY_DEFERRED** (not a pass).
+
+**WAIVER_NEEDED** when every Bug is closed and what keeps the gate red is not
+a code change: a gate tool error, a stale image, an environment limit (a
+registry the build cannot reach, a test the OS cannot run), or a check the
+architecture excluded. Not a pass. Add the table:
+
+## Waivers
+| Item | Why it is not a code fix | What a human does |
+|--|--|--|
+| QG-IMAGE budgetpal-web:local | image built before this HEAD; the build cannot reach the registry here | rebuild on a host with registry access, or waive |
 
 A **TOOLCHAIN_DEFERRED** verdict is used when the required build/test toolchain
 was missing and the human deferred install: it is NOT a pass. List which
@@ -154,12 +166,12 @@ title: "SPEC-{ID} Review"
 tags:
   - spec
   - review
-  - status/{approved|changes-needed|quality-deferred|toolchain-deferred}
+  - status/{approved|changes-needed|waiver-needed|quality-deferred|toolchain-deferred}
   - lifecycle/review
 created: <original>
 updated: <today>
-status: {approved | changes-needed | quality-deferred | toolchain-deferred}
-verdict: {APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED}
+status: {approved | changes-needed | waiver-needed | quality-deferred | toolchain-deferred}
+verdict: {APPROVED | CHANGES_NEEDED | WAIVER_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED}
 commit: {sha of the HEAD that was verified; the next, scoped, re-verification diffs against it}
 version: 1.0.0
 ---

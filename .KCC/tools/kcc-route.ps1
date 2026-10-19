@@ -110,6 +110,8 @@ function Invoke-Route([string]$defTier, [string]$defEffort, [string]$task, [stri
     }
     if ($complexity -eq 'extra-high') { $effort = EffAtLeast $effort 'xhigh'; $reasons += 'extra-high complexity: effort xhigh' }
     if ($items -gt 3 -or $files -gt 5) { $effort = EffUp $effort; $reasons += 'large unit: effort up' }
+    # review (a verifier or critic) stays at high unless the item is extra-high (router.ts)
+    if ($task -eq 'review' -and $complexity -ne 'extra-high' -and (Idx $Efforts $effort) -gt (Idx $Efforts 'high')) { $effort = 'high'; $reasons += 'review: effort capped at high (xhigh only for extra-high complexity)' }
     # RETRY_RULES (router.ts): a retry escalates the agent that fixes something (tier and effort up one step); a planning retry
     # (spec, plan) keeps the tier and raises the effort to at most high; a verifier or critic (task review) is never escalated.
     if ($attempt -ge 2 -and $task -ne 'review') {

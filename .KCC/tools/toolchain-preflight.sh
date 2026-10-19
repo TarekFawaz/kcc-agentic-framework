@@ -134,6 +134,34 @@ for spec in "$@"; do
   fi
 done
 
+# Environment limits a run should know before it spends time on them. A Docker daemon that cannot reach a registry (TLS interception by
+# a proxy or antivirus, no network) fails every image pull and build; one tiny pull here tells the verifier to defer those checks at
+# once instead of finding out after a 20-minute build attempt (round 12). Printed as `LIMIT <what>: <why>`; never a missing tool.
+probe_docker_registry() {
+  local out rc=0 t=()
+  command -v timeout >/dev/null 2>&1 && t=(timeout 90)
+  out="$("${t[@]}" docker pull -q hello-world:latest 2>&1)" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    out="$(printf '%s\n' "$out" | { grep -vE '^[[:space:]]*$' || true; } | tail -n 1 | cut -c1-200)"
+    printf 'LIMIT docker-registry unreachable: the Docker daemon cannot pull from the registry (exit %s: %s); image builds and compose up --build will fail on this machine\n' "$rc" "${out:-no output}"
+    return 0
+  fi
+  echo "PROBE    docker-registry reachable (docker pull hello-world)"
+  # The daemon may trust the proxy's certificate while the build containers do not (Docker Desktop behind an antivirus: npm ci inside
+  # RUN fails with UNABLE_TO_VERIFY_LEAF_SIGNATURE, BuildKit cannot fetch its frontend). One RUN that opens a TLS connection shows it.
+  local d; d="$(mktemp -d 2>/dev/null || mktemp -d -t kccprobe)"
+  printf 'FROM alpine:3.21\nRUN wget -q -O /dev/null https://registry.npmjs.org/-/ping\n' > "$d/Dockerfile"
+  local ctx="$d"; if command -v cygpath >/dev/null 2>&1; then ctx="$(cygpath -w "$d")"; fi
+  rc=0; out="$("${t[@]}" docker build --no-cache -q -t kcc-preflight-probe "$ctx" 2>&1)" || rc=$?
+  rm -rf "$d"; docker image rm -f kcc-preflight-probe >/dev/null 2>&1 || true
+  if [[ $rc -eq 0 ]]; then echo "PROBE    docker-build-network reachable (a RUN step reached registry.npmjs.org over TLS)"; return 0; fi
+  out="$(printf '%s\n' "$out" | { grep -iE 'certificate|x509|tls|ssl|unable to|could not resolve|network|error' || true; } | tail -n 1 | cut -c1-200)"
+  printf 'LIMIT docker-build-network unreachable: a RUN step inside a build cannot reach registries over TLS (exit %s: %s); npm ci / pip install / apk inside docker build and compose up --build will fail on this machine (a proxy or antivirus intercepts TLS; see KCC_CA_BUNDLE)\n' "$rc" "${out:-no matching output}"
+}
+for spec in "$@"; do
+  if [[ "${spec%%@*}" == "docker" ]] && command -v docker >/dev/null 2>&1; then probe_docker_registry; break; fi
+done
+
 echo "-----------------------------------"
 if [[ ${#missing[@]} -gt 0 ]]; then
   printf 'MISSING TOOLS: %s\n' "$(IFS=', '; echo "${missing[*]}")"

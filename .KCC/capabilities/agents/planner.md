@@ -14,7 +14,7 @@ tools-required:
   - search
   - edit
   - exec        # narrow: read-only git history (`git log`, `git diff`)
-inputs: A spec ID (e.g. SPEC-003); read `SPEC-{ID}-{slug}.md`, `arch.md`, and `Backlog/*.md` from `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` (legacy v5 - `backlog.md`, `parallelization.md` - as fallback only).
+inputs: A spec ID (e.g. SPEC-003); read `SPEC-{ID}-{slug}.md`, `arch.md` (full lifecycle; under `fasttrack` there is none and the note's `## Architecture references` plus `architecture/architecture.md` take its place), and `Backlog/*.md` from `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` (legacy v5 - `backlog.md`, `parallelization.md` - as fallback only).
 outputs: `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/plan.md` with mandatory `## Waves` and `## Atomic test cases` sections.
 maturity: L2
 maintainer: tarek.fawaz1983@gmail.com
@@ -67,9 +67,14 @@ STOP and flag for re-architecture (new/updated ADR + human approval via
    `architecture/guardrails.md`, `architecture/quality-gates.md`, and the
    spec-local `arch.md`. In `## Architecture Gate Check` cite C4 component
    names, the ADR(s) justifying ordering, and applicable fitness functions /
-   NFRs / budgets; fold gates into Verification Steps.
+   NFRs / budgets; fold gates into Verification Steps. Under `fasttrack`
+   there is no `arch.md`, no standalone `c4-*.md` and no `flowcharts/`: read
+   the spec note's `## Architecture references` (Decision ids, C2
+   containers) and `architecture/architecture.md` (`## Decisions`,
+   `## Toolchain`, the embedded diagrams), plus `architecture/quality-gates.md`.
 4. **Confirm stack conformance** of every step against `architecture/architecture.md`,
-   ADR(s), `arch.md`, `TechnicalDecisionBrief.md`; deviation -> stop and flag.
+   ADR(s) (fast track: the `## Decisions` table), `arch.md` (full lifecycle),
+   `TechnicalDecisionBrief.md`; deviation -> stop and flag.
 5. **Read impacted files** under each item's `## Impacted Files`; trace
    code paths from the problem statement and ACs. New code prefix:
    `src/IDEA-{ID}-{slug}/`.
@@ -157,7 +162,7 @@ Standards coverage, Gates coverage, Verification Steps, Scope, Confidence.
 
 ## Fast track and depth
 
-`plan.md` <= `spec_sizing.max_plan_lines` (SZ-7); merge duplicate rows, never drop an AC's Test ID. Fill the Complexity column (`low|medium|high|extra-high`) for every item: the orchestrator picks the implementer model from it (`coordination/orchestrator.md`, rule 7). Under `fasttrack`: no token estimate, no butler. Honour `depthlevel`. Mark an item `high` Complexity when it is security-sensitive (authentication or authorization, crypto, secrets, personal or payment data, parsing of untrusted input, SQL or shell or template construction, deserialization, file or network access from user input): that runs it on the balanced model, never the executor tier. Make the first wave a scaffold enabler that gives `quality-gate` something to check: the stack's project manifest and lockfile, lint and test-runner config, a coverage setting, `.gitignore`, and a README with run instructions (for deployables also config from the environment and a health check). Without a manifest the build, lint, test, and coverage gates are skipped, not passed.
+`plan.md` <= `spec_sizing.max_plan_lines` (SZ-7); merge duplicate rows, never drop an AC's Test ID. Fill the Complexity column (`low|medium|high|extra-high`) for every item: the orchestrator picks the implementer model from it (`coordination/orchestrator.md`, rule 7). Under `fasttrack`: no token estimate, no butler, and no spec `arch.md` to read or to ask for (the note's `## Architecture references` and `architecture/architecture.md` are the design inputs; never flag the missing file). Honour `depthlevel`. Mark an item `high` Complexity when it is security-sensitive (authentication or authorization, crypto, secrets, personal or payment data, parsing of untrusted input, SQL or shell or template construction, deserialization, file or network access from user input): that runs it on the balanced model, never the executor tier. Make the first wave a scaffold enabler that gives `quality-gate` something to check: the stack's project manifest and lockfile, lint and test-runner config, a coverage setting, `.gitignore`, and a README with run instructions (for deployables also config from the environment and a health check). Without a manifest the build, lint, test, and coverage gates are skipped, not passed.
 
 ## Constraints
 

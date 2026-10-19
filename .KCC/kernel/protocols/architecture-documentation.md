@@ -108,11 +108,11 @@ This matrix is the single source of truth used by the architect agent's
 | Artifact | `lite` | `standard` | `deep` | `fasttrack` (profile, any depth) |
 |--|:------:|:----------:|:------:|:------:|
 | `architecture/architecture.md` (Architecture Document - narrative + embedded diagrams) | required | required | required | required (C1 + C2 embedded, `## Decisions`, `## Toolchain`) |
-| `architecture/c4-context.md` (Mermaid `C4Context` diagram source) | required | required | required | optional (embedded in the document is enough) |
-| `architecture/c4-container.md` (Mermaid `C4Container` diagram source) | optional | required | required | optional (embedded in the document is enough) |
+| `architecture/c4-context.md` (Mermaid `C4Context` diagram source) | required | required | required | not written: the embedded diagram is the source; a standalone copy is a duplicate (ARCH-FT-005, warning) |
+| `architecture/c4-container.md` (Mermaid `C4Container` diagram source) | optional | required | required | not written: the embedded diagram is the source; a standalone copy is a duplicate (ARCH-FT-005, warning) |
 | `architecture/c4-component.md` (Mermaid `C4Component` diagram source) | - | optional | required | must not exist |
 | `architecture/sequences/*.md` (Mermaid `sequenceDiagram` source) | - | optional | required (per cross-service flow) | must not exist |
-| `architecture/flowcharts/*.md` (Mermaid `flowchart` source - business workflow) | required (>=1) | required (>=1 per workflow) | required (>=1 per workflow) | required (>=1) |
+| `architecture/flowcharts/*.md` (Mermaid `flowchart` source - business workflow) | required (>=1) | required (>=1 per workflow) | required (>=1 per workflow) | no folder: one embedded flowchart in `architecture.md -> ## Flows`, only when the idea has a non-trivial workflow (a `flowcharts/` folder is a duplicate, ARCH-FT-005, warning) |
 | `architecture/dfds/*.md` (Mermaid `flowchart TD` source - DFD conventions) | - | required when data flow is non-trivial | required (>=1 per data flow) | must not exist |
 | `architecture/fitness-functions.md` | required | required | required | optional |
 | `architecture/technical-budgets.md` | required | required | required | optional |
@@ -120,7 +120,7 @@ This matrix is the single source of truth used by the architect agent's
 | `architecture/guardrails.md` | required (when any ADR exists) | required | required | optional |
 | `architecture/quality-gates.md` | required (when any ADR exists) | required | required | required |
 | `architecture/adrs/ADR-000N-{slug}.md` | per decision | per decision | per decision | must not exist: decisions go in `architecture.md -> ## Decisions` |
-| Spec-local `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md` (embeds diagrams inline - not links) | required | required | required | optional (the spec-writer's skeleton; no architect slice) |
+| Spec-local `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md` (embeds diagrams inline - not links) | required | required | required | must not exist: the spec note's `## Architecture references` (Decision ids, C2 containers, the Architecture Document wikilink) replaces it; the planner and verifier read that section and `architecture.md` (SPEC-003 warns on a stray file) |
 | `architecture/assumptions.md` | required when `auto --silent --assume` | required when `auto --silent --assume` | required when `auto --silent --assume` | `ideation/IDEA-*/Assumptions.md` (written by ASK) when `--silent --assume` |
 
 The `fasttrack` column is a **profile**, not a depth: `--fasttrack` (or `check-run-conformance
@@ -130,8 +130,12 @@ track's purpose is a running app.
 
 The named diagram source files (`c4-context.md`, `c4-container.md`,
 `c4-component.md`, `flowcharts/*.md`, `dfds/*.md`, `sequences/*.md`) remain the
-single source of truth for each diagram. `architecture/architecture.md` embeds
-an inline fenced copy of each with a `Source: [[file]]` citation.
+single source of truth for each diagram in the full lifecycle.
+`architecture/architecture.md` embeds an inline fenced copy of each with a
+`Source: [[file]]` citation. Under the fast-track profile the embedded block
+in `architecture.md` is itself the source: no standalone diagram file, no
+`Source:` line, and no `flowcharts/` folder (a business flow that matters is
+one embedded flowchart under `## Flows`).
 
 The same matrix is duplicated in [[architecture-governance]] so the
 governance protocol stays self-contained. If they diverge, this protocol

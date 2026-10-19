@@ -87,6 +87,9 @@ export function route(i: RouteInput): Route {
   }
   if (i.complexity === "extra-high") { effort = effAtLeast(effort, "xhigh"); reasons.push("extra-high complexity: effort xhigh"); }
   if ((i.items ?? 0) > 3 || (i.files ?? 0) > 5) { effort = effUp(effort); reasons.push("large unit: effort up"); }
+  // A verification or critique (task review) reads and runs what exists; xhigh buys it little (round 12: a 51-minute first TEST pass at
+  // xhigh found the same four bugs a high pass finds). It stays at high unless the item itself is extra-high.
+  if (i.task === "review" && i.complexity !== "extra-high" && EFFORTS.indexOf(effort) > EFFORTS.indexOf("high")) { effort = "high"; reasons.push("review: effort capped at high (xhigh only for extra-high complexity)"); }
   // A retry escalates the agent that is fixing something (implementer ...) by RETRY_RULES. A planning retry (spec, plan) keeps the
   // tier and raises the effort to at most high; a verifier or critic (task review) is never escalated.
   const retry = (i.attempt ?? 1) >= 2 ? RETRY_RULES[i.task] : null;

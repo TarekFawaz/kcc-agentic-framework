@@ -20,7 +20,7 @@ specs/
     |-- ROADMAP.md                 <- Execution Plan + Token Plan (token-guard fills estimates)
     `-- SPEC-{ID}-{slug}/
         |-- SPEC-{ID}-{slug}.md    <- Delivery Brief / ACs / Backlog (Wave col) / Architecture / Risks
-        |-- arch.md                <- section skeleton only
+        |-- arch.md                <- section skeleton only (full lifecycle; none under fast track: the note's `## Architecture references`)
         `-- Backlog/
             |-- Story-001-{slug}.md
             `-- Enabler-001-{slug}.md

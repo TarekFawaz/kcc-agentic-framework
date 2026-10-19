@@ -60,8 +60,9 @@ never raised later without approval.
 
 - Required sections and artifacts: spec sections (Delivery Brief, Acceptance
   Criteria, Backlog, Architecture), `plan.md` Waves and Atomic test cases,
-  ROADMAP, `arch.md` with a mermaid block, the architecture minimums of the
-  chosen depth, `review.md` Evidence.
+  ROADMAP, `arch.md` with a mermaid block (full lifecycle; under `--fasttrack`
+  the spec note's `## Architecture references` instead), the architecture
+  minimums of the chosen depth or profile, `review.md` Evidence.
 - Every acceptance criterion and its Test ID. Shortening may merge wording, not
   coverage.
 - CR-7 prohibited-assumption escalation, the toolchain gate, and confidence

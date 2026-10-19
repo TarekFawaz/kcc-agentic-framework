@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { UsageError } from "../args";
@@ -12,11 +12,19 @@ import { type DashStamp, rebuildDashboard } from "./dashstale";
  *
  * The driver (`kcc-run`) stays one sequential run per folder. After the shared states (IDEA .. SPECS),
  * every spec whose dependencies are merged runs `kcc-run --input SPEC-X --until 17` in its own lane
- * (`.kcc-lanes/SPEC-X`, a private copy with its own run state), so independent specs run at the same
- * time and dependent ones wait. A finished lane is merged back and removed; a file that both the lane
- * and the workspace changed is a conflict, never silently overwritten. Lane progress (its spec folder,
- * test results, backchannel events) is copied into the workspace while it runs, so the one dashboard
- * shows every spec.
+ * (`.kcc-lanes/SPEC-X`), so independent specs run at the same time and dependent ones wait.
+ *
+ * In a git workspace (the normal case: repo-bootstrap makes one) a lane is a **git worktree** on the branch
+ * `spec/SPEC-X`, cut from the workspace HEAD: one repository, one object store, the lane's commits on the
+ * spec branch the git-workflow protocol names. A finished lane is merged back with `git merge` (a real
+ * three-way merge; `.gitignore` and the shared indexes merge as unions) and the worktree is removed. A
+ * conflict is a git conflict, reported with the files and the branch to merge by hand; nothing is dropped.
+ * Round 13: the copy-based merge before this compared whole-file hashes and ended a clean walking skeleton
+ * on a `.gitignore` both sides had touched.
+ *
+ * A workspace without git keeps the older lane: a private copy with a hash snapshot, merged file by file.
+ * Lane events and attention items are appended to the workspace while a lane runs, so the one dashboard
+ * shows every spec; the lane's files reach the workspace when it merges.
  */
 
 export interface RoadmapRow {
@@ -250,6 +258,13 @@ export function mergeLane(main: string, lane: string, base: Record<string, strin
     const mainFile = join(main, rel);
     const mainHash = existsSync(mainFile) ? contentHash(readFileSync(mainFile)) : undefined;
     if (mainHash === after) continue;
+    if (rel === ".gitignore" && after !== undefined) {
+      // Ignore rules are a set: the lane's new lines are appended to the workspace file (the lane marker stays in the lane), and
+      // two lanes that both add rules both merge. Nothing is dropped and nothing is reported as a conflict.
+      const added = unionGitignore(mainFile, join(lane, rel));
+      if (added) { res.applied.push(rel); res.hashes![rel] = contentHash(readFileSync(mainFile)); }
+      continue;
+    }
     if (mainHash !== before && !owned.some((p) => rel.startsWith(p))) {
       (SHARED_INDEXES.has(rel) ? res.sharedSkipped : res.conflicts).push(rel);
       continue;
@@ -317,6 +332,15 @@ export function mirrorRun(root: string, state: Record<string, { status: string; 
  * gets at the end (files the workspace changed meanwhile are left alone and reported), repeated while it runs.
  */
 export function liveSyncLane(root: string, lane: string, spec: string): MergeResult | undefined {
+  if (laneMode(lane) === "worktree") {
+    // The lane's files live on its branch and in its folder (the dashboard reads lane folders); only its events and attention
+    // items are shared while it runs. Nothing is copied into the workspace tree before the merge.
+    try {
+      return { applied: [], deleted: [], conflicts: [], sharedSkipped: [], events: syncBackchannel(root, lane), attention: syncNeedsAttention(root, lane) };
+    } catch {
+      return undefined;
+    }
+  }
   const base = readJson<{ base?: Record<string, string> }>(join(lane, ".kcc-lane", "base.json"))?.base;
   if (!base) return undefined;
   try {
@@ -382,6 +406,25 @@ export function trustFolder(dir: string): void {
   writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
+/** Appends the lane's .gitignore lines the workspace file lacks (comments and blank lines travel with the first new rule after
+ *  them; the lane marker `.kcc-lane/` never does). Returns the number of lines added. */
+export function unionGitignore(mainFile: string, laneFile: string): number {
+  const cur = existsSync(mainFile) ? readFileSync(mainFile, "utf8") : "";
+  const have = new Set(cur.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+  const out: string[] = [];
+  let pending: string[] = [];
+  for (const raw of readFileSync(laneFile, "utf8").split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l === "" || l.startsWith("#")) { pending.push(raw); continue; }
+    if (l === ".kcc-lane/" || l === ".kcc-lane" || have.has(l)) { pending = []; continue; }
+    out.push(...pending, raw); pending = []; have.add(l);
+  }
+  const rules = out.filter((l) => l.trim() && !l.trim().startsWith("#")).length;
+  if (rules === 0) return 0;
+  writeFileSync(mainFile, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + out.join("\n") + "\n");
+  return rules;
+}
+
 /** Adds a line to the folder's .gitignore when it is not there yet (the file is created when missing). */
 export function ensureGitignore(dir: string, line: string): void {
   const f = join(dir, ".gitignore");
@@ -391,19 +434,175 @@ export function ensureGitignore(dir: string, line: string): void {
   writeFileSync(f, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + line + "\n");
 }
 
-/** Cuts a lane: a copy of the workspace with its own git baseline and base snapshot. */
+// ---------------------------------------------------------------- git worktree lanes
+
+export interface GitResult { status: number; stdout: string; stderr: string }
+/** Runs git in a folder; bookkeeping commits carry the framework identity so a workspace without user.name still works. */
+export function git(dir: string, ...args: string[]): GitResult {
+  const r = spawnSync("git", ["-c", "user.name=KCC", "-c", "user.email=kcc@local", "-c", "core.autocrlf=false", ...args], { cwd: dir, encoding: "utf8" });
+  return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+/** A workspace where lanes can be worktrees: a git repository with at least one commit. */
+export function isGitWorkspace(root: string): boolean {
+  if (git(root, "rev-parse", "--is-inside-work-tree").stdout.trim() !== "true") return false;
+  return git(root, "rev-parse", "--verify", "-q", "HEAD").status === 0;
+}
+
+/** The repository's common git dir (shared by every worktree), absolute. */
+function gitCommonDir(root: string): string {
+  const d = git(root, "rev-parse", "--git-common-dir").stdout.trim();
+  return resolve(root, d || ".git");
+}
+
+function appendMissingLines(file: string, lines: string[]): void {
+  const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const have = new Set(cur.split(/\r?\n/).map((l) => l.trim()));
+  const add = lines.filter((l) => !have.has(l));
+  if (!add.length) return;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + add.join("\n") + "\n");
+}
+
+/** Union-merged files: both sides add lines, nobody edits the other's. The ignore file and the shared indexes. */
+export const UNION_MERGE = [".gitignore", "specs/specs.md", "ideation/ideas.md", "progress.md", "memory/memory.md"];
+
+/**
+ * The repository-local settings a lane needs, written once (never into tracked files): the lane folders are excluded from
+ * status everywhere, and the union-merged files get their merge driver.
+ */
+export function prepareRepoForLanes(root: string): void {
+  const common = gitCommonDir(root);
+  // The run's own state is never a commit's business, whatever the project's .gitignore says (the bookkeeping commits below add everything else).
+  appendMissingLines(join(common, "info", "exclude"), [".kcc-lanes/", ".kcc-lane/", "coordination/run/", "coordination/gates/", "coordination/checkpoints/", "coordination/lanes.json", "coordination/backchannel.jsonl", "coordination/backchannel-*.jsonl", "dashboard/"]);
+  appendMissingLines(join(common, "info", "attributes"), UNION_MERGE.map((f) => `${f} merge=union`));
+}
+
+/** The lane branch of a spec, as the git-workflow protocol names it. */
+export function laneBranch(spec: string): string {
+  return `spec/${spec}`;
+}
+
+/** Commits everything that is not ignored, when anything changed. Framework bookkeeping: hooks are not run for it. */
+export function commitAll(dir: string, message: string): { committed: boolean; error?: string } {
+  git(dir, "add", "-A");
+  if (git(dir, "diff", "--cached", "--quiet").status === 0) return { committed: false };
+  const r = git(dir, "commit", "-q", "--no-verify", "-m", message);
+  return r.status === 0 ? { committed: true } : { committed: false, error: (r.stderr || r.stdout).trim() };
+}
+
+/** Folders and files git ignores that a lane still needs to run: the harness folders and the run's event log. */
+const LANE_RUNTIME = [".claude", ".codex", ".opencode", ".agents", "ollama", "coordination/orchestrator.json", "coordination/orchestrator.md", BACKCHANNEL];
+function copyRuntime(root: string, dir: string): void {
+  for (const rel of LANE_RUNTIME) {
+    const from = join(root, rel);
+    const to = join(dir, rel);
+    if (!existsSync(from) || existsSync(to)) continue;
+    try {
+      if (statSync(from).isDirectory()) copyTree(from, to);
+      else { mkdirSync(dirname(to), { recursive: true }); copyFileSync(from, to); }
+    } catch {
+      /* a runtime file that vanished or is locked: the lane recreates what it needs */
+    }
+  }
+}
+
+export type LaneMode = "worktree" | "copy";
+export interface LaneMeta { spec: string; mode?: LaneMode; branch?: string; base?: Record<string, string>; backchannelLines?: number; backchannelSynced?: number; needsSynced?: number }
+export function laneMeta(lane: string): LaneMeta | undefined {
+  return readJson<LaneMeta>(join(lane, ".kcc-lane", "base.json"));
+}
+export function laneMode(lane: string): LaneMode {
+  return laneMeta(lane)?.mode === "worktree" ? "worktree" : "copy";
+}
+
+/** Removes a worktree lane (registration and folder); a plain folder is just removed. */
+export function removeLane(root: string, dir: string): void {
+  if (existsSync(dir) && laneMode(dir) === "worktree") git(root, "worktree", "remove", "--force", dir);
+  rmSync(dir, { recursive: true, force: true });
+  git(root, "worktree", "prune");
+}
+
+/**
+ * Cuts a worktree lane: the workspace's uncommitted work is committed first (the lane must see every file the shared states
+ * wrote), then `git worktree add -B spec/SPEC-X` from HEAD, then the ignored runtime files are copied in.
+ * Returns undefined when the workspace cannot be committed (a hook or a lock); the caller falls back to a copy lane and says so.
+ */
+export function createWorktreeLane(root: string, spec: string, trust: boolean): { dir: string; base: Record<string, string> } | undefined {
+  const dir = laneDir(root, spec);
+  prepareRepoForLanes(root);
+  const c = commitAll(root, `${spec}: workspace state before the lane (kcc)`);
+  if (c.error) return undefined;
+  if (existsSync(dir)) removeLane(root, dir);
+  mkdirSync(dirname(dir), { recursive: true });
+  const w = git(root, "worktree", "add", "-q", "-B", laneBranch(spec), dir, "HEAD");
+  if (w.status !== 0) { rmSync(dir, { recursive: true, force: true }); return undefined; }
+  copyRuntime(root, dir);
+  const bc = join(dir, BACKCHANNEL);
+  const backchannelLines = existsSync(bc) ? readFileSync(bc, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
+  mkdirSync(join(dir, ".kcc-lane"), { recursive: true });
+  writeJson(join(dir, ".kcc-lane", "base.json"), { spec, mode: "worktree", branch: laneBranch(spec), backchannelLines });
+  if (trust) trustFolder(dir);
+  return { dir, base: {} };
+}
+
+/**
+ * Merges a worktree lane: the lane's leftover edits are committed on its branch, the workspace's own leftovers on its branch,
+ * then the spec branch is merged (fast-forward when nothing else moved, a merge commit otherwise). A conflict leaves the
+ * workspace as it was (the merge is aborted) and names the files; the branch keeps the lane's work for a merge by hand.
+ */
+export function mergeWorktreeLane(root: string, lane: string, spec: string): MergeResult {
+  const res: MergeResult = { applied: [], deleted: [], conflicts: [], sharedSkipped: [], events: 0, hashes: {} };
+  const branch = laneMeta(lane)?.branch ?? laneBranch(spec);
+  const lc = commitAll(lane, `${spec}: lane checkpoint (kcc)`);
+  if (lc.error) { res.conflicts.push(`(lane commit failed: ${lc.error.split(/\r?\n/)[0]})`); return res; }
+  const wc = commitAll(root, `${spec}: workspace state before merging the lane (kcc)`);
+  if (wc.error) { res.conflicts.push(`(workspace commit failed: ${wc.error.split(/\r?\n/)[0]})`); return res; }
+  const before = git(root, "rev-parse", "HEAD").stdout.trim();
+  const m = git(root, "merge", "--no-edit", "-m", `${spec}: merge lane ${branch} (kcc)`, branch);
+  if (m.status !== 0) {
+    const files = git(root, "diff", "--name-only", "--diff-filter=U").stdout.split(/\r?\n/).filter(Boolean);
+    git(root, "merge", "--abort");
+    res.conflicts.push(...(files.length ? files : [`(git merge ${branch} failed: ${(m.stderr || m.stdout).trim().split(/\r?\n/)[0]})`]));
+  } else {
+    const changed = git(root, "diff", "--name-status", `${before}..HEAD`).stdout.split(/\r?\n/).filter(Boolean);
+    for (const l of changed) {
+      const [st, ...rest] = l.split("\t");
+      const rel = rest[rest.length - 1] ?? "";
+      if (!rel) continue;
+      if (st?.startsWith("D")) res.deleted.push(rel); else res.applied.push(rel);
+    }
+  }
+  res.events = syncBackchannel(root, lane);
+  res.attention = syncNeedsAttention(root, lane);
+  return res;
+}
+
+/** Cuts a lane: a worktree in a git workspace, else a copy with its own git baseline and base snapshot. */
 export function createLane(root: string, spec: string, trust: boolean): { dir: string; base: Record<string, string> } {
+  if (isGitWorkspace(root)) {
+    const w = createWorktreeLane(root, spec, trust);
+    if (w) return w;
+  }
+  return createCopyLane(root, spec, trust);
+}
+
+/** The copy lane (a workspace without git): a copy of the workspace with its own git baseline and base snapshot. */
+export function createCopyLane(root: string, spec: string, trust: boolean): { dir: string; base: Record<string, string> } {
   const dir = laneDir(root, spec);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   copyTree(root, dir);
+  // The base is the workspace as copied. Round 13: the snapshot used to be taken after the marker line below was added, so the
+  // lane's .gitignore never matched the workspace copy and the first implementer that added an ignore rule ended the run with a
+  // "merge conflict: .gitignore" after a clean verification.
+  const base = snapshot(dir);
   // The lane's own git repo must not see its marker folder as an untracked change (R10: implementers had to step around it).
   ensureGitignore(dir, ".kcc-lane/");
-  const base = snapshot(dir);
   const bc = join(dir, BACKCHANNEL);
   const backchannelLines = existsSync(bc) ? readFileSync(bc, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
   mkdirSync(join(dir, ".kcc-lane"), { recursive: true });
-  writeJson(join(dir, ".kcc-lane", "base.json"), { spec, base, backchannelLines });
+  writeJson(join(dir, ".kcc-lane", "base.json"), { spec, mode: "copy", base, backchannelLines });
   gitIn(dir, "init", "-q");
   gitIn(dir, "config", "user.email", "kcc-lane@example.com");
   gitIn(dir, "config", "user.name", "KCC lane");
@@ -635,8 +834,12 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         // Exit 7: a --silent --assume lane that could not continue and was parked (its NeedsAttention item says why); anything else is a stop.
         lane.status = code === 7 ? "needs-attention" : "failed";
         lane.reason = r?.gate_id ? `paused at gate ${r.gate_id} (${r.gate_name}) in state ${r.state}` : r?.reason || `kcc-run exited ${code}`;
-        // The workspace never lags a stopped lane: its owned files AND src/ (the lane is a scratch copy) are merged right now, the same
-        // merge a finished lane gets. A file both sides changed is a conflict: kept as the workspace copy and reported, never dropped.
+        // A stopped worktree lane keeps its work on its branch (committed here so nothing is lost); a stopped copy lane is merged
+        // right now so the workspace never lags it. A file both sides changed is a conflict: reported, never dropped.
+        if (laneMode(dir) === "worktree") {
+          const c = commitAll(dir, `${spec}: lane checkpoint (kcc)`);
+          if (c.error) log(`kcc: ${spec}: the lane's work could not be committed on ${laneBranch(spec)}: ${c.error.split(/\r?\n/)[0]}`);
+        }
         const m = liveSyncLane(root, dir, spec);
         if (!m) {
           syncOwned(root, dir, owned);
@@ -650,19 +853,25 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
         emit(root, "lane-blocked", spec, { exit: code, reason: lane.reason });
         log(`kcc: ${spec} stopped: ${lane.reason}`);
       } else {
-        // Live syncs advanced the lane's base while it ran; merge against that, not the base it started with.
-        const m = mergeLane(root, dir, readJson<{ base?: Record<string, string> }>(join(dir, ".kcc-lane", "base.json"))?.base ?? base, owned);
+        const worktree = laneMode(dir) === "worktree";
+        // A worktree lane is merged by git; a copy lane against the base its live syncs advanced, not the one it started with.
+        const m = worktree
+          ? mergeWorktreeLane(root, dir, spec)
+          : mergeLane(root, dir, readJson<{ base?: Record<string, string> }>(join(dir, ".kcc-lane", "base.json"))?.base ?? base, owned);
         if (m.conflicts.length) {
           lane.status = "failed";
           lane.reason = `merge conflict: ${m.conflicts.join(", ")}`;
-          if (silent) appendAttention(root, { spec, gate: "merge-conflict", status: "open", decided: "kept the workspace copy of the files both sides changed; the lane is kept", why: `the lane and the workspace both changed: ${m.conflicts.join(", ")}`, todo: `compare each file with ${laneDir(root, spec)}/<file>, merge by hand, then: kcc run --resume`, links: laneDir(root, spec) });
+          const todo = worktree
+            ? `in the workspace run: git merge ${laneBranch(spec)} ; resolve the files, commit, then: kcc run --resume`
+            : `compare each file with ${laneDir(root, spec)}/<file>, merge by hand, then: kcc run --resume`;
+          if (silent) appendAttention(root, { spec, gate: "merge-conflict", status: "open", decided: worktree ? `the merge of ${laneBranch(spec)} was aborted; the workspace is unchanged and the lane's work is on its branch` : "kept the workspace copy of the files both sides changed; the lane is kept", why: `the lane and the workspace both changed: ${m.conflicts.join(", ")}`, todo, links: laneDir(root, spec) });
           emit(root, "lane-blocked", spec, { reason: lane.reason });
           log(`kcc: ${spec} CONFLICT, these files changed in the workspace and in the lane: ${m.conflicts.join(", ")}`);
         } else {
           lane.status = "merged";
-          emit(root, "lane-merged", spec, { files: m.applied.length, removed: m.deleted.length, events: m.events });
+          emit(root, "lane-merged", spec, { files: m.applied.length, removed: m.deleted.length, events: m.events, mode: worktree ? "worktree" : "copy" });
           log(`kcc: ${spec} merged (${m.applied.length} files, ${m.events} events)`);
-          rmSync(dir, { recursive: true, force: true });
+          removeLane(root, dir);
         }
       }
       save();

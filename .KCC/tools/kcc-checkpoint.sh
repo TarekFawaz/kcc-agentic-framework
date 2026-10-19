@@ -343,10 +343,16 @@ MANIFEST_TMP=""
 if [[ "$IS_GIT" -eq 1 ]]; then
   GIT_MODE="git"
   GIT_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-  GIT_TAG="kcc/cp-${CP_ID#CP-}"
-  if [[ -n "$PREV_ID" ]] && git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/kcc/cp-${PREV_ID#CP-}" >/dev/null 2>&1; then
+  # Tags are repository-wide: a lane (a worktree of the workspace repository, or a copy) names its own after its spec.
+  TAG_NS="kcc/"
+  if [[ -f "$REPO_ROOT/.kcc-lane/base.json" ]]; then
+    lane_spec="$(sed -nE 's/.*"spec"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$REPO_ROOT/.kcc-lane/base.json" | head -n 1)"
+    [[ -n "$lane_spec" ]] && TAG_NS="kcc/$lane_spec/"
+  fi
+  GIT_TAG="${TAG_NS}cp-${CP_ID#CP-}"
+  if [[ -n "$PREV_ID" ]] && git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${TAG_NS}cp-${PREV_ID#CP-}" >/dev/null 2>&1; then
     # git diff --name-status <tag> plus the untracked files, "status<TAB>path", outside coordination/, the first 200 (bash loops, no awk/head)
-    cp_diff="$(git -C "$REPO_ROOT" diff --name-status "kcc/cp-${PREV_ID#CP-}" -- 2>/dev/null || true)"
+    cp_diff="$(git -C "$REPO_ROOT" diff --name-status "${TAG_NS}cp-${PREV_ID#CP-}" -- 2>/dev/null || true)"
     cp_untr="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard 2>/dev/null || true)"
     CHANGES=""; cp_n=0
     while IFS= read -r cp_l; do

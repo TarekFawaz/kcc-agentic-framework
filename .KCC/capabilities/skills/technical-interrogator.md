@@ -32,7 +32,7 @@ Interrogate technical decisions for: <ARGS>
 
 ## Flags
 
-`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: quick mode. Ask 3-5 questions that block architecture or stack choice, assume the rest (never security-class items), and write a short `TechnicalDecisionBrief.md`. Architecture depth defaults to `lite`.
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: quick mode. Ask 3-5 questions that block architecture or stack choice, assume the rest (never security-class items), and write a short `TechnicalDecisionBrief.md` with two extra sections, `## UX and UI` and `## Infrastructure and packaging` (at most 15 lines each, from the catalogue defaults): the fast-track run does not spawn the UX and infrastructure specialists, and the architect and the spec-writer read these sections in place of their briefs. Architecture depth defaults to `lite`.
 
 ## Steps
 

@@ -293,7 +293,7 @@ function Get-DerivedTools([string]$entry) {
     $tools = New-Object System.Collections.ArrayList
     $map = [ordered]@{ 'fullstack-nextjs|frontend-react|backend-nodejs' = 'node,npm'; 'fullstack-python|backend-python' = 'python'; 'backend-go' = 'go'; 'backend-rust' = 'cargo';
         'backend-java' = 'java'; 'backend-dotnet|fullstack-dotnet' = 'dotnet'; 'flutter' = 'dart,flutter'; 'mobile-kotlin' = 'java'; 'mobile-swift' = 'swift'; 'backend-ruby' = 'ruby'; 'scripting-lua' = 'lua';
-        'devops-cloud' = 'terraform'; 'devops-k8s-onprem-agnostic' = 'terraform,kubectl,helm'; '\bpnpm\b' = 'pnpm' }
+        'devops-cloud' = 'terraform'; 'devops-k8s-onprem-agnostic' = 'terraform,kubectl,helm'; '\bpnpm\b' = 'pnpm'; 'docker|compose\.ya?ml|containerfile' = 'docker' }
     foreach ($k in $map.Keys) { if ($t -match $k) { foreach ($x in ($map[$k] -split ',')) { if (-not $tools.Contains($x)) { [void]$tools.Add($x) } } } }
     if (-not $tools.Contains('git')) { [void]$tools.Add('git') }
     # plan.md '## Toolchain' rows '| node | >=20 |' pin a major version: the preflight checks node@>=20.
@@ -612,11 +612,11 @@ function Get-OpenBugList([string]$entry) { # 'Bug-003 (major, blocked); Bug-004 
     }
     return ($out -join '; ')
 }
-function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED | BLOCKED | ''
+function Get-ReviewVerdictOf([string]$rf) { # APPROVED | CHANGES_NEEDED | QUALITY_DEFERRED | TOOLCHAIN_DEFERRED | WAIVER_NEEDED | BLOCKED | ''
     if (-not (Test-Path -LiteralPath $rf)) { return '' }
     $rtxt = [System.IO.File]::ReadAllText($rf)
     $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
-    if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
+    if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|WAIVER[_-]NEEDED|BLOCKED)\b') }
     if ($vm.Success) { return ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
     return ''
 }
@@ -629,8 +629,8 @@ function Set-VerifyMode([string]$entry) { # sets VmMode (full|scoped) and VmBase
     $script:VmMode = 'full'; $script:VmBase = ''; $script:VmVerdict = ''
     $rf = Join-Path (Get-SpecDir $entry) 'review.md'
     $pv = Get-ReviewVerdictOf $rf
-    # A QUALITY_DEFERRED review (everything verified, only a scanner missing) is re-verified like CHANGES_NEEDED: scoped, so a deferred-only outcome never uses a full pass.
-    if ($pv -eq 'CHANGES_NEEDED' -or $pv -eq 'QUALITY_DEFERRED') {
+    # A QUALITY_DEFERRED or WAIVER_NEEDED review (everything verified, only a scanner or the environment in the way) is re-verified like CHANGES_NEEDED: scoped, so a deferred-only outcome never uses a full pass.
+    if ($pv -eq 'CHANGES_NEEDED' -or $pv -eq 'QUALITY_DEFERRED' -or $pv -eq 'WAIVER_NEEDED') {
         $script:VmMode = 'scoped'; $script:VmVerdict = $pv
         $m = [regex]::Match([System.IO.File]::ReadAllText($rf), '(?im)^\s*(?:reviewed[-_ ]?)?commit\s*:\s*"?([0-9a-f]{7,40})')
         if ($m.Success) { $script:VmBase = $m.Groups[1].Value }
@@ -756,6 +756,12 @@ function Policy-Gate {
             $tools = Get-ViolTools $why
             $todo = 'install the missing tool' + $(if ($tools) { ' (' + $tools + ')' } else { '' }) + ' and re-run the quality gate: .KCC/tools/quality-gate -Spec ' + $(if ($gspec) { $gspec } else { 'SPEC-ID' })
         }
+        'waiver' {
+            $ans = 'waive'
+            $note = 'silent run: the code is done and what keeps the gate red needs an environment fix or a human waiver; closed as WAIVER_NEEDED by policy (not a pass)'
+            $decided = 'closed the spec as WAIVER_NEEDED by policy (not a pass): the code is done, the remaining gate items need an environment fix or your waiver'
+            $todo = 'fix the environment (or record a waiver in review.md -> ## Waivers), then run the verification again: ' + (Get-ResumeHint $gspec ([pscustomobject]@{ id = (Get-TestStateId) }))
+        }
         'toolchain' {
             $ans = 'defer'
             $note = 'silent run: toolchain missing -> defer (the declared-stack code is written, build and test are marked TOOLCHAIN_DEFERRED, never a pass)'
@@ -825,6 +831,72 @@ function Get-LastMissingTools([string]$spec) {
     if (-not $m.Success) { return '' }
     return ((($m.Groups[1].Value -replace '"', '') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ', ')
 }
+# ---- what keeps a gate red, and who owns it ---------------------------------------------------------------------------
+# Get-GateOwnerSummary SPEC -> @{ impl = failing checks an implementer owns; items = every failing or deferred check with its owner and
+# message } from the newest quality-gate output of the spec. Round 12: a gate red for a tool error and a stale image sent the
+# implementer back three times for nothing; the owner column says whether a FIX pass can change anything.
+function Get-GateOwnerSummary([string]$spec) {
+    $res = @{ impl = 0; items = '' }
+    if (-not (Test-Path -LiteralPath $LogDir)) { return $res }
+    $f = Get-ChildItem -LiteralPath $LogDir -Filter ('check-*' + (Safe-Name $spec) + '*-quality-gate.out') -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if (-not $f) { return $res }
+    $txt = [System.IO.File]::ReadAllText($f.FullName); $b = $txt.IndexOf('{'); if ($b -lt 0) { return $res }
+    try { $j = $txt.Substring($b) | ConvertFrom-Json } catch { return $res }
+    if ($null -eq $j) { return $res }
+    $items = @()
+    foreach ($c in @($j.checks)) {
+        if ($null -eq $c) { continue }
+        $stv = Str $c.status; if ($stv -ne 'fail' -and $stv -ne 'deferred') { continue }
+        $o = Str $c.fix_owner
+        if ($stv -eq 'fail' -and ($o -eq 'implementer' -or $o -eq 'infrastructure-implementer')) { $res.impl = [int]$res.impl + 1 }
+        $m = Str $c.message; if ($m.Length -gt 110) { $m = $m.Substring(0, 110) + '...' }
+        $items += ((Str $c.id) + ' (' + $stv + ', ' + $o + '): ' + $m)
+    }
+    $res.items = ($items -join '; ')
+    return $res
+}
+function Get-TraceabilityErrors([string]$spec) { # the error count of the newest check-traceability output, or ''
+    if (-not (Test-Path -LiteralPath $LogDir)) { return '' }
+    $f = Get-ChildItem -LiteralPath $LogDir -Filter ('check-*' + (Safe-Name $spec) + '*-check-traceability.out') -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if (-not $f) { return '' }
+    $ms = [regex]::Matches([System.IO.File]::ReadAllText($f.FullName), '"errors"\s*:\s*([0-9]+)')
+    if ($ms.Count -gt 0) { return $ms[$ms.Count - 1].Groups[1].Value }
+    return ''
+}
+# Test-ReviewWaiverOnly ENTRY SPEC -> $true when a CHANGES_NEEDED review leaves the implementer nothing: no open Bug, no failing gate
+# check an implementer owns, no traceability error. What is left needs a human (environment, waiver), so the spec is not sent back to FIX.
+function Test-ReviewWaiverOnly([string]$entry, [string]$spec) {
+    if (Get-OpenBugList $entry) { return $false }
+    $g = Get-GateOwnerSummary $spec
+    if ([int]$g.impl -ne 0) { return $false }
+    $te = Get-TraceabilityErrors $spec
+    return ((-not $te) -or ([int]$te -eq 0))
+}
+function Get-TestStateId { foreach ($s in $States) { if ([string]$s.name -eq 'TEST') { return [string]$s.id } }; return '16' }
+# Test-NothingToVerify ENTRY -> $true when HEAD is the reviewed commit, nothing changed under src/ and no Bug is open or fixed-but-unverified:
+# a scoped TEST would re-read an unchanged tree (round 12: a third verifier pass for nothing), so only the mechanical checks run.
+function Test-NothingToVerify([string]$entry) {
+    $head = ''
+    try { $h = & git -C $RepoRoot rev-parse HEAD 2>$null; if ($LASTEXITCODE -eq 0 -and $h) { $head = ([string]($h | Select-Object -First 1)).Trim() } } catch { $head = '' }
+    if (-not $script:VmBase -or -not $head -or -not $head.StartsWith($script:VmBase)) { return $false }
+    $chg = @()
+    try { $chg = @(& git -C $RepoRoot status --porcelain -- src 2>$null | Where-Object { $_ }) } catch { $chg = @() }
+    if ($chg.Count -gt 0) { return $false }
+    if (Get-OpenBugList $entry) { return $false }
+    $bd = Join-Path (Get-SpecDir $entry) 'Backlog'
+    if (Test-Path -LiteralPath $bd) {
+        foreach ($bf in @(Get-ChildItem -LiteralPath $bd -Filter 'Bug-*.md' -File -ErrorAction SilentlyContinue)) { if ((Get-BugField $bf.FullName 'status') -eq 'fixed') { return $false } }
+    }
+    return $true
+}
+# Get-EnvLimits SPEC -> the LIMIT lines of the newest toolchain-preflight output (a Docker daemon that cannot reach a registry, ...), joined
+function Get-EnvLimits([string]$spec) {
+    if (-not (Test-Path -LiteralPath $LogDir)) { return '' }
+    $f = Get-ChildItem -LiteralPath $LogDir -Filter ('check-*' + (Safe-Name $spec) + '*-toolchain-preflight.out') -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if (-not $f) { return '' }
+    $lim = @([System.IO.File]::ReadAllLines($f.FullName) | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -match '^LIMIT ' } | ForEach-Object { $_ -replace '^LIMIT ', '' })
+    return ($lim -join '; ')
+}
 # Records that the human (or the silent policy) accepted a deferred external tool for this spec: REVIEW then closes the spec as
 # deferred-accepted instead of looping through FIX and another full test pass.
 function Register-Deferral([string]$spec, $st, [string]$gate, [string]$by) {
@@ -834,6 +906,7 @@ function Register-Deferral([string]$spec, $st, [string]$gate, [string]$by) {
     if (-not $tools) { $tools = Get-LastMissingTools $spec }
     $verdict = 'QUALITY_DEFERRED'; if ($viol -match 'TOOLCHAIN_DEFERRED' -or $gate -eq 'toolchain') { $verdict = 'TOOLCHAIN_DEFERRED' }
     $checks = ''; $cm = [regex]::Match($viol, 'deferred checks?\s+([A-Z0-9, -]+?)(?:,\s*not a pass|\.|;|$)'); if ($cm.Success) { $checks = (Flat $cm.Groups[1].Value) }
+    if ($gate -eq 'waiver') { $verdict = 'WAIVER_NEEDED'; $tools = ''; $checks = (Flat (Str (Get-GateOwnerSummary $spec).items)) }
     Set-Att ('defer:' + $spec) 1
     [void](Emit 'deferral-accepted' $spec ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; gate = $gate; verdict = $verdict; by = $by; tools = $tools; checks = $checks; source = 'kcc-run' }))
 }
@@ -854,9 +927,21 @@ function Get-DeferredItems {
     return @($out)
 }
 function Get-DeferralLines($d) {
-    $t = $d.tools; if (-not $t) { $t = '(not recorded; see review.md -> Quality Gate Check)' }
-    $c = ''; if ($d.checks) { $c = ' (' + $d.checks + ' not run)' }
     $sp = $d.spec; if (-not $sp) { $sp = 'SPEC-ID' }
+    if ($d.verdict -eq 'WAIVER_NEEDED') {
+        $ck = $d.checks; if (-not $ck) { $ck = 'see review.md -> Verdict' }
+        return @(
+            ('WAIVER NEEDED, NOT A PASS - ' + $sp + ': the code is done; these gate items need an environment fix or your waiver: ' + $ck),
+            ('  fix the environment or record the waiver in review.md -> ## Waivers, then run the verification again: kcc-run -From ' + (Get-TestStateId) + '   |   kcc run --lane ' + $sp))
+    }
+    if (-not $d.tools) {
+        $c = ''; if ($d.checks) { $c = ' (' + $d.checks + ' not run)' }
+        return @(
+            ('DEFERRED, NOT A PASS - ' + $sp + $c + ': a check could not run on this machine (a tool or service the tests need is unusable here; see review.md -> Test Status and Quality Gate Check).'),
+            ('  fix the environment, then re-run the verification: kcc-run -From ' + (Get-TestStateId) + '   |   kcc run --lane ' + $sp))
+    }
+    $t = $d.tools
+    $c = ''; if ($d.checks) { $c = ' (' + $d.checks + ' not run)' }
     $tl = ($d.tools -replace ',\s*', ','); if (-not $tl) { $tl = '<tool>' }
     return @(
         ('DEFERRED, NOT A PASS - ' + $sp + $c + ': missing tool(s) ' + $t + '.'),
@@ -926,13 +1011,18 @@ function Run-Check($chk, $ctx, [string]$label) {
         $rf = ''
         if ($ctx.ENTRY) { $rf = Join-Path (Get-SpecDir $ctx.ENTRY) 'review.md' }
         if (-not $rf -or -not (Test-Path -LiteralPath $rf)) { return @{ rc = 1; viol = ('REVIEW-001 (verifier): review.md not found for ' + $ctx.SPEC) } }
-        $rtxt = [System.IO.File]::ReadAllText($rf)
-        $v = ''
-        $vm = [regex]::Match($rtxt, '(?im)^verdict\s*:\s*"?([A-Za-z_-]+)')
-        if (-not $vm.Success) { $vm = [regex]::Match($rtxt, '(?i)\b(APPROVED|CHANGES[_-]NEEDED|QUALITY[_-]DEFERRED|TOOLCHAIN[_-]DEFERRED|BLOCKED)\b') }
         # The review template writes the verdict lower-case with hyphens (status/toolchain-deferred); read it the same as TOOLCHAIN_DEFERRED.
-        if ($vm.Success) { $v = ($vm.Groups[1].Value.ToUpperInvariant() -replace '-', '_') }
+        $v = Get-ReviewVerdictOf $rf
         if ($v -eq 'APPROVED') { return @{ rc = 0; viol = '' } }
+        if ($v -eq 'WAIVER_NEEDED' -or ($v -eq 'CHANGES_NEEDED' -and (Test-ReviewWaiverOnly $ctx.ENTRY $ctx.SPEC))) {
+            # The code is done: no open Bug, no failing check an implementer owns. What keeps the gate red (an environment limit, a stale
+            # artifact, a gate tool error, a check the architecture excluded) needs a human: exit 3 opens the waiver gate, never FIX.
+            $ob = Get-OpenBugList $ctx.ENTRY
+            if ($ob) { return @{ rc = 1; viol = ('REVIEW-002 (implementer): ' + $ctx.SPEC + ' review verdict is ' + $v + ' but these bug items are not closed: ' + $ob + '; fix them, then re-test') } }
+            $gs = Get-GateOwnerSummary $ctx.SPEC
+            $how = 'review verdict ' + $v; if ($v -eq 'CHANGES_NEEDED') { $how = 'review verdict CHANGES_NEEDED with no open bug and no failing check an implementer owns (read as WAIVER_NEEDED)' }
+            return @{ rc = 3; viol = ('REVIEW-004 (human): ' + $how + '; the code is done and what keeps the gate red needs an environment fix or a recorded waiver, not another fix pass: ' + $(if ($gs.items) { $gs.items } else { 'see review.md -> Verdict' }) + '. not a pass') }
+        }
         if ($v -eq 'QUALITY_DEFERRED' -or $v -eq 'TOOLCHAIN_DEFERRED') {
             # Deferred = every check that could run has run and the only blocker is an external tool that is missing (quality-gate exit 3).
             # With every bug fixed, verified or waived that is exit 3 (closed as deferred-accepted, never a pass, no FIX and no second full pass);
@@ -1424,6 +1514,12 @@ function Apply-Answer([string]$ans) {
             'quality-deferred-on-exit-3' {
                 if ($ans -eq 'install') { $pa = 'install' } else { $pa = 'done'; Register-Deferral $R.gate_spec $st 'quality-deferred-on-exit-3' $script:AnsweredBy }
             }
+            'waiver' {
+                # waive: the spec closes as WAIVER_NEEDED (recorded like a deferral, never a pass) and the run goes on; recheck: the human
+                # changed the environment, so the verification runs again (scoped) and the review after it.
+                if ($ans -eq 'waive') { $pa = 'done'; Register-Deferral $R.gate_spec $st 'waiver' $script:AnsweredBy }
+                else { $pa = 'goto:' + (Get-TestStateId); Set-Att $key 0 }
+            }
             'ruling' {
                 # revise and escalate reopen the blocked bugs and re-run the fix with the ruling as the note; waive records them as wontfix
                 if ($ans -eq 'waive') { $pa = 'recheck' } else {
@@ -1600,6 +1696,14 @@ function Process-Unit($st, $ctx) {
             return 'next'
         }
     }
+    if ($st.name -eq 'TEST' -and $ctx.ENTRY -and $hasCmd -and -not $skipDispatch) {
+        Set-VerifyMode $ctx.ENTRY
+        if ($script:VmMode -eq 'scoped' -and (Test-NothingToVerify $ctx.ENTRY)) {
+            Say ('kcc-run: skip   ' + $label + ': nothing changed since the last review (HEAD ' + $script:VmBase + ', no change under src/, no Bug awaiting verification); mechanical checks only')
+            [void](Emit 'test-skipped' $ctx.SPEC ([ordered]@{ state = [int]$st.id; state_name = [string]$st.name; reason = 'unchanged since the last review'; commit = $script:VmBase; source = 'kcc-run' }))
+            $skipDispatch = $true
+        }
+    }
     if (-not $skipDispatch -and ($hasCmd -or $needFix)) {
         $body = ''
         # TEST: the first verification of a spec is a full pass; later ones re-verify only what changed. At most VerifyFullMax full passes.
@@ -1637,6 +1741,10 @@ function Process-Unit($st, $ctx) {
         $prompt = 'KCC run state ' + $st.id + ' ' + $st.name + $(if ($ctx.SPEC) { ' for ' + $ctx.SPEC } else { '' }) + $(if ($ctx.WAVE) { ' wave ' + $ctx.WAVE } else { '' }) + $lead + $body
         if ($script:VmMode -eq 'scoped') { $prompt += ' ' + (Get-ScopedPrompt $ctx) }
         if ($script:VmMode -eq 'full') { $prompt += ' FULL VERIFICATION PASS ' + (Get-Att ('full:' + $ctx.SPEC)) + ' of at most ' + $VerifyFullMax + ' for ' + $ctx.SPEC + ': run every check in this one pass (acceptance criteria, Test IDs, the compose or runtime smoke test, container image scans, every scan the quality gate lists) and file every finding now, because a later pass re-verifies only what changed. Record the HEAD commit you verified as ''commit: <sha>'' in review.md frontmatter. If an orchestrator session runs this state, put this paragraph verbatim in the verifier subagent''s handover packet.' }
+        if ($st.name -eq 'TEST' -and $ctx.SPEC) {
+            $lim = Get-EnvLimits $ctx.SPEC
+            if ($lim) { $prompt += ' KNOWN ENVIRONMENT LIMITS (recorded by PREFLIGHT on this machine): ' + $lim + '. Do not attempt what they rule out (no docker build or compose up --build while the registry is unreachable): record each AC and Test ID that needs it as DEFERRED with that reason at once, and spend the time on the checks that can run.' }
+        }
         if ($att -gt 0 -and $R.last_violations) { $prompt += ' RETRY ' + ($att + 1) + '/' + $cfgMax + ' - fix these exit-check violations: ' + $R.last_violations }
         elseif ((Test-Force $st.id) -and $R.last_violations) { $prompt += ' A later stage failed and sent this spec back. The open Bug items in the spec Backlog and these violations are the work of this pass; fix them test-first and write only the files they name: ' + $R.last_violations }
         if ($R.note) { $prompt += ' Human note: ' + $R.note; $R.note = '' }
@@ -1726,8 +1834,13 @@ function Process-Unit($st, $ctx) {
             Complete-Unit $st $ctx $false
             return 'next'
         }
-        $g = $gname; if (-not $g -or $gkind -eq 'approval') { $g = 'quality-deferred-on-exit-3' }
-        return (Open-Gate $g 'failure' ('Exit check for ' + $label + ' is DEFERRED (exit 3): a required external tool is missing. This is not a pass.') $st $ctx $R.last_violations)
+        $g = $gname; $q = 'Exit check for ' + $label + ' is DEFERRED (exit 3): a required external tool is missing. This is not a pass.'
+        if (-not $g -or $gkind -eq 'approval') { $g = 'quality-deferred-on-exit-3' }
+        if ($R.last_violations -like 'REVIEW-004*') {
+            $g = 'waiver'
+            $q = 'Review of ' + $ctx.SPEC + ': every bug is closed and what still keeps the gate red is outside the code (an environment limit, a stale artifact, a gate tool error, or a check the architecture excluded). This is not a pass. waive (close the spec as WAIVER_NEEDED and go on; record the waiver in review.md -> ## Waivers), recheck (you fixed the environment: run the verification again), or abort?'
+        }
+        return (Open-Gate $g 'failure' $q $st $ctx $R.last_violations)
     }
     if ($gname -and $gkind -eq 'failure' -and $gname -ne 'quality-deferred-on-exit-3') {
         $q = switch ($gname) {

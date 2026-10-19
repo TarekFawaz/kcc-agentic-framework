@@ -116,6 +116,8 @@ route() {
   fi
   if [ "$cx" = "extra-high" ]; then if [ "$e" -lt 3 ]; then e=3; fi; reasons="$reasons; extra-high complexity: effort xhigh"; fi
   if [ "$items" -gt 3 ] || [ "$files" -gt 5 ]; then e=$((e + 1)); if [ "$e" -gt 3 ]; then e=3; fi; reasons="$reasons; large unit: effort up"; fi
+  # review (a verifier or critic) stays at high unless the item is extra-high (router.ts)
+  if [ "$task" = "review" ] && [ "$cx" != "extra-high" ] && [ "$e" -gt 2 ]; then e=2; reasons="$reasons; review: effort capped at high (xhigh only for extra-high complexity)"; fi
   # RETRY_RULES (router.ts): a retry escalates the agent that fixes something (tier and effort up one step); a planning retry
   # (spec, plan) keeps the tier and raises the effort to at most high; a verifier or critic (task review) is never escalated.
   if [ "$attempt" -ge 2 ]; then

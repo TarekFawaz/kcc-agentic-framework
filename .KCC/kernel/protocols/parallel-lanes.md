@@ -3,8 +3,8 @@ title: Parallel Lanes Protocol
 aliases: [parallel-lanes, dependency-scheduling]
 tags: [framework/protocol, orchestration, parallel]
 created: 2026-10-15
-updated: 2026-10-15
-version: 2.0.0
+updated: 2026-10-19
+version: 3.0.0
 status: active
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
 ---
@@ -30,19 +30,30 @@ dependencies in `ROADMAP.md`. There is no flag for it. `kcc run` (the CLI) does 
    each spec its `Depends on` list. A spec starts as soon as every spec it depends on is merged; a
    slow spec never holds back one that does not depend on it. Up to `--max-parallel` (default 4)
    specs build at once (this bounds only the build lanes, IMPLEMENT .. REVIEW, never WRITE or PLAN). A plain chain therefore runs one at a time, a fan-out runs side by side.
-4. **One lane per running spec.** `.kcc-lanes/SPEC-NNN` is a private copy of the workspace (no `.git`,
-   `node_modules`, run state, gates, checkpoints or dashboard) with its own git baseline and run state.
-   `kcc-run --input SPEC-NNN --from <state after the fan-out states> --until 17` runs there (up to REVIEW). Lanes inherit the workspace's
-   Claude Code trust. `.kcc-lanes/` is never committed.
-5. **One view.** While lanes run, each lane's spec folder, test results and backchannel events are
-   copied into the workspace every 20 seconds and the dashboard is rebuilt, so the workspace dashboard
-   shows every spec. The scheduler adds `lane-started`, `lane-merged` and `lane-blocked` events.
-6. **Merge back.** A finished lane's files are compared with the snapshot taken when it was cut. A file
-   the lane changed is copied in if the workspace copy is unchanged; the lane's own spec folder and
-   test results are always taken from the lane. A file both sides changed is a **conflict**: the
-   workspace keeps its copy and the spec stops (exit 4). Clashes on shared indexes (`specs/specs.md`,
-   `ideation/ideas.md`, `progress.md`, the memory index, `architecture.md`) are left as they are. A
-   merged lane folder is deleted.
+4. **One lane per running spec, a git worktree.** In a git workspace (the normal case: `repo-bootstrap` makes one)
+   `.kcc-lanes/SPEC-NNN` is a **worktree** of the workspace repository on the branch `spec/SPEC-NNN` (the work branch the
+   [[git-workflow]] protocol names), cut from the workspace HEAD. Before the cut the scheduler commits the workspace's
+   uncommitted work (`SPEC-NNN: workspace state before the lane (kcc)`), so the lane sees every file the shared states wrote.
+   The ignored runtime files a lane needs (the harness folders `.claude/`, `.codex/`, `.opencode/`, `.agents/`, the
+   orchestrator files, the event log) are copied in; the lane folders and the run state are excluded through the
+   repository's `info/exclude`, never through a tracked file. `kcc-run --input SPEC-NNN --from <state after the fan-out
+   states> --until 17` runs there (up to REVIEW). Lanes inherit the workspace's Claude Code trust. Restore-point tags in a
+   lane are namespaced `kcc/SPEC-NNN/cp-NNN`, because tags are repository-wide.
+   A workspace without git keeps the older **copy lane**: a private copy with a hash snapshot, merged file by file.
+5. **One view.** While lanes run, each lane's backchannel events and attention items are appended to the workspace's
+   files every 20 seconds and the dashboard is rebuilt; the dashboard reads the lane folders for each spec's own state, so
+   the workspace dashboard shows every spec. The lane's files reach the workspace when it merges. The scheduler adds
+   `lane-started`, `lane-merged` (with `mode: worktree | copy`) and `lane-blocked` events.
+6. **Merge back is a git merge.** When a lane finishes, its leftover edits are committed on its branch
+   (`SPEC-NNN: lane checkpoint (kcc)`), the workspace's own leftovers on its branch, and `spec/SPEC-NNN` is merged into the
+   workspace branch: a fast-forward when nothing else moved, a merge commit otherwise. `.gitignore`, `specs/specs.md`,
+   `ideation/ideas.md`, `progress.md` and `memory/memory.md` merge as **unions** (both sides add lines; set through the
+   repository's `info/attributes`), so two lanes adding rows never clash. A real conflict **aborts the merge**: the
+   workspace is left as it was, the files are named, the lane's work stays on its branch, and the spec stops (exit 4; under
+   `--silent --assume` an `open` item in `coordination/NeedsAttention.md` with `git merge spec/SPEC-NNN` as the next step).
+   A merged worktree is removed (`git worktree remove`); the branch stays for the pull request.
+   The bookkeeping commits run without hooks: they only record what the agents already produced; the agents' own commits
+   go through the hooks as before.
 7. **CLOSE once** in the workspace after every spec is merged.
 
 ## Gates and resume
@@ -50,11 +61,10 @@ dependencies in `ROADMAP.md`. There is no flag for it. `kcc run` (the CLI) does 
 - A lane that pauses at a gate or fails is kept; specs that depend on it wait, unrelated specs carry on.
   Answer with `kcc run --lane SPEC-NNN --answer <choice>`, then `kcc run --resume` continues every lane.
 - State: `coordination/lanes.json` (`running | failed | merged | needs-attention` per spec, with the reason).
-- **The workspace never lags a lane.** Whenever a lane stops for any reason (merged, paused at a gate, failed, aborted, parked as
-  needs-attention), its owned files **and `src/`** (the lane is a scratch copy; the code belongs in the workspace) are merged into the workspace
-  right then, with the same merge a finished lane gets. A file both sides changed is a conflict: the workspace keeps its copy and the
-  conflict is reported (under `--silent --assume` as an `open` item in `coordination/NeedsAttention.md`), never dropped. `.kcc-lanes/` is never
-  committed, and a lane's own git ignores its marker folder (`createLane` appends `.kcc-lane/` to the lane copy's `.gitignore` when it is missing).
+- **Nothing a lane did is lost.** A worktree lane that stops for any reason (paused at a gate, failed, parked as needs-attention)
+  has its work committed on `spec/SPEC-NNN` right then; the branch and the lane folder stay until the spec merges. A copy lane is
+  merged into the workspace right then, the way a finished lane is. A conflict is reported (under `--silent --assume` as an
+  `open` item in `coordination/NeedsAttention.md`), never dropped. `.kcc-lanes/` is never committed.
 - **Silent runs** (`--silent --assume`): a lane never pauses. It answers every gate by policy and, when a spec cannot continue, parks it
   (exit 7 -> `needs-attention`); the scheduler runs every other spec, marks the specs that depend on a parked one `needs-attention` too, closes the
   run, and exits 7. Each lane writes its own `coordination/NeedsAttention.md` (not merged as a file); the scheduler appends its new sections to the
@@ -62,6 +72,7 @@ dependencies in `ROADMAP.md`. There is no flag for it. `kcc run` (the CLI) does 
 
 ## Not covered yet
 
-Lanes that must edit the same file (a shared lockfile, `docker-compose.yml`) are reported as a conflict;
-the planner should give such files to one spec, or make the later spec depend on the earlier one.
+Lanes that must edit the same lines of the same file (a shared lockfile, `docker-compose.yml`) are reported as a conflict;
+the planner should give such files to one spec, or make the later spec depend on the earlier one. Different lines of the same
+file merge as git merges them.
 The in-harness `auto` skill still runs specs in sequence; only `kcc run` schedules lanes.

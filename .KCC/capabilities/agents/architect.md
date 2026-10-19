@@ -19,7 +19,7 @@ tools-required:
   - search
   - edit
   - exec
-inputs: Technical, UX, security, infrastructure decision briefs; design question; spec requiring architecture decisions; or cross-service change proposal. The active architecture depth (`lite` | `standard` | `deep`) declared by the idea or selected by the human.
+inputs: Technical, UX, security, infrastructure decision briefs (under `fasttrack` only `TechnicalDecisionBrief.md`, whose `## UX and UI` and `## Infrastructure and packaging` sections stand in for the UX and infrastructure briefs, and `SecurityDecisionBrief.md`); design question; spec requiring architecture decisions; or cross-service change proposal. The active architecture depth (`lite` | `standard` | `deep`) declared by the idea or selected by the human.
 outputs: The Architecture Document at `architecture/architecture.md` (narrative + inline embedded diagrams), ADRs under `architecture/adrs/`, named Mermaid diagram source files under `architecture/c4-*.md`, `architecture/flowcharts/`, `architecture/dfds/`, `architecture/sequences/`, updates to `architecture/guardrails.md`, `architecture/quality-gates.md`, `architecture/fitness-functions.md`, `architecture/technical-budgets.md`, `architecture/nfrs.md`, `architecture/assumptions.md` (silent runs), spec-local `arch.md` (a real per-spec design document embedding the spec's slice inline) inside each impacted `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/`, and a structured recommendation that ends with a `## Required artifacts` checklist.
 maturity: L1
 maintainer: tarek.fawaz1983@gmail.com
@@ -66,7 +66,10 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    `architecture.md` back to you.
 2. **Read inputs.** `TechnicalDecisionBrief.md`, `UXDecisionBrief.md`,
    `SecurityDecisionBrief.md`, `InfrastructureDecisionBrief.md` from the idea
-   folder. Technical brief missing in a spec-creation flow -> stop, ask to run
+   folder. Under `fasttrack` only the technical and security briefs exist:
+   read the `## UX and UI` and `## Infrastructure and packaging` sections of
+   `TechnicalDecisionBrief.md` in place of the two missing briefs. Technical
+   brief missing in a spec-creation flow -> stop, ask to run
    `/technical-interrogator`.
 3. **Depth.** Read `lite` | `standard` | `deep` from
    `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md` (frontmatter or
@@ -155,13 +158,25 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
 ## Fast track and depth
 
 Under `fasttrack` the **profile** (`architecture-documentation.md` -> artifact matrix, column
-`fasttrack`) replaces the depth matrix: write `architecture/architecture.md` with the C1 context and
-C2 container diagrams embedded, the main business flowcharts under `architecture/flowcharts/`, a
-`## Decisions` table (decision, library or package with its version range, `standards-catalog` or
-`architecture-styles` citation, status `Accepted` or `Accepted (assumed)`) **instead of ADR files**,
-`## Toolchain`, and `architecture/quality-gates.md` (QG-PROD for deployables). Do not write
-`architecture/adrs/`, `c4-component.md`, `dfds/`, `sequences/` or spec `arch.md` slices; they are
-drift under this profile (ARCH-FT-007..009). No critic loop: run
+`fasttrack`) replaces the depth matrix. Write only what a later agent or a check reads:
+
+- `architecture/architecture.md` with the C1 context and C2 container diagrams embedded as fenced
+  mermaid blocks (no `Source:` line, because no standalone file exists), a `## Decisions` table
+  (decision, library or package with its version range, `standards-catalog` or `architecture-styles`
+  citation, status `Accepted` or `Accepted (assumed)`) **instead of ADR files**, and `## Toolchain`.
+  The planner, the spec-writer (`## Architecture references`) and the verifier read it.
+- One embedded flowchart in a `## Flows` section of the same file, only when the idea has a
+  non-trivial workflow. No `architecture/flowcharts/` folder.
+- `architecture/quality-gates.md` (QG-PROD for deployables, guardrails as `GR-nnn` rows) and
+  `architecture/static-rules.tsv` (one row per pattern-checkable guardrail; `quality-gate` QG-STATIC
+  reads it).
+
+Nothing else: no `c4-context.md`, no `c4-container.md` (a standalone copy of an embedded diagram is
+reported as a duplicate, ARCH-FT-005), no `architecture/adrs/`, `c4-component.md`, `dfds/`,
+`sequences/` (drift, ARCH-FT-007..009), and no spec `arch.md` slices (the spec note's
+`## Architecture references` replaces them; nobody reads a per-spec design file under this profile).
+Your inputs are `TechnicalDecisionBrief.md` (with its `## UX and UI` and
+`## Infrastructure and packaging` sections) and `SecurityDecisionBrief.md`. No critic loop: run
 `check-run-conformance -Scope architecture -RunProfile fasttrack` once yourself and fix what it
 reports. A decision that needs a human (CR-7 with no catalogue default) goes to the ASK state's open
 questions, not to a gate of your own. Honour `depthlevel` for prose length.
@@ -189,8 +204,9 @@ checked or marked "n/a for this depth".
   folder, NEVER `architecture/README.md`.
 - `architecture/architecture.md` is the narrative Architecture Document with
   embedded C4 Context + Container diagrams, not a MOC / link hub.
-- Each spec `arch.md` has >=1 embedded mermaid block plus design narrative;
-  link-only or sub-1 KB stubs fail.
+- Each spec `arch.md` (full lifecycle) has >=1 embedded mermaid block plus
+  design narrative; link-only or sub-1 KB stubs fail. Under `fasttrack` no
+  spec `arch.md` exists.
 - `--silent --assume`: every artifact still ships; assumptions logged in
   `architecture/assumptions.md`; ADR status per step 11.
 - Choose architecture from problem + requirements + brief, NEVER from installed

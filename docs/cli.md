@@ -133,6 +133,8 @@ kcc run --input <idea | path | IDEA-ID | SPEC-ID | all> [--silent --assume] [--b
         [--dry-run] [--json]
 kcc run --resume
 kcc run --answer <choice>
+kcc run --lane SPEC-NNN --answer <choice>
+kcc run --lane SPEC-NNN --from <state id>
 kcc run --wrap [--harness <name>] -- <any harness command>
 ```
 
@@ -166,9 +168,30 @@ kcc run --wrap --harness codex -- codex exec "implement SPEC-003 wave 2"
 | `--max-resumes N` | Override `continuity.max_resumes` |
 
 Exit codes: 0 done, 2 usage error, 4 paused at a human gate (answer with
-`kcc run --answer <choice>`), 5 suspended on a usage limit, 6 stopped or
-aborted. Resume commands never use a permission-bypass flag; a template that
-contains one is refused.
+`kcc run --answer <choice>`, or `kcc run --lane SPEC-NNN --answer <choice>`
+for one spec's lane), 5 suspended on a usage limit, 6 stopped or aborted,
+7 done with `[open]` items in `coordination/NeedsAttention.md` (only under
+`--silent --assume`, which never exits 4). Resume commands never use a
+permission-bypass flag; a template that contains one is refused.
+
+The gates a run can pause at, and their answers:
+
+| Gate | Answers | Opened when |
+|--|--|--|
+| `waiver` | `waive`, `recheck`, `abort` | The review is `WAIVER_NEEDED`, or `CHANGES_NEEDED` with no open Bug, no implementer-owned gate failure and no traceability error (`REVIEW-004 (human)`). `waive` closes the spec as a recorded waiver, never a pass; `recheck` re-runs TEST, scoped, after you fixed the environment |
+| `ruling` | `revise`, `waive`, `escalate`, `abort` | Only blocked Bugs are left; `revise` applies the Bug file's recommended option (or your `--note`) |
+| `quality-deferred-on-exit-3` | `install`, `accept-deferred`, `abort` | `quality-gate` exited 3 because a scanner could not run |
+| `loop` | `revise`, `escalate`, `abort` | Three failed exit checks, or a third full verifier pass |
+| `toolchain` | `install`, `human-install`, `defer` | PREFLIGHT found a required tool missing |
+| `budget`, `budget-cap`, `confirm`, `roi-gate`, `repo-bootstrap` | see `.KCC/kernel/protocols/kcc-run.md` -> *Gates* | Full lifecycle and first-run gates |
+
+Under `--silent --assume` each gate is answered by policy (`waiver` ->
+`waive`, `ruling` -> `revise`, scanner missing -> `accept-deferred`,
+toolchain -> `defer`, confidence -> `proceed`); `loop`, `budget-cap` and a
+check error park the spec as an `[open]` item and the run ends with exit 7.
+A scoped TEST with nothing to verify is not dispatched (`test-skipped`
+event). The outcomes and what to do for each are in
+[unattended-runs.md](./unattended-runs.md).
 
 Usage percentages exist only for Claude Code (its status line writes
 `coordination/usage.json`). Other harnesses do not publish usage, so for
@@ -181,6 +204,8 @@ PowerShell on Windows:
 
 ```text
 kcc tool quality-gate --spec SPEC-003 --json
+kcc tool quality-gate --spec SPEC-003 --scope deps
+kcc tool toolchain-preflight --tools node,docker
 kcc tool check-traceability --spec SPEC-003
 kcc tool kcc-checkpoint --reason manual --next-action "review wave 2"
 kcc tool repo-bootstrap --install-hook

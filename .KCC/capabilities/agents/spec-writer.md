@@ -18,7 +18,7 @@ tools-required:
   - edit
   - exec
 inputs: A problem description, feature request, improvement need, source file/folder, direct human notes, or `SpecWriterStarter.md` from an idea folder.
-outputs: One or more `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` folders, each with `SPEC-{ID}-{slug}.md`, `Backlog/Story-*.md`, `Backlog/Enabler-*.md`, and an `arch.md` section skeleton; a created/refreshed `ROADMAP.md` and `IDEA-{ID}-{slug}-Specs.md` index; an updated `specs/specs.md` MOC. No stubs (`plan.md`/`review.md` belong to planner/verifier).
+outputs: One or more `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/` folders, each with `SPEC-{ID}-{slug}.md`, `Backlog/Story-*.md`, `Backlog/Enabler-*.md`, and (full lifecycle only) an `arch.md` section skeleton; under `fasttrack` no `arch.md` exists and the spec note carries a `## Architecture references` section instead. A created/refreshed `ROADMAP.md` and `IDEA-{ID}-{slug}-Specs.md` index; an updated `specs/specs.md` MOC. No stubs (`plan.md`/`review.md` belong to planner/verifier).
 maturity: L2
 maintainer: tarek.fawaz1983@gmail.com
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
@@ -58,7 +58,12 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
      `Conclusion.md`, `QuickRoadmap.md`, `SpecWriterStarter.md`, and any of
      `TechnicalDecisionBrief.md`, `UXDecisionBrief.md`,
      `SecurityDecisionBrief.md`, `InfrastructureDecisionBrief.md`. Record
-     `IDEA-{ID}` and slug.
+     `IDEA-{ID}` and slug. Under `fasttrack` the folder holds no
+     `Conclusion.md`, no `QuickRoadmap.md` (the idea note's `## Phases` and
+     `SpecWriterStarter.md` carry the order) and no UX or infrastructure
+     brief: read the `## UX and UI` and `## Infrastructure and packaging`
+     sections of `TechnicalDecisionBrief.md` instead, plus
+     `SecurityDecisionBrief.md`.
    - Direct file/folder or detailed prompt: source = `New / direct`. Pick an
      existing `IDEA-{ID}` if it clearly maps, else allocate the next
      `IDEA-{ID}` + slug for the spec group only - never create an idea folder
@@ -108,8 +113,10 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
    (Key, Type, Title, Status, Depends on, Wave, Files, File - Wave is a
    first cut; same-wave items file-disjoint), `## Architecture` (wikilinks
    only, never `architecture/README.md` or bare paths), `## Risks`.
-9. **arch.md.** Seed the section skeleton only (refs -> *arch.md Skeleton*);
-   the architect fills it.
+9. **arch.md** (full lifecycle only). Seed the section skeleton only (refs ->
+   *arch.md Skeleton*); the architect fills it. Under `fasttrack` write no
+   `arch.md`: the note's `## Architecture references` section replaces it
+   (see *Fast track and depth*).
 10. **Per-idea folder.** `specs/IDEA-{ID}-{slug}-Specs/` (capital `S`). If
     missing, create it and `IDEA-{ID}-{slug}-Specs.md` (the only file linking
     up to `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md`). Back-fill the idea
@@ -134,7 +141,11 @@ All shapes, sizing rules (SZ-1..5), and trace chain:
 
 ## Fast track and depth
 
-Length caps (`.KCC/settings.json` -> `spec_sizing`): spec <= `max_spec_lines` (SZ-5), each Backlog item <= `max_backlog_item_lines` (SZ-6). At a lower `depthlevel` aim lower (`.KCC/kernel/protocols/depth-levels.md`) but keep every required section and AC. Under `fasttrack`: stay within the spec budget the human approved (default `spec_sizing.max_specs_fasttrack`, 8); SPEC-001 is a walking skeleton that runs end to end, each later spec a user-visible feature on top of it (never a horizontal layer such as "all the UI"); no Token Plan, no butler or token-guard; ROADMAP stays and `arch.md` is a short skeleton. Told `--split-only` you write only `ROADMAP.md` and a stub note per spec; told `--spec SPEC-NNN` you write that one spec in full and touch nothing else (other writers run at the same time on the other specs). For a deployable, service, or API spec add acceptance criteria for production readiness (QG-PROD: health or readiness check, structured logs without secrets, configuration from the environment, timeouts and graceful shutdown, a rollback path); `n/a` needs a one-line reason.
+Length caps (`.KCC/settings.json` -> `spec_sizing`): spec <= `max_spec_lines` (SZ-5), each Backlog item <= `max_backlog_item_lines` (SZ-6). At a lower `depthlevel` aim lower (`.KCC/kernel/protocols/depth-levels.md`) but keep every required section and AC. Under `fasttrack`: stay within the spec budget the human approved (default `spec_sizing.max_specs_fasttrack`, 8); SPEC-001 is a walking skeleton that runs end to end, each later spec a user-visible feature on top of it (never a horizontal layer such as "all the UI"); no Token Plan, no butler or token-guard; ROADMAP stays. Told `--split-only` you write only `ROADMAP.md` and a stub note per spec; told `--spec SPEC-NNN` you write that one spec in full and touch nothing else (other writers run at the same time on the other specs).
+
+**No `arch.md` under fast track.** The spec note carries a `## Architecture references` section instead, 5 lines at most: the Decision ids from `architecture/architecture.md -> ## Decisions` this spec relies on, the containers of the C2 diagram it touches, and the wikilink to the Architecture Document (LINK-006). The planner and the verifier read that section and `architecture.md`; nothing else reads a per-spec design file, so none is written (not even a skeleton). `check-run-conformance` under the fast-track profile requires the section (SPEC-001) and warns on an `arch.md` (SPEC-003).
+
+**Dependency rule for the split** (SPECS state, `ROADMAP.md -> ## Execution Plan`). `Depends on` names only a spec whose files, API or data this spec needs at build time. The walking skeleton (SPEC-001) is the only dependency a feature spec has by default. Two feature specs that touch disjoint files do not depend on each other, even when a user would use them in sequence (a login page and a settings page build at the same time). The `Order` column groups the specs that can build at the same time: all the specs that depend on SPEC-001 alone share Order 2. A roadmap that chains every spec after the previous one is serial and wrong unless each link is a real build-time dependency; `check-run-conformance` warns on it (SPEC-011). For a deployable, service, or API spec add acceptance criteria for production readiness (QG-PROD: health or readiness check, structured logs without secrets, configuration from the environment, timeouts and graceful shutdown, a rollback path); `n/a` needs a one-line reason.
 
 ## Constraints
 

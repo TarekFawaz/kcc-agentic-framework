@@ -61,7 +61,7 @@ Plan the implementation for spec <ARGS>.
 5. If `plan.md` already contains a ready plan (status `ready`, version
    >= 1.0.0, and an `## Atomic test cases` table), ask whether to
    regenerate or keep the existing plan.
-5a. **Spec-local `arch.md` first** (skip under `--fasttrack`: the skeleton and the global architecture suffice). If the spec's `arch.md` is still the
+5a. **Spec-local `arch.md` first** (skip under `--fasttrack`: no `arch.md` exists in that profile; the planner reads the spec note's `## Architecture references` and `architecture/architecture.md`, and never asks for the file). If the spec's `arch.md` is still the
    spec-writer's skeleton, delegate it to the **architect** (`architecture-documentation.md`
    -> *The spec-local `arch.md`*) and emit `arch-slice-created` for the spec when it is
    written. This is part of PLAN, so it runs for every ready spec at the same time as the

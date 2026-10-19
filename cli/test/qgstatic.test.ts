@@ -252,12 +252,12 @@ describe("QG-DEPS scans the lockfiles and is never a pass when it scanned nothin
       expect(r.exit, why(s, r)).toBe(0);
     }
     expect(args()).toMatch(/-L \S*package-lock\.json/);
-    expect(args()).toContain("-r");
+    expect(args()).not.toContain("-r"); // osv-scanner 2.x stops with exit 127 when -L and -r are combined (round 12)
     for (const [s, r] of await both("deps", osvEnv("findings"))) {
       const d = find(r, "QG-DEPS");
       expect(d[0]!.status, why(s, r)).toBe("fail");
       expect(d[0]!.severity).toBe("error");
-      expect(d[0]!.message).toContain("1 of 1 vulnerability group(s)");
+      expect(d[0]!.message).toContain("1 of 1 production vulnerability group(s)");
       expect(r.exit, why(s, r)).toBe(1);
     }
   });

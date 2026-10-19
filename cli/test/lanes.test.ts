@@ -2,7 +2,8 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createLane, groupByOrder, laneDir, liveSyncLane, mergeLane, mirrorRun, parseRoadmap, readySpecs, scheduleSpecs, snapshot } from "../src/run/lanes";
+import { spawnSync } from "node:child_process";
+import { createLane, git, groupByOrder, isGitWorkspace, laneBranch, laneDir, laneMode, liveSyncLane, mergeLane, mergeWorktreeLane, mirrorRun, parseRoadmap, readySpecs, removeLane, scheduleSpecs, snapshot } from "../src/run/lanes";
 import { applyPayload } from "../src/lock";
 import { isWindows } from "../src/platform";
 
@@ -77,6 +78,26 @@ describe("merging a lane back", () => {
     const m = mergeLane(main, lane.dir, lane.base);
     expect(m.conflicts).toEqual(["src/c.ts"]);
     expect(read(main, "src/c.ts")).toBe("c-main");
+  });
+
+  test(".gitignore is merged as a set of rules, never a conflict (round 13: a clean skeleton ended on it)", () => {
+    put(main, ".gitignore", "node_modules/\ndist/\n");
+    const lane = createLane(main, "SPEC-013", false);
+    expect(read(lane.dir, ".gitignore")).toContain(".kcc-lane/"); // the lane marker is in the lane copy only
+    expect(lane.base[".gitignore"]).toBe(snapshot(main)[".gitignore"]); // and not in the base the merge compares against
+    const m0 = mergeLane(main, lane.dir, lane.base);
+    expect(m0.conflicts).toEqual([]);
+    expect(m0.applied).toEqual([]); // an untouched lane .gitignore changes nothing in the workspace
+    expect(read(main, ".gitignore")).toBe("node_modules/\ndist/\n");
+    // the implementer adds rules in the lane while the workspace file also changed (another lane merged first)
+    put(lane.dir, ".gitignore", read(lane.dir, ".gitignore") + "\n# app data\ndata/\n*.db\ndist/\n");
+    put(main, ".gitignore", "node_modules/\ndist/\ncoverage/\n");
+    const m = mergeLane(main, lane.dir, lane.base);
+    expect(m.conflicts).toEqual([]);
+    expect(m.applied).toEqual([".gitignore"]);
+    const lines = read(main, ".gitignore").split("\n");
+    expect(lines).toEqual(["node_modules/", "dist/", "coverage/", "", "# app data", "data/", "*.db", ""]); // new rules appended once, the marker never
+    expect(read(main, ".gitignore")).not.toContain(".kcc-lane");
   });
 
   test("a clash on a shared index is skipped, not a conflict", () => {
@@ -216,5 +237,110 @@ describe("a lane's work reaches the workspace while it runs", () => {
     const r = sync();
     expect(r?.conflicts).toContain("README.md");
     expect(read(main, "README.md")).toBe("changed in the workspace");
+  });
+});
+
+describe("worktree lanes in a git workspace (round 13)", () => {
+  const main = join(temp, "wt-main");
+  const g = (...a: string[]) => spawnSync("git", a, { cwd: main, encoding: "utf8" });
+  const log = (): string[] => git(main, "log", "--format=%s").stdout.trim().split(/\r?\n/);
+  test("setup: a repository with one commit, uncommitted work from the shared states, and ignored runtime files", () => {
+    put(main, ".gitignore", "node_modules/\n.claude/\ncoordination/backchannel.jsonl\n");
+    put(main, "README.md", "r1");
+    g("init", "-q", "-b", "main"); g("config", "user.email", "t@example.com"); g("config", "user.name", "T"); g("config", "core.autocrlf", "false");
+    g("add", "-A"); g("commit", "-q", "-m", "chore: base");
+    put(main, "architecture/architecture.md", "# arch"); // written by ARCH, never committed by the driver
+    put(main, "specs/IDEA-001-x-Specs/SPEC-001-a/SPEC-001-a.md", "spec");
+    put(main, ".claude/agents/implementer.md", "agent"); // ignored, but a lane cannot run without it
+    put(main, "coordination/backchannel.jsonl", '{"id":"BC-00001","kind":"x"}\n');
+    expect(isGitWorkspace(main)).toBe(true);
+  });
+
+  test("a lane is a worktree on spec/SPEC-NNN cut from HEAD; the workspace's uncommitted work is committed first and the runtime files are copied", () => {
+    const lane = createLane(main, "SPEC-001", false);
+    expect(laneMode(lane.dir)).toBe("worktree");
+    expect(log()[0]).toBe("SPEC-001: workspace state before the lane (kcc)");
+    expect(git(lane.dir, "rev-parse", "--abbrev-ref", "HEAD").stdout.trim()).toBe(laneBranch("SPEC-001"));
+    expect(read(lane.dir, "architecture/architecture.md")).toBe("# arch"); // the committed shared-state output is in the lane
+    expect(read(lane.dir, ".claude/agents/implementer.md")).toBe("agent"); // the ignored harness folder was copied
+    expect(read(lane.dir, "coordination/backchannel.jsonl")).toContain("BC-00001");
+    expect(git(main, "status", "--porcelain").stdout.trim()).toBe(""); // the lane folder is excluded, not an untracked change
+    expect(existsSync(join(lane.dir, ".gitignore"))).toBe(true);
+    expect(read(lane.dir, ".gitignore")).not.toContain(".kcc-lane"); // no marker line in a tracked file any more
+    removeLane(main, lane.dir);
+    expect(existsSync(lane.dir)).toBe(false);
+    expect(git(main, "worktree", "list").stdout).not.toContain("SPEC-001");
+  });
+
+  test("a finished lane merges with git: .gitignore edits on both sides are a union, disjoint files fast-forward, the worktree goes away", () => {
+    const lane = createLane(main, "SPEC-002", false);
+    put(lane.dir, "src/IDEA-001-x/api/app.ts", "v1");
+    put(lane.dir, ".gitignore", read(lane.dir, ".gitignore") + "\n# app data\ndata/\n*.db\n");
+    git(lane.dir, "add", "-A"); git(lane.dir, "commit", "-q", "-m", "SPEC-002 Story-001: app");
+    put(lane.dir, "TestResults/IDEA-001/SPEC-002/test-run-summary.md", "| T-001 | PASS |"); // left uncommitted by the verifier
+    put(main, ".gitignore", read(main, ".gitignore") + "coverage/\n"); // the workspace moved too
+    const m = mergeWorktreeLane(main, lane.dir, "SPEC-002");
+    expect(m.conflicts).toEqual([]);
+    expect(m.applied).toEqual(expect.arrayContaining(["src/IDEA-001-x/api/app.ts", "TestResults/IDEA-001/SPEC-002/test-run-summary.md", ".gitignore"]));
+    expect(read(main, "src/IDEA-001-x/api/app.ts")).toBe("v1");
+    const gi = read(main, ".gitignore");
+    for (const l of ["node_modules/", "coverage/", "data/", "*.db"]) expect(gi).toContain(l);
+    expect(gi).not.toContain(".kcc-lane");
+    expect(log()[0]).toBe("SPEC-002: merge lane spec/SPEC-002 (kcc)");
+    expect(git(main, "status", "--porcelain").stdout.trim()).toBe("");
+    removeLane(main, lane.dir);
+    expect(existsSync(lane.dir)).toBe(false);
+  });
+
+  test("a real conflict aborts the merge, leaves the workspace as it was and names the file; the branch keeps the lane's work", () => {
+    const lane = createLane(main, "SPEC-003", false);
+    put(lane.dir, "README.md", "lane says");
+    put(main, "README.md", "workspace says");
+    const m = mergeWorktreeLane(main, lane.dir, "SPEC-003");
+    expect(m.conflicts).toEqual(["README.md"]);
+    expect(read(main, "README.md")).toBe("workspace says");
+    expect(git(main, "status", "--porcelain").stdout.trim()).toBe(""); // no half-merged tree
+    expect(git(main, "show", `${laneBranch("SPEC-003")}:README.md`).stdout).toBe("lane says"); // the branch has it for a merge by hand
+    removeLane(main, lane.dir);
+  });
+
+  test("two lanes that both add rows to a shared index both merge", () => {
+    put(main, "specs/specs.md", "# specs\n- SPEC-001\n");
+    g("add", "-A"); g("commit", "-q", "-m", "chore: index");
+    const a = createLane(main, "SPEC-004", false);
+    const b = createLane(main, "SPEC-005", false);
+    put(a.dir, "specs/specs.md", "# specs\n- SPEC-001\n- SPEC-004\n");
+    put(b.dir, "specs/specs.md", "# specs\n- SPEC-001\n- SPEC-005\n");
+    expect(mergeWorktreeLane(main, a.dir, "SPEC-004").conflicts).toEqual([]);
+    expect(mergeWorktreeLane(main, b.dir, "SPEC-005").conflicts).toEqual([]);
+    expect(read(main, "specs/specs.md")).toBe("# specs\n- SPEC-001\n- SPEC-004\n- SPEC-005\n");
+    removeLane(main, a.dir); removeLane(main, b.dir);
+  });
+
+  test("the scheduler end to end in a git workspace: lanes are worktrees, merged lanes are gone, src arrives with the merge", async () => {
+    const wsRoadmap = ROADMAP.replace(/SPEC-00(\d)-([a-z0-9]+)\/SPEC-00\d-[a-z0-9]+/g, "SPEC-00$1-$2/SPEC-00$1-$2");
+    put(main, "specs/IDEA-001-demo-Specs/ROADMAP.md", wsRoadmap);
+    for (const s of ["SPEC-001-core", "SPEC-002-ledger", "SPEC-003-web", "SPEC-004-e2e"]) put(main, `specs/IDEA-001-demo-Specs/${s}/${s}.md`, "# spec");
+    g("add", "-A"); g("commit", "-q", "-m", "chore: roadmap");
+    const code = await scheduleSpecs(main, {
+      passthrough: ["--fasttrack"], maxParallel: 4, syncSeconds: 0.2, log: () => {},
+      runDriver: async (dir, args) => {
+        const spec = args[args.indexOf("--input") + 1]!;
+        expect(laneMode(dir)).toBe("worktree");
+        put(dir, `src/IDEA-001-demo/${spec}.txt`, spec);
+        git(dir, "add", "-A"); git(dir, "commit", "-q", "-m", `${spec} Story-001: work`);
+        put(dir, "specs/specs.md", read(dir, "specs/specs.md") + `- built ${spec}\n`); // left uncommitted, union-merged
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    for (const s of ["SPEC-001", "SPEC-002", "SPEC-003", "SPEC-004"]) {
+      expect(read(main, `src/IDEA-001-demo/${s}.txt`)).toBe(s);
+      expect(existsSync(laneDir(main, s))).toBe(false);
+    }
+    expect(git(main, "worktree", "list").stdout.trim().split(/\r?\n/).length).toBe(1); // only the workspace itself
+    expect(read(main, "specs/specs.md").match(/- built SPEC-/g)?.length).toBe(4);
+    expect(git(main, "status", "--porcelain").stdout.trim()).toBe("");
+    expect(read(main, "coordination/backchannel.jsonl")).toContain("lane-merged");
   });
 });

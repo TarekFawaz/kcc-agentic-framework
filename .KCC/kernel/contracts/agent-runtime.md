@@ -55,3 +55,10 @@ they only add what is specific to their role.
    under the artifact length caps (`.KCC/settings.json` -> `spec_sizing`).
    `depthlevel` only trims detail; required sections, ACs, and artifacts are
    never dropped.
+10. **Consumer rule.** An agent writes a file only when a named consumer
+    exists: a later agent that reads it (named in that agent's `inputs`) or a
+    check that evaluates it. No placeholders, no skeletons "for later". When
+    unsure, put the content in the file the consumer already reads. The file
+    tables in `.KCC/kernel/protocols/idea-layout.md` and `spec-layout.md`
+    name the consumer of every file (`Read by`), so the rule is checkable by
+    reading; a file with no consumer in those tables is not written.

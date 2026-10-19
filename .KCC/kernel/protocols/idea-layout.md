@@ -57,16 +57,32 @@ Legacy folders may omit the slug (`IDEA-001/`), but new ideas should use
 
 ## Required files
 
-| File | Owner | Purpose |
-|--|--|--|
-| `idea-{ID}-{slug}.md` | idea-interrogator | Parent idea file: brief, original human statement, idea planning, and links to all artifacts. |
-| `Questionnaire.md` | idea-interrogator | Foundational questions and follow-up batches with stable question IDs. |
-| `HumanAnswers.md` | idea-interrogator | Human answers and verified/corrected assumptions. |
-| `Research.md` | idea-interrogator | Scoped prior art, references, compliance notes, and citations. |
-| `ROI.md` | idea-interrogator + token-guard | Value, cost, payback, confidence, and token-budget forecasts. |
-| `Conclusion.md` | idea-interrogator | Go/no-go synthesis and remaining unknowns. |
-| `QuickRoadmap.md` | idea-interrogator | Phased roadmap and likely epics/specs. |
-| `SpecWriterStarter.md` | idea-interrogator | Handoff briefing for `/spec-create`; may propose one or more epics. |
+A file exists only when a named consumer reads it (agent runtime contract, rule 10). The `Read by`
+column names that consumer; a file with none is not written.
+
+| File | Owner | Purpose | Read by |
+|--|--|--|--|
+| `idea-{ID}-{slug}.md` | idea-interrogator | Parent idea file: brief, original human statement, idea planning, and links to all artifacts. | specialists, architect, spec-writer, `check-run-conformance` IDEA-001/LINK-001, the dashboard |
+| `Questionnaire.md` | idea-interrogator | Foundational questions and follow-up batches with stable question IDs. | the human, `HumanAnswers.md` (question ids), `check-run-conformance` IDEA-004 |
+| `HumanAnswers.md` | idea-interrogator (ASK state under fast track) | Human answers and verified/corrected assumptions. | specialists, architect, spec-writer |
+| `Research.md` | idea-interrogator | Scoped prior art, references, compliance notes, and citations; `## Domain` line. | `kcc-route` (`## Domain`), architect, spec-writer |
+| `ROI.md` | idea-interrogator + token-guard | Value, cost, payback, confidence, and token-budget forecasts. | the ROI gate (`auto`), token-guard, `check-run-conformance` IDEA-005 |
+| `Conclusion.md` | idea-interrogator | Go/no-go synthesis and remaining unknowns. | the CONFIRM gate, spec-writer |
+| `QuickRoadmap.md` (full lifecycle only) | idea-interrogator | Phased roadmap and likely epics/specs. | spec-writer (`/spec-create` step 3), token-guard (idea-scope estimate) |
+| `SpecWriterStarter.md` | idea-interrogator | Handoff briefing for `/spec-create`; may propose one or more epics. | spec-writer, technical-interrogator, `kcc-run` (IDEA exit check) |
+| `*DecisionBrief.md` | technical-interrogator, ux-ui-designer, security-analyst, infrastructure-planner | Specialist decision briefs. | architect, spec-writer, planner (toolchain), verifier (security) |
+| `Assumptions.md` (`--silent --assume` only) | the ASK state | One table: question, assumed answer, rule followed, risk. | architect, spec-writer, `closed.md` |
+
+### Fast-track profile
+
+Under `--fasttrack` (`check-run-conformance -RunProfile fasttrack`) the idea folder holds
+`idea-{ID}-{slug}.md` (with `## Reasoning`, `## Phases` carrying the order of the epics, and
+`## Open questions`), `Research.md` (with its `## Domain` line), `SpecWriterStarter.md`, two
+specialist briefs (`TechnicalDecisionBrief.md`, whose `## UX and UI` and
+`## Infrastructure and packaging` sections stand in for the UX and infrastructure briefs, and
+`SecurityDecisionBrief.md`), and exactly one answers file: `Assumptions.md` under `--silent --assume`,
+otherwise `HumanAnswers.md`, never both. No `Questionnaire.md`, `ROI.md`, `Conclusion.md` or
+`QuickRoadmap.md` (the spec-writer's `ROADMAP.md` supersedes it and nothing else reads it).
 
 Every file must include Obsidian frontmatter and a `## Related` block with at
 least:

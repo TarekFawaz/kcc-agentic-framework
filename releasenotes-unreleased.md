@@ -18,6 +18,125 @@ Everything is additive: a run that uses none of the new flags behaves as before.
 
 ## What changed
 
+### Round 12 fixes: a red gate is routed, not looped
+
+Test round 12 (a fast-track run on a machine whose Docker builds cannot reach a registry) sent the implementer back three
+times for a gate no code change could turn green, spent 51 minutes on a first verifier pass at `xhigh`, and showed `QG-DEPS`
+red for a whole round because of one osv-scanner flag. Each of these is now routed to the owner who can act, and a run never
+loops on it. Operator guide: [docs/unattended-runs.md](./docs/unattended-runs.md).
+
+- **A gate no code change can turn green is a waiver, not a loop.** New review verdict `WAIVER_NEEDED`: every Bug is closed
+  and what keeps the quality gate red is outside the code (a gate tool error, a stale built image, an environment limit such
+  as a registry the build cannot reach or a test the OS cannot run, a check the architecture excluded). `review.md` gets a
+  `## Waivers` table (`Item | Why it is not a code fix | What a human does`). The driver (`kcc run`, `kcc-run.ps1`,
+  `kcc-run.sh`) opens a new `waiver` gate with the answers `waive` (close the spec as WAIVER_NEEDED, never a pass; the run
+  goes on), `recheck` (the human fixed the environment: TEST runs again, scoped) and `abort`. A `CHANGES_NEEDED` review with
+  no open Bug, no failing gate check an implementer owns and no traceability error is read the same way (violation
+  `REVIEW-004 (human)`), so the implementer is no longer sent back three times for nothing. Under `--silent --assume` the
+  policy answer is `waive`, recorded as a `decided` item in `coordination/NeedsAttention.md` with the gate items and the
+  command that re-runs the verification; the last message and `closed.md` print `WAIVER NEEDED, NOT A PASS - SPEC-NNN: ...`.
+  The dashboard shows the verdict as its own state (amber, like deferred).
+- **A scoped TEST with nothing to verify is not dispatched.** When the previous review's `commit:` is HEAD, nothing changed
+  under `src/` and no Bug is open or fixed-but-unverified, the verifier is not run; the event is `test-skipped`, and the
+  mechanical checks (`check-traceability`, `quality-gate`) alone decide.
+- **Environment probes in PREFLIGHT.** When `docker` is a required tool and present, `toolchain-preflight` runs
+  `docker pull hello-world` and a one-line `docker build` whose `RUN` step opens a TLS connection to a registry, and prints
+  `PROBE <what> reachable` or `LIMIT <what> unreachable: <why>` (`docker-registry`, `docker-build-network`). A LIMIT never
+  fails the preflight; the TEST prompt carries the lines as `KNOWN ENVIRONMENT LIMITS`, and the verifier defers the checks
+  they rule out at once. The case is Docker Desktop behind a TLS-intercepting proxy or antivirus: the daemon pulls, the build
+  containers cannot. Fix: `KCC_CA_BUNDLE`, HTTPS inspection off for Docker, or verify on another host.
+- **`quality-gate`.** (a) The scope of `quality-gate -Spec` comes from the plan's `## Gates coverage` table (the architect
+  decides the gates, the planner maps them, PLAN-007): the checks the plan does not cover are reported in a new `QG-SCOPE` row
+  as out of scope, not failed; `-Scope` / `--scope` still overrides; without a table the scope is `all`. (b) osv-scanner is
+  called with `-L <lockfile>` per lockfile, or `-r <dir>` only when no lockfile exists (osv-scanner 2.x exits 127 when both
+  are given; this kept QG-DEPS red for a whole round). (c) A scanner that exits without a result (osv-scanner, semgrep or
+  opengrep, gitleaks, trivy) is a `deferred` row owned by `human`, never an implementer failure; for dependencies the
+  per-stack audit (`npm audit`, `pip-audit`, `dotnet list package`) stands in. (d) Dev-only dependency advisories do not gate
+  unless `quality.audit_dev_dependencies` is true (osv-scanner's `dependency_groups`); the `QG-DEPS` message counts
+  production groups and names the dev-only ones. (e) A built image older than any workspace file is stale: `QG-IMAGE` defers
+  it with a rebuild hint instead of scanning an image from an earlier run. (f) SAST: `quality.scanners.sast` may be `semgrep`
+  (default) or `opengrep`; when the named one is missing the other stands in; `quality.sast_rules` (default `auto`, the
+  registry) names the rules, and opengrep needs a local rules folder (`architecture/sast-rules/`) or the check is deferred.
+- **Router rule 10.** A `review` task (verifier, critic) never runs above `high` effort unless the item's Complexity is
+  `extra-high`; reason text `review: effort capped at high (xhigh only for extra-high complexity)`. Round 12's first TEST pass
+  ran 51 minutes at `xhigh` for no better result.
+- **Dependency advisory policy for the verifier.** A finding is a Bug only when it is at or above
+  `quality.fail_on.dependencies`, in a production dependency, and in a package the spec imports or a direct dependency the
+  spec added; everything else is an observation with a follow-up line and never a reason to amend an ADR.
+- **Price note.** The measured "the fast and balanced tiers cost the same per token" figure was a fallback price the harness
+  reports for model ids it does not know; dollar totals in run reports and on the dashboard are estimates until the harness
+  knows the ids. The numbers are under *Model tiers* below.
+- **Bash driver: the ASK state failed on macOS and Linux.** `kcc-run.sh`'s `internal:files-exist` check with `any: true`
+  never looked at the last path of its list (an unterminated last line that `read` dropped), so every `--silent --assume`
+  run failed the ASK state, which writes `Assumptions.md`, the second path, and parked the run after three attempts. Fixed;
+  the PowerShell driver was never affected.
+- **Lanes are git worktrees (round 13).** A lane used to be a copy of the workspace merged back by comparing file hashes;
+  the first implementer that added an ignore rule ended an otherwise clean walking skeleton with `merge conflict: .gitignore`
+  and parked every dependent spec. In a git workspace a lane is now a worktree on `spec/SPEC-NNN` cut from HEAD (the
+  scheduler commits the workspace's uncommitted work first), and merging a lane is `git merge`: fast-forward or a merge
+  commit, `.gitignore` and the shared indexes as unions, a real conflict aborted and reported with the files and the branch
+  to merge by hand, nothing dropped. The lane folders and the run state are excluded through the repository's `info/exclude`,
+  so no tracked file is touched for bookkeeping; restore-point tags in a lane are `kcc/SPEC-NNN/cp-NNN`. A workspace without
+  git keeps the copy lane. Protocol: `.KCC/kernel/protocols/parallel-lanes.md`.
+- **Container specs get `docker` in PREFLIGHT.** A spec, plan or technical brief that names docker, a compose file or a
+  Containerfile adds `docker` to the derived tool list, so the registry probes run in the driver's PREFLIGHT and the TEST prompt
+  carries the `KNOWN ENVIRONMENT LIMITS` line (round 13: only the verifier's own preflight saw them).
+- **A deferral with no missing tool says what was deferred.** When `check-traceability` defers a Test ID (a service the test
+  needs is unusable here) and no gate tool is missing, the closing lines no longer say `missing tool(s) (not recorded)`; they say a
+  check could not run on this machine and give the command that re-runs the verification.
+- **The scope label in the quality-gate JSON is `scope_source`.** Its values are `plan.md Gates coverage`, `option` (an
+  explicit `-Scope` / `--scope`) or `default (all)`, so a report can say why a check was in or out of scope.
+- **New names.** Settings: `quality.sast_rules` (default `auto`); `quality.scanners.sast` accepts `opengrep`. Events:
+  `test-skipped`; `deferral-accepted` now also carries verdict `WAIVER_NEEDED` and gate `waiver`. Gate: `waiver` (answers
+  `waive` / `recheck` / `abort`) in both state tables. Exit-check violation: `REVIEW-004 (human)`. Quality-gate row:
+  `QG-SCOPE`. Preflight output lines: `PROBE ...` / `LIMIT ...`.
+
+#### Less paper under fast track
+
+Test round 13 (fast track, depth 2) wrote 1,200 lines in 24 generated files before the first line of code, and most of
+them had no reader: standalone C4 files that duplicated the diagrams embedded in `architecture.md`, three flowcharts nobody
+downstream opened, a per-spec `arch.md` left as an "awaiting architect" placeholder that the verifier then flagged, both
+answer files in a silent run, a `QuickRoadmap.md` that `ROADMAP.md` superseded, and UX and infrastructure briefs only the
+architect read. The same roadmap chained seven file-disjoint specs one after the other. Under `--fasttrack` the run now
+writes only what a later agent or a check reads, and the split names build-time dependencies only.
+
+- **No per-spec `arch.md` under fast track.** The WRITE state no longer asks for it. The spec note carries a
+  `## Architecture references` section instead (5 lines at most: the Decision ids from `architecture.md -> ## Decisions`
+  and the containers of the C2 diagram the spec touches, plus the Architecture Document wikilink); the planner and the
+  verifier read that section and `architecture.md`, and the verifier never reports a missing or placeholder `arch.md` in
+  this profile. `check-run-conformance -RunProfile fasttrack` requires the section (SPEC-001) and reports a stray
+  `arch.md` as a warning (SPEC-003); the full lifecycle and depth 3 to 5 are unchanged.
+- **No standalone C4 files and no `flowcharts/` folder under fast track.** The ARCH state asks for `architecture.md`
+  with C1 and C2 embedded, the `## Decisions` and `## Toolchain` tables, `quality-gates.md` and `static-rules.tsv`, and
+  nothing else. A business flow that matters is one embedded flowchart in a `## Flows` section, only when the idea has a
+  non-trivial workflow. ARCH-FT-005 no longer requires a flowchart: a present `flowcharts/` folder or a standalone
+  `c4-context.md` / `c4-container.md` is now the warning "duplicate of the embedded diagram", not an error.
+- **One answers file.** The ASK state writes exactly one of `Assumptions.md` (under `--silent --assume`) or
+  `HumanAnswers.md` (after the one question round), never both.
+- **No `QuickRoadmap.md` under fast track.** The IDEA state writes the idea file, `Research.md` and
+  `SpecWriterStarter.md`; the idea note's `## Phases` and the starter carry the order, and `ROADMAP.md` supersedes the
+  quick roadmap. The full lifecycle keeps it (it is a required idea artifact there, read by the spec-writer and token-guard).
+- **One brief under fast track.** The BRIEFS state runs two specialists, not four: the technical-interrogator writes
+  `TechnicalDecisionBrief.md` with two extra sections, `## UX and UI` and `## Infrastructure and packaging` (at most 15
+  lines each, from the catalogue defaults), and the security-analyst writes `SecurityDecisionBrief.md`. `ux-ui-designer`
+  and `infrastructure-planner` are not spawned; the architect and the spec-writer read the two sections instead of the
+  two briefs.
+- **Dependency rule for the split.** `Depends on` names only a spec whose files, API or data this spec needs at build
+  time; the walking skeleton (SPEC-001) is the only dependency a feature spec has by default; two feature specs that touch
+  disjoint files do not depend on each other even when a user would use them in sequence; the roadmap's `Order` column
+  groups the specs that can build at the same time. New conformance rule `SPEC-011` (warning, owner spec-writer, scope
+  `specs`, fast track only): a roadmap whose Execution Plan is a single chain gets "the split is serial: every feature
+  spec depends on the previous one; name only build-time dependencies so independent specs build in parallel".
+- **The consumer rule.** Agent runtime contract rule 10: an agent writes a file only when a named consumer exists (a
+  later agent that reads it, named in that agent's inputs, or a check that evaluates it); no placeholders, no skeletons
+  "for later"; when unsure, the content goes in the file the consumer already reads. The file tables in `idea-layout.md`
+  and `spec-layout.md` now carry a `Read by` column, so the rule is checkable by reading.
+- **Fast-track butler.** The memory-only butler writes nothing when the run produced no durable fact: the framework sync
+  installs `memory/index.json`, `memory.md` and `schema.md`, and the butler adds no empty entries, notes or index rows to
+  them; the answer is `No new entries` with `remember-stored` carrying `entry_ids=none`.
+
+### Earlier in this release
+
 - **Dashboard: parallel agents and the lifecycle flowchart.** The Overview page now has a Now strip (every agent running, with a stale marker when nothing was written for 10 minutes), per-stage runs / peak parallel / sum of agent time / speed-up / cost columns, a swimlane timeline of agent runs with a concurrency strip and hatched human-gate waits, and an inline-SVG flowchart of the real state machine (shared states once, one chart per spec) with loop-back edges, gates and counts taken from dispatch logs and backchannel events. Builders add `goto`, `maxAttempts`, lane run state, dispatch agent/model/effort and `laneEvents` to the data block.
 
 - **A deferred scanner no longer loops the run (round 11).** A missing scanner (semgrep) made the scoped TEST end `QUALITY_DEFERRED`; the REVIEW then failed on an unknown verdict, FIX ran with nothing to fix (86 s) and a second FULL xhigh TEST repeated the same checks. `kcc-run` now reads `QUALITY_DEFERRED` and `TOOLCHAIN_DEFERRED` (any spelling) as one class: with every bug fixed, verified or waived the REVIEW closes the spec as deferred-accepted (event `deferral-accepted`), the lane ends, and the last message says `DEFERRED, NOT A PASS` with the missing tool, the install command and the command that re-runs the gate (also appended to `closed.md`). A `QUALITY_DEFERRED` review makes the next TEST scoped, so it never uses the second full pass. A FIX with no open Bug and no implementer-owned violation is skipped (`fix-completed`, `skipped: true`).
@@ -35,14 +154,19 @@ Everything is additive: a run that uses none of the new flags behaves as before.
 
 - **Model tiers.** `spec-writer`, `planner`, `architect`, `idea-interrogator`,
   `technical-interrogator`, `ux-ui-designer`, `infrastructure-planner`, and
-  `security-analyst` (effort stays `high`) now run on the `balanced` class
-  (Sonnet on Claude). The `implementer` also runs on `balanced` (effort `medium`,
+  `security-analyst` (effort stays `high`) now run on the `balanced` tier
+  (on Claude Code, for example, that is Sonnet). The `implementer` also runs on `balanced` (effort `medium`,
   `high` for `high` / `extra-high` or security-sensitive items and retries): it first ran on
-  the executor class (Haiku), but round 9 measured `claude-haiku-5-5` and `claude-sonnet-5-5`
-  at the same price per token ($8 per million cache-write tokens, probed 2026-10-16), so the
-  cheaper class saved nothing and wrote weaker code. Keep Haiku for an agent with
+  the `fast` tier (Haiku on Claude Code), but round 9 measured `claude-haiku-5-5` and `claude-sonnet-5-5`
+  at the same price per token ($8 per million cache-write tokens, probed 2026-10-16). That figure turned
+  out to be the fallback price Claude Code 2.1.283 reports for model ids it does not know (both print
+  `unrecognized_model`). List prices differ widely: Haiku $0.10 in / $0.50 out, Sonnet $2 / $10, Opus $4 / $20,
+  Fable $10 / $50 per million tokens. So the dollar totals in every run report and on the dashboard are
+  estimates until the harness knows the ids (`kernel/models.json -> tier_cost_observed` keeps the note; re-probe
+  on a build that knows them). The implementer stays on `balanced` because the fast tier wrote
+  weaker code (round 9), not because of price. Keep the fast tier for an agent with
   `.KCC/model-overrides` (`implementer = fast-implementation medium`).
-  Claude IDs are now the 5.5 family. On Codex the executor class maps to
+  Claude IDs are now the 5.5 family. On Codex the fast tier maps to
   `gpt-5-mini` instead of `gpt-5-nano`.
 - **`auto --fasttrack`.** Skips ROI, confirm, architecture review, all budget
   gates, and the windows gate. No traces or token-guard (a memory-only butler stays); progress is

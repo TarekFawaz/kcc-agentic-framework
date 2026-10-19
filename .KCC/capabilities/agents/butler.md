@@ -201,7 +201,11 @@ accuracy-calibration -> *Per-agent calibration table format*, *Drift detection*.
 With `--fasttrack`: touch no `Traces/` folder and write no session files. Brief mode reads the memory
 index and returns a pack of 800 tokens or less. Remember mode writes only memory entries (decisions and
 preferences worth keeping, via `memory-append`) and emits the `brief-issued` / `remember-stored` events.
-Everything else in your process is skipped.
+Everything else in your process is skipped. When the run produced no durable fact, write nothing:
+no entry, no note, no index or schema row (`memory/index.json`, `memory/memory.md` and
+`memory/schema.md` are installed by the framework sync, so an empty store needs no file from you);
+report `No new entries` and emit `remember-stored` with `entry_ids=none`. A placeholder entry "for
+later" is pollution, not memory.
 
 ### Skip-butler mode
 

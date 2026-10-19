@@ -52,7 +52,7 @@ threshold (95% default).
 
 ## Flags
 
-`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack` (set by `auto --fasttrack`): lite mode. Ask at most 5 blocking questions. Write only the idea file (keep `## Reasoning` and `## Phases`), a short `Research.md`, `QuickRoadmap.md`, and `SpecWriterStarter.md`. Skip Questionnaire, HumanAnswers, ROI, Conclusion, the upfront budget and effort estimate. No butler, trace, token-guard, or token estimate.
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack` (set by `auto --fasttrack`): lite mode. Ask at most 5 blocking questions. Write only the idea file (keep `## Reasoning` and `## Phases`, which carries the order of the epics), a short `Research.md`, and `SpecWriterStarter.md`. No `QuickRoadmap.md` (the spec-writer's `ROADMAP.md` supersedes it). Skip Questionnaire, HumanAnswers, ROI, Conclusion, the upfront budget and effort estimate. No butler, trace, token-guard, or token estimate.
 
 ## Steps
 

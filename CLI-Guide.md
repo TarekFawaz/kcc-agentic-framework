@@ -8,8 +8,8 @@ tags:
   - cli
   - how-to
 created: 2026-10-04
-updated: 2026-10-04
-version: 0.5.1
+updated: 2026-10-18
+version: 0.6.0
 status: active
 ---
 
@@ -267,12 +267,20 @@ kcc run --input "build a CLI that converts CSV to JSON"
 | `kcc run --answer proceed` | Answer the human gate the run is paused at |
 | `kcc run --resume` | Continue a paused or suspended run |
 | `kcc run --harness codex --input "<idea>"` | Use another harness |
+| `kcc run --input "<idea>" --fasttrack --silent --assume` | Unattended run: never waits for a human (see below) |
+| `kcc run --lane SPEC-003 --answer waive` | Answer the gate one spec's lane is paused at (`waive`, `recheck`, `revise`, ...) |
 
-A run stops at human gates (budget, confidence, ROI). The gate text is in
-`coordination/gates/`, and the run prints the allowed answers.
+A run stops at human gates (budget, confidence, ROI, a blocked Bug, a waiver).
+The gate text is in `coordination/gates/`, and the run prints the allowed
+answers. An unattended run (`--silent --assume`) never stops: each gate is
+answered by a policy, the answer is written to `coordination/NeedsAttention.md`,
+and a spec no policy can answer for is parked while the others finish. What
+such a run can end with, and what you do for each outcome, is in
+[docs/unattended-runs.md](./docs/unattended-runs.md).
 
 Exit codes: 0 done, 4 paused at a gate, 5 suspended on a usage limit,
-6 stopped or aborted.
+6 stopped or aborted, 7 done with `[open]` items in `NeedsAttention.md`
+(unattended runs only).
 
 ### When the harness hits a usage limit
 
@@ -354,6 +362,9 @@ tools directly. The server runs on your machine only. More:
 | Regenerate adapters after editing `.KCC/kernel/` or `.KCC/capabilities/` | `kcc sync` |
 | Validate the framework files | `kcc validate` |
 | Run the quality gate for a spec | `kcc tool quality-gate --spec SPEC-003` |
+| Answer the gate a spec's lane is paused at (waiver, ruling, loop) | `kcc run --lane SPEC-003 --answer waive` or `--answer recheck` |
+| Re-verify a spec after fixing the environment | `kcc run --lane SPEC-003 --from 16`, then `kcc run --resume` |
+| See what an unattended run left for me | `coordination/NeedsAttention.md` (`[open]` items need you; `decided` ones record a policy answer) |
 | Check that every acceptance criterion has a passing test | `kcc tool check-traceability --spec SPEC-003` |
 | Write a restore point by hand | `kcc tool kcc-checkpoint --reason manual` |
 | Move the run to another harness | `kcc tool kcc-handover --to codex --dry-run` |
@@ -395,6 +406,12 @@ listed; use `kcc upgrade --force` to take the shipped versions instead. Your
 | A push to `main` is blocked | `main` is protected | Push your `spec/...` branch and open a pull request |
 | A run exits with code 5 | Usage limit, and the resume attempts are used up | `kcc limits`, then `kcc run --resume` |
 | A run exits with code 4 | Waiting for your decision | Read the gate file it names, then `kcc run --answer <choice>` |
+| A run exits with code 7 | An unattended run parked a spec; the other specs finished | Read the `[open]` item in `coordination/NeedsAttention.md`, fix the cause, run its `todo:` command (usually `kcc run --resume`) |
+| The review says `WAIVER_NEEDED` | Every Bug is closed; what keeps the gate red is outside the code (a tool error, a stale image, an environment limit, an excluded check) | Read `review.md -> ## Waivers`. Fix the environment and `kcc run --lane SPEC-003 --answer recheck` (or `--from 16` after an unattended run), or accept it with `--answer waive`. It is never a pass, and no implementer run changes it. See [docs/unattended-runs.md](./docs/unattended-runs.md) |
+| The run says `merge conflict` for a spec | In a git workspace a lane is a worktree on `spec/SPEC-NNN`; its merge into the workspace branch hit lines both sides changed, so git aborted it and left the workspace as it was | Run `git merge spec/SPEC-NNN` in the workspace, resolve the files, commit, then `kcc run --resume`. The lane's work is complete on its branch; nothing was dropped |
+| PREFLIGHT prints `LIMIT docker-build-network unreachable` | The Docker daemon pulls, but `RUN` steps inside a build cannot reach registries over TLS (a proxy or antivirus intercepts HTTPS) | Set `KCC_CA_BUNDLE` to a PEM file with the proxy's root certificate, exclude Docker from HTTPS inspection, or verify on another host; then `recheck`. The run does not fail on the line: the checks it rules out are deferred and the review ends `WAIVER_NEEDED` |
+| `QG-DEPS` is red for dev-only packages | `quality.audit_dev_dependencies` is `true` in `.KCC/settings.json` (the default `false` gates production groups only; the message names the dev-only ones) | Set it back to `false` unless you want dev-only advisories to gate, or update the package; a dev-only finding is an observation for the verifier, not a Bug |
+| `QG-IMAGE` says the image is stale | The built image is older than a workspace file, so scanning it would say nothing about the code under review | `docker compose build`, then `kcc tool quality-gate --spec SPEC-003`; the row is `deferred` with that hint, not a failure |
 | macOS blocks the program as unidentified | The binary is not signed | Allow it under System Settings -> Privacy & Security, or run `xattr -d com.apple.quarantine ~/.local/bin/kcc` |
 
 ## 11. Uninstall
