@@ -348,6 +348,7 @@ the range the plan's `## Toolchain` table asks for), two environment probes run
 when `docker` is required and present, one line each:
 
 ```text
+LIMIT docker-daemon unreachable: docker is installed but its daemon is not running (...)
 PROBE    docker-registry reachable (docker pull hello-world)
 PROBE    docker-build-network reachable (a RUN step reached registry.npmjs.org over TLS)
 LIMIT docker-build-network unreachable: a RUN step inside a build cannot reach registries over TLS (...); see KCC_CA_BUNDLE

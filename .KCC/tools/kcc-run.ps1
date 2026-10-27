@@ -920,9 +920,12 @@ function Get-DeferredItems {
         if ($mine.Count -gt 0 -and $mine -notcontains $sp) { continue }
         $tl = [regex]::Match($l, '"tools"\s*:\s*"([^"]*)"').Groups[1].Value
         $k = $sp + '|' + $tl
-        if ($seen.ContainsKey($k)) { continue }
-        $seen[$k] = 1
-        $out += [pscustomobject]@{ spec = $sp; tools = $tl; checks = [regex]::Match($l, '"checks"\s*:\s*"([^"]*)"').Groups[1].Value; verdict = [regex]::Match($l, '"verdict"\s*:\s*"([^"]*)"').Groups[1].Value }
+        $vd = [regex]::Match($l, '"verdict"\s*:\s*"([^"]*)"').Groups[1].Value
+        $item = [pscustomobject]@{ spec = $sp; tools = $tl; checks = [regex]::Match($l, '"checks"\s*:\s*"([^"]*)"').Groups[1].Value; verdict = $vd }
+        # A waiver recorded after a deferral of the same spec (TEST deferred a check, REVIEW ended WAIVER_NEEDED) is the verdict that counts.
+        if ($seen.ContainsKey($k)) { if ($vd -eq 'WAIVER_NEEDED') { $out[$seen[$k]] = $item }; continue }
+        $seen[$k] = $out.Count
+        $out += $item
     }
     return @($out)
 }
@@ -1829,7 +1832,8 @@ function Process-Unit($st, $ctx) {
     if ($res.blocked -and -not $res.open) { return (Open-RulingGate $st $ctx ([string]$res.blocked)) }
     if ($res.rc -eq 3) {
         # A deferral already accepted for this spec (at TEST, or at the toolchain gate) is not asked again: the spec closes as deferred-accepted.
-        if ($ctx.SPEC -and (Get-Att ('defer:' + $ctx.SPEC)) -gt 0) {
+        # A waiver (REVIEW-004) is a different outcome: it always opens the waiver gate (round 14: a TEST deferral hid SPEC-001's waiver).
+        if ($ctx.SPEC -and (Get-Att ('defer:' + $ctx.SPEC)) -gt 0 -and ($R.last_violations -notlike 'REVIEW-004*')) {
             Say ('kcc-run: deferred check for ' + $ctx.SPEC + ' was accepted earlier (not a pass): ' + (Flat $R.last_violations))
             Complete-Unit $st $ctx $false
             return 'next'

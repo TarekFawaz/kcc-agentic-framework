@@ -1277,7 +1277,7 @@ deferred_items() { # one line per accepted deferral of this run's specs: spec<TA
     ck="$(printf '%s' "$line" | sed -nE 's/.*"checks"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')"
     vd="$(printf '%s' "$line" | sed -nE 's/.*"verdict"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')"
     printf '%s\t%s\t%s\t%s\n' "$sp" "${tl:--}" "${ck:--}" "${vd:--}"
-  done | awk -F'\t' '!seen[$1 "|" $2 "|" $4]++'
+  done | awk -F'\t' '{ k = $1 "|" $2; if (!(k in row)) { order[++n] = k; row[k] = $0 } else if ($4 == "WAIVER_NEEDED") { row[k] = $0 } } END { for (i = 1; i <= n; i++) print row[order[i]] }'
 }
 unmark() { if [[ "$1" == "-" ]]; then printf ''; else printf '%s' "$1"; fi; }
 deferral_lines() { # spec tools checks verdict
@@ -1747,7 +1747,8 @@ process_unit() { # $1 idx -> OUTCOME next|retry|goto|paused|answered
   if [[ -n "$CHK_BLOCKED" && -z "$CHK_OPEN" ]]; then ruling_gate "$i"; return 0; fi
   if [[ $CHK_RC -eq 3 ]]; then
     # A deferral already accepted for this spec (at TEST, or at the toolchain gate) is not asked again: the spec closes as deferred-accepted.
-    if [[ -n "$C_SPEC" && "$(get_att "defer:$C_SPEC")" != "0" ]]; then
+    # A waiver (REVIEW-004) is a different outcome: it always opens the waiver gate (round 14: a TEST deferral hid SPEC-001's waiver).
+    if [[ -n "$C_SPEC" && "$(get_att "defer:$C_SPEC")" != "0" && "$R_last_violations" != REVIEW-004* ]]; then
       say "kcc-run: deferred check for $C_SPEC was accepted earlier (not a pass): $(flat "$R_last_violations")"
       complete_unit "$i" 0; return 0
     fi

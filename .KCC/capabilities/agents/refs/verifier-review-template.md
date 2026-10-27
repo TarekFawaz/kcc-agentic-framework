@@ -137,7 +137,7 @@ architecture excluded. Not a pass. Add the table:
 ## Waivers
 | Item | Why it is not a code fix | What a human does |
 |--|--|--|
-| QG-IMAGE budgetpal-web:local | image built before this HEAD; the build cannot reach the registry here | rebuild on a host with registry access, or waive |
+| QG-IMAGE app-web:local | image built before this HEAD; the build cannot reach the registry here | rebuild on a host with registry access, or waive |
 
 A **TOOLCHAIN_DEFERRED** verdict is used when the required build/test toolchain
 was missing and the human deferred install: it is NOT a pass. List which

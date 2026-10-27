@@ -287,7 +287,7 @@ svg.tlv.lab{overflow:visible}
 .bn{font:600 9.5px var(--mono);fill:var(--emphasis)}.bn.st{fill:var(--danger)}
 .bar.gate .bk{stroke:var(--warn);stroke-width:1}
 .hatchbg{fill:color-mix(in oklab,var(--warn) 8%,var(--surface))}.hatchline{stroke:var(--warn);stroke-width:2.2}
-.cc{fill:var(--muted-foreground);opacity:.5}.cc.c2{fill:var(--accent);opacity:.75}.cc.c3,.cc.c4{fill:var(--emphasis);opacity:.9}
+.cc{fill:var(--muted-foreground);opacity:.7}.cc.c2{fill:var(--accent);opacity:.75}.cc.c3,.cc.c4{fill:var(--emphasis);opacity:.9}
 .ccn{font:700 9px var(--mono);fill:var(--foreground)}
 .nowline{stroke:var(--emphasis);stroke-width:1.2;stroke-dasharray:4 3}.nowt{fill:var(--emphasis);font-weight:700}
 @media (prefers-reduced-motion:reduce){.fe.live,.bar.run .bk,.fn.cur.live .halo,.fg .ring{animation:none!important}.fn.cur .halo{stroke-opacity:.8;stroke-width:3}.fe.live{stroke-dasharray:none}}
@@ -1234,7 +1234,7 @@ function timelineSVG(rb,now,range,opts){
   var corner='<text class="axl" x="8" y="14">agents at the same time</text><text class="axl" x="8" y="27">peak '+peak+'</text>'+
     '<text class="axl" x="8" y="45">'+(TZ.name==='UTC'?'times in UTC':'times in local time')+'</text><text class="axl" x="8" y="58">'+esc(TZ.name==='UTC'?'UTC+00:00':offLabel(tzOffMin(t1))+' '+tzZone())+'</text>';
   var axis='';
-  conc.segs.forEach(function(s){var a=x(s.a),b=x(s.b),h=Math.max(2,21*s.n/Math.max(1,peak));
+  conc.segs.forEach(function(s){var a=x(s.a),b=x(s.b),h=Math.max(5,21*s.n/Math.max(1,peak));
     axis+='<rect class="cc c'+Math.min(s.n,4)+'" x="'+a+'" y="'+(30-h)+'" width="'+Math.max(1,b-a)+'" height="'+h+'"><title>'+s.n+' agent'+(s.n>1?'s':'')+' running '+tickLabel(s.a)+' to '+tickLabel(s.b)+' '+zoneTag()+'</title></rect>';
     if(s.n>1&&b-a>16)axis+='<text class="ccn" x="'+((a+b)/2)+'" y="'+(30-h-2)+'" text-anchor="middle">'+s.n+'</text>';});
   var step=niceStep(span),off=tzOffMin(t0)*60000,first=Math.ceil((t0+off)/step)*step-off,lastDay='';

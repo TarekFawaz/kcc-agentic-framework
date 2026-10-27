@@ -124,6 +124,9 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    - When `QG-STATIC` is active (guardrails checkable by pattern), also write
      `architecture/static-rules.tsv`: one rule per such guardrail, tab-separated
      `id`, `files` (regex on the path), `forbidden` (regex), `allowed_in` (regex, may be empty), `message`.
+     Rules are line-based. For a Dockerfile `FROM` rule (pinned tags, no `:latest`) write the image part as
+     `[^:\s@]+` so digests pass, and allow a hyphenated alias (`AS [\w-]+`); `quality-gate` skips a
+     `FROM <stage>` that names a stage declared earlier in the same file, so multi-stage builds need no exception.
      In `quality-gates.md` say that `quality-gate` runs QG-STATIC from this file
      (not prose, not a manual grep). In the `QG-PROD` image-scan item name both
      `quality-gate` checks: `image-scan` (source) and `image-scan-built` (images the

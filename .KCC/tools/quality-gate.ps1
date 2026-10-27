@@ -140,7 +140,7 @@ $FailDeps = ([string](Get-Setting 'quality.fail_on.dependencies' 'high')).ToLowe
 $AuditDev = (([string](Get-Setting 'quality.audit_dev_dependencies' 'false')).ToLowerInvariant() -eq 'true')
 $FailSast = ([string](Get-Setting 'quality.fail_on.sast' 'error')).ToLowerInvariant()
 # 'local' (semgrep on PATH) or 'docker' (semgrep/semgrep image; for Windows, where semgrep has no native build).
-$SastRunner = ([string](Get-Setting 'quality.scanners.sast_runner' 'local')).ToLowerInvariant()
+$SastRunner = ([string](Get-Setting 'quality.scanners.sast_runner' 'auto')).ToLowerInvariant()   # auto | local | docker
 $SastTool = ([string](Get-Setting 'quality.scanners.sast' 'semgrep')).ToLowerInvariant()
 $SastRules = [string](Get-Setting 'quality.sast_rules' 'auto')
 $FailSecrets = ([string](Get-Setting 'quality.fail_on.secrets' 'any')).ToLowerInvariant()
@@ -1205,7 +1205,7 @@ function Invoke-SastCheck {
     if (-not (Test-Tool $sast)) {
         if (($sast -eq 'semgrep') -and (Test-Tool 'opengrep')) { $sast = 'opengrep' }
         elseif (($sast -eq 'opengrep') -and (Test-Tool 'semgrep')) { $sast = 'semgrep' }
-        elseif (($SastRunner -eq 'docker') -and (Test-Tool 'docker')) { $useDocker = $true }
+        elseif (($SastRunner -eq 'docker' -or $SastRunner -eq 'auto') -and (Test-Tool 'docker')) { $useDocker = $true }   # auto: the image stands in when no scanner is on PATH (Windows has no native semgrep)
         else { Add-Deferred 'QG-SAST' 'sast' '' '' $sast 'SAST'; return }
     }
     $rules = $SastRules
@@ -1333,10 +1333,15 @@ function Invoke-StaticCheck {
             try { $text = [IO.File]::ReadAllText($wsPrefix + ($r -replace '/', $Sep)) } catch { continue }
             if ($text.IndexOf([char]0) -ge 0) { continue }
             if (-not $reAny.IsMatch($text)) { continue }
+            # Multi-stage Dockerfiles: `FROM <stage> AS <next>` names a stage declared earlier, not an untagged image (round 14, SR-018).
+            $stages = @()
+            if ($r -match '(^|/)Dockerfile[^/]*$') { $stages = @([regex]::Matches($text, '(?im)^\s*FROM\s+\S+\s+AS\s+([\w.-]+)') | ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() }) }
             $ln = 0
             foreach ($l in $text.Split([char]10)) {
                 $ln++
-                if ($rePat.IsMatch($l)) { [void]$hits.Add($r + ':' + $ln + ' ' + $rid[$i]) }
+                if (-not $rePat.IsMatch($l)) { continue }
+                if ($stages.Count -gt 0 -and $l -match '^\s*FROM\s+(\S+)' -and ($stages -contains $Matches[1].ToLowerInvariant())) { continue }
+                [void]$hits.Add($r + ':' + $ln + ' ' + $rid[$i])
             }
         }
     }

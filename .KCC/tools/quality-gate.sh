@@ -208,7 +208,7 @@ setting_v quality.fail_on.dependencies high; lc "$SV"; FAIL_DEPS="$LC"
 setting_v quality.audit_dev_dependencies false; lc "$SV"; AUDIT_DEV="$LC"
 setting_v quality.fail_on.sast error; lc "$SV"; FAIL_SAST="$LC"
 # local (semgrep on PATH) or docker (semgrep/semgrep image; Windows has no native semgrep).
-setting_v quality.scanners.sast_runner local; lc "$SV"; SAST_RUNNER="$LC"
+setting_v quality.scanners.sast_runner auto; lc "$SV"; SAST_RUNNER="$LC"   # auto | local | docker
 setting_v quality.scanners.sast semgrep; lc "$SV"; SAST_TOOL="$LC"
 setting_v quality.sast_rules auto; SAST_RULES="$SV"
 setting_v quality.fail_on.secrets any; lc "$SV"; FAIL_SECRETS="$LC"
@@ -1084,7 +1084,7 @@ check_sast() {
   if ! have "$sast"; then
     if [[ "$sast" == "semgrep" ]] && have opengrep; then sast=opengrep
     elif [[ "$sast" == "opengrep" ]] && have semgrep; then sast=semgrep
-    elif [[ "$SAST_RUNNER" == "docker" ]] && have docker; then use_docker=1
+    elif [[ "$SAST_RUNNER" == "docker" || "$SAST_RUNNER" == "auto" ]] && have docker; then use_docker=1   # auto: the image stands in when no scanner is on PATH
     else defer_check QG-SAST sast "" "" "$sast" "SAST"; return 0; fi
   fi
   local rules="$SAST_RULES"
@@ -1186,6 +1186,23 @@ check_static() {
     ( cd "$WS" && tr '\n' '\0' <"$sel" | LC_ALL=C xargs -0 grep -nHIE -e "${R_PAT[$i]}" -- 2>/dev/null ) \
       | awk -F: -v id="${R_ID[$i]}" '{ print $1 ":" $2 " " id }' >>"$hits" || true
   done
+  # Multi-stage Dockerfiles: `FROM <stage> AS <next>` names a stage declared earlier, not an untagged image (round 14, SR-018).
+  local hl hfile hline hrest htext hname
+  if grep -qE '^[^:]*Dockerfile[^/:]*:' "$hits" 2>/dev/null; then
+    : >"$hits.keep"
+    while IFS= read -r hl; do
+      hfile="${hl%%:*}"; hrest="${hl#*:}"; hline="${hrest%% *}"
+      if [[ "$hfile" =~ (^|/)Dockerfile[^/]*$ ]]; then
+        htext="$(sed -n "${hline}p" "$WS/$hfile" 2>/dev/null)"
+        if [[ "$htext" =~ ^[[:space:]]*FROM[[:space:]]+([^[:space:]]+) ]]; then
+          hname="${BASH_REMATCH[1]}"
+          if grep -qiE "^[[:space:]]*FROM[[:space:]]+[^[:space:]]+[[:space:]]+AS[[:space:]]+${hname}([[:space:]]|$)" "$WS/$hfile" 2>/dev/null; then continue; fi
+        fi
+      fi
+      printf '%s\n' "$hl" >>"$hits.keep"
+    done <"$hits"
+    mv "$hits.keep" "$hits"
+  fi
   local nh; count_lines_v "$hits"; nh="$CL"
   if [[ "$nh" -eq 0 ]]; then
     add_check QG-STATIC static-rules "" "" pass none "static-rules scan (${#R_ID[@]} rule(s) from $rrel)" 0 "static rules: ${#R_ID[@]} rule(s) over $nfiles file(s), no forbidden pattern found" implementer ""

@@ -174,6 +174,10 @@ for one spec's lane), 5 suspended on a usage limit, 6 stopped or aborted,
 `--silent --assume`, which never exits 4). Resume commands never use a
 permission-bypass flag; a template that contains one is refused.
 
+`kcc run --resume` on a run that closed with lanes not merged (a parked spec,
+a lane merged by hand after a conflict) reopens the run for those lanes and
+closes it again at the end.
+
 The gates a run can pause at, and their answers:
 
 | Gate | Answers | Opened when |

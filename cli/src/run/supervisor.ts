@@ -7,7 +7,7 @@ import { isWindows, runTool, runToolAsync } from "../platform";
 import { readSettings } from "../settings";
 import { startDashboardServer, type DashServer } from "../commands/dashboard";
 import { type DashStamp, rebuildDashboard } from "./dashstale";
-import { attentionCounts, findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs } from "./lanes";
+import { attentionCounts, findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs, unfinishedLanes } from "./lanes";
 import { routeAll } from "./routing";
 import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
@@ -298,8 +298,15 @@ async function lifecycleRun(root: string, args: string[], p: Policy, wait: boole
   if (runJson?.silent === "1" && !flags.includes("--silent")) flags.push("--silent", "--assume");
   if (runJson?.depthlevel && !flags.includes("--depthlevel")) flags.push("--depthlevel", runJson.depthlevel);
   if (runJson?.status === "done") {
-    console.log("kcc: the run is DONE; nothing to resume");
-    return 0;
+    // CLOSE runs even when lanes were parked, so the run reads as done; a resume reopens it for the lanes that are not merged
+    // (round 14: "nothing to resume" right after the human had merged a conflicted lane by hand).
+    const left = unfinishedLanes(root);
+    if (!left.length) {
+      console.log("kcc: the run is DONE; nothing to resume");
+      return 0;
+    }
+    console.log(`kcc: the run closed with ${left.length} spec(s) not merged (${left.join(", ")}): reopening it for them`);
+    writeJson(join(root, "coordination", "run", "run.json"), { ...runJson, status: "running", state: "18", reason: `reopened for ${left.join(", ")}` });
   }
   const lanesStarted = existsSync(join(root, "coordination", "lanes.json"));
   if (!lanesStarted && Number(runJson?.state ?? 0) <= 9) {

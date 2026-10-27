@@ -60,7 +60,7 @@
       "secrets": "gitleaks",
       "dependencies": "osv-scanner",
       "sast": "semgrep",
-      "sast_runner": "local"
+      "sast_runner": "auto"
     },
     "sast_rules": "auto",
     "fail_on": {

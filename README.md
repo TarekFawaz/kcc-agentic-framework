@@ -29,6 +29,7 @@ generates adapter surfaces for Codex CLI, Claude Code, OpenCode, generic
 - [Quick Start](#quick-start)
 - [How To Use KCC](./docs/how-to-use-kcc.md)
 - [CLI Guide: install and use kcc](./CLI-Guide.md)
+- [Release Notes 0.6.0](./releasenotes-2026-10-27.md)
 - [Release Notes 0.5.0](./releasenotes-2026-10-04.md)
 - [kcc Command Reference](./docs/cli.md)
 - [KCC Tools Reference](./docs/kcc-tools-reference.md)
@@ -114,7 +115,7 @@ offline path.
 
 Step-by-step guide: [CLI-Guide.md](./CLI-Guide.md). Command reference:
 [docs/cli.md](./docs/cli.md). What changed in this release:
-[releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md).
+[releasenotes-2026-10-27.md](./releasenotes-2026-10-27.md).
 
 See [QUICKSTART.md](./QUICKSTART.md) for Claude Code, Codex CLI, OpenCode,
 generic/Ollama, and Mac/Linux paths.
@@ -243,13 +244,13 @@ framework.
 
 | Surface | Current state |
 |---|---|
-| Framework release | 0.5.1 (implements the KCC v0.4 operating-model specification) |
+| Framework release | 0.6.0 (implements the KCC v0.4 operating-model specification) |
 | Source agents | 18 |
 | Source skills | 25 |
 | Dialects | 26 |
-| Command line | `kcc` 0.5.1: Windows x64, macOS arm64/x64, Linux x64/arm64 |
+| Command line | `kcc` 0.6.0: Windows x64, macOS arm64/x64, Linux x64/arm64 |
 | Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama |
-| Structural validation | Passing with 0 errors and 0 warnings (PowerShell + bash, cell + repo modes) |
+| Structural validation | Passing with 0 errors (PowerShell + bash, cell + repo modes); the largest agents and skills carry line-budget warnings |
 | Current maturity | Public alpha / field-pilot reference implementation |
 
 The detailed implementation status lives in
@@ -310,6 +311,7 @@ cli/
 install.ps1
 install.sh
 CLI-Guide.md
+releasenotes-2026-10-27.md
 releasenotes-2026-10-04.md
 README.md
 QUICKSTART.md
@@ -359,6 +361,7 @@ under `docs/` instead of committing live harness folders at the root.
 | `cli/`                                 | The `kcc` command line (TypeScript, built into self-contained binaries with Bun).                   |
 | `install.ps1`, `install.sh`            | Script installers for Windows and for macOS/Linux (winget and Homebrew are the package-manager routes). |
 | `CLI-Guide.md`                         | Installing and using `kcc`, step by step, with troubleshooting.                                     |
+| `releasenotes-2026-10-27.md`           | Release 0.6.0: what is new, breaking changes, known limits.                                         |
 | `releasenotes-2026-10-04.md`           | Release 0.5.0: what is new, breaking changes, known limits.                                         |
 | `docs/cli.md`                          | `kcc` command reference: init, tailor, upgrade, doctor, run, limits, mcp, tool.                     |
 | `docs/tailoring.md`                    | How to fit the framework to a solution.                                                             |
@@ -450,6 +453,10 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
   outstanding; there is no npm package
 - turnkey deployments: the CI and deploy pipeline templates are starting
   points with placeholders
+- parallel items inside one wave in the fast track: waves run one after
+  another; the parallelism is across specs (worktree lanes)
+- a guard against two parallel lanes editing the same shared file: the
+  second merge conflicts and Needs attention asks for a merge by hand
 
 ## Learn More
 
@@ -457,6 +464,7 @@ This repo is intentionally honest about its gaps. The main deferred areas are:
 |---|---|
 | How to use KCC | [docs/how-to-use-kcc.md](./docs/how-to-use-kcc.md) |
 | Installing and using `kcc` | [CLI-Guide.md](./CLI-Guide.md) |
+| Release notes 0.6.0 | [releasenotes-2026-10-27.md](./releasenotes-2026-10-27.md) |
 | Release notes 0.5.0 | [releasenotes-2026-10-04.md](./releasenotes-2026-10-04.md) |
 | `kcc` command reference | [docs/cli.md](./docs/cli.md) |
 | Tailoring to a solution | [docs/tailoring.md](./docs/tailoring.md) |

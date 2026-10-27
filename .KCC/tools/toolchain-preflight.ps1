@@ -142,6 +142,13 @@ foreach ($spec in $toolList) {
 # a proxy or antivirus, no network) fails every image pull and build; one tiny pull here tells the verifier to defer those checks at
 # once instead of finding out after a 20-minute build attempt (round 12). Printed as `LIMIT <what>: <why>`; never a missing tool.
 function Test-DockerRegistry {
+    # The daemon first: `docker` on PATH with Docker Desktop (or the service) stopped is not a registry problem (round 14 named it one).
+    $daemon = ''
+    try { $daemon = [string](& docker info --format '{{.ServerVersion}}' 2>$null | Select-Object -First 1) } catch { $daemon = '' }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($daemon)) {
+        Write-Output 'LIMIT docker-daemon unreachable: docker is installed but its daemon is not running (start Docker Desktop or the docker service); image pulls, builds and compose up will fail until it is'
+        return
+    }
     $outFile = [IO.Path]::GetTempFileName(); $errFile = [IO.Path]::GetTempFileName()
     $rc = 1; $last = 'no output'
     try {

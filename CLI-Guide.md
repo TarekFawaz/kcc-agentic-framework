@@ -78,14 +78,14 @@ kcc version
 ```
 
 ```text
-kcc 0.5.1 (framework 0.5.1)
+kcc 0.6.0 (framework 0.6.0)
 ```
 
 ### Script installer options
 
 | Need | Windows | macOS / Linux |
 |--|--|--|
-| A specific version | `install.ps1 -Version 0.5.1` | `sh install.sh --version 0.5.1` |
+| A specific version | `install.ps1 -Version 0.6.0` | `sh install.sh --version 0.6.0` |
 | Another folder | `-InstallDir C:\tools\kcc` | `--dir /opt/kcc` |
 | Do not change PATH | `-NoPath` | (PATH is never changed) |
 | Install a binary you built | `-From cli\dist\kcc.exe` | `--from cli/dist/kcc` |

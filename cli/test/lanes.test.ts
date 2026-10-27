@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createLane, git, groupByOrder, isGitWorkspace, laneBranch, laneDir, laneMode, liveSyncLane, mergeLane, mergeWorktreeLane, mirrorRun, parseRoadmap, readySpecs, removeLane, scheduleSpecs, snapshot } from "../src/run/lanes";
+import { createLane, git, groupByOrder, isGitWorkspace, laneBranch, laneDir, laneMode, liveSyncLane, mergeLane, mergeWorktreeLane, mirrorRun, parseRoadmap, readySpecs, removeLane, scheduleSpecs, snapshot, unfinishedLanes } from "../src/run/lanes";
 import { applyPayload } from "../src/lock";
 import { isWindows } from "../src/platform";
 
@@ -302,6 +302,32 @@ describe("worktree lanes in a git workspace (round 13)", () => {
     expect(git(main, "status", "--porcelain").stdout.trim()).toBe(""); // no half-merged tree
     expect(git(main, "show", `${laneBranch("SPEC-003")}:README.md`).stdout).toBe("lane says"); // the branch has it for a merge by hand
     removeLane(main, lane.dir);
+  });
+
+  test("a lane merged by hand after a conflict is merged on resume: no driver run, the worktree goes, the lane file says merged (round 14)", async () => {
+    const lane = createLane(main, "SPEC-006", false);
+    put(lane.dir, "README.md", "lane six");
+    put(main, "README.md", "workspace six");
+    expect(mergeWorktreeLane(main, lane.dir, "SPEC-006").conflicts).toEqual(["README.md"]);
+    put(main, "coordination/lanes.json", JSON.stringify({ "SPEC-006": { status: "failed", dir: lane.dir, exit: 0, reason: "merge conflict: README.md" } }));
+    expect(unfinishedLanes(main)).toEqual(["SPEC-006"]);
+    // the human merges by hand, as NeedsAttention.md says
+    g("merge", "--no-commit", laneBranch("SPEC-006"));
+    put(main, "README.md", "both");
+    g("add", "-A"); g("commit", "-q", "-m", "SPEC-006: merge by hand");
+    put(main, "specs/IDEA-001-demo-Specs/ROADMAP.md", "# Roadmap\n\n## Execution Plan\n| Order | Spec | Delivery | Depends on | Lane | Est. tokens |\n|--|--|--|--|--|--|\n| 1 | [[SPEC-006-six/SPEC-006-six]] | six | None | A | n/a |\n");
+    put(main, "specs/IDEA-001-demo-Specs/SPEC-006-six/SPEC-006-six.md", "# spec");
+    g("add", "-A"); g("commit", "-q", "-m", "chore: roadmap six");
+    let driven = 0;
+    const code = await scheduleSpecs(main, { passthrough: ["--fasttrack", "--silent", "--assume"], maxParallel: 2, syncSeconds: 0.2, log: () => {}, runDriver: async () => { driven++; return 0; } });
+    expect(code).toBe(0);
+    expect(driven).toBe(0);
+    expect(JSON.parse(read(main, "coordination/lanes.json"))["SPEC-006"].status).toBe("merged");
+    expect(existsSync(lane.dir)).toBe(false);
+    expect(unfinishedLanes(main)).toEqual([]);
+    expect(read(main, "coordination/NeedsAttention.md")).toContain("## [decided] SPEC-006 | merge-conflict");
+    expect(read(main, "coordination/backchannel.jsonl")).toContain('"by":"hand"');
+    rmSync(join(main, "coordination", "NeedsAttention.md")); // not part of the later tests' clean-tree checks
   });
 
   test("two lanes that both add rows to a shared index both merge", () => {

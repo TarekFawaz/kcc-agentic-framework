@@ -211,6 +211,34 @@ What happens:
 4. Drafts are never auto-promoted.
 5. You review and explicitly move approved drafts into `.KCC/capabilities/`.
 
+## Scenario 4: Run Unattended (fast track)
+
+One command builds an idea end to end without a human at the keyboard:
+
+```text
+kcc run --input "<idea text, or a path to an idea file>" --fasttrack --silent --assume --depthlevel 2
+```
+
+What happens:
+
+1. The shared states run once (idea, briefs, architecture, the split into specs).
+2. One spec-writer and one planner per spec run at the same time.
+3. Each spec is built, tested and reviewed in its own git worktree lane
+   (`spec/SPEC-NNN`) as soon as the specs it depends on are merged.
+4. Every gate is answered by policy and written to
+   `coordination/NeedsAttention.md`; the live dashboard is at the address
+   `kcc run` prints.
+5. The run ends with exit 0, or 7 when `[open]` items are left. Read Needs
+   attention, fix the cause it names, then `kcc run --resume` (a run that
+   already closed reopens for the lanes that are not merged).
+
+A spec that ends `WAIVER_NEEDED` is done in code; what keeps the gate red is
+outside it (a tool, the environment). Fix that and re-verify with
+`kcc run --lane SPEC-NNN --from 16`, or accept the waiver. While the run is
+busy, `kcc hint "text"` steers the agents without stopping it. The full
+operator guide, with every outcome and what to do about it:
+[docs/unattended-runs.md](./unattended-runs.md).
+
 ## Skill Reference
 
 Use slash-form in harnesses that support slash commands. In Codex or OpenCode,

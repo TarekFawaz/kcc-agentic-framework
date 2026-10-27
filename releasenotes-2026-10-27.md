@@ -1,22 +1,68 @@
 ---
-title: KCC Release Notes (unreleased)
+title: KCC Release Notes 0.6.0 (2026-10-27)
 aliases:
-  - release-notes-unreleased
+  - release-notes-0.6.0
+  - releasenotes-2026-10-27
 tags:
   - framework/documentation
   - release-notes
 created: 2026-10-14
-updated: 2026-10-14
-version: unreleased
-status: draft
+updated: 2026-10-27
+version: 0.6.0
+status: active
 ---
 
-# KCC Release Notes - unreleased
+# KCC Release Notes - 0.6.0 (2026-10-27)
 
-Cheaper model tiers, a developer fast path, and an output-economy control.
-Everything is additive: a run that uses none of the new flags behaves as before.
+Release 0.6.0: cheaper model tiers, a developer fast path (`--fasttrack`), git worktree lanes that build independent
+specs at the same time, red gates that are routed to their owner instead of looped, unattended runs that answer
+every gate by policy and write `NeedsAttention.md`, a live dashboard, and `kcc hint`. Everything is additive: a run that
+uses none of the new flags behaves as before. Upgrade steps: *Updating an existing workspace*, below.
 
 ## What changed
+
+### Round 14 fixes: a closed run resumes, a waiver is never hidden, Docker limits say what they are
+
+Test round 14 (fast track, depth 2, the first on the 0.6.0 tree) approved two specs that were built at the same time in
+git worktree lanes, the first approvals in any round. It also found the defects below. Each is fixed; the ones in the
+drivers and the scheduler are covered by a test.
+
+- **A waiver is never hidden by an earlier deferral.** When TEST had accepted a deferred check (exit 3) and REVIEW then
+  ended `WAIVER_NEEDED`, both drivers took the "deferral accepted earlier" shortcut: the lane exited 0 with no waiver
+  gate, no `## [decided] ... | waiver` item and no `WAIVER NEEDED` line. The shortcut now excludes `REVIEW-004`, so the
+  waiver gate opens, and the closing lines print the waiver (the later verdict of a spec replaces its deferral).
+- **A closed run resumes for the lanes that are not merged.** CLOSE is one state and runs even when the scheduler
+  parked specs, so `kcc run --resume` answered "the run is DONE; nothing to resume" right after the merge conflict it
+  had asked you to fix. A resume now reopens a done run when `coordination/lanes.json` lists a lane that is failed,
+  parked or still running, and the closing state runs again at the end.
+- **A lane merged by hand is merged.** After a conflict you merge `spec/SPEC-NNN` yourself; the scheduler now sees the
+  branch in `HEAD`, marks the lane merged, removes the worktree and records a `decided` item, instead of building the
+  spec again in a new lane. The attention item says that the lane's review and test results stay on its branch until
+  then, and that every conflict marker must be resolved before the commit.
+- **Preflight names a stopped daemon.** `LIMIT docker-daemon unreachable` when `docker` is on PATH but the daemon is
+  not running (Docker Desktop closed, the service stopped). Before, it was reported as a registry problem and the
+  waivers cited the wrong cause.
+- **SAST runs on Windows by default.** `quality.scanners.sast_runner` has a new default, `auto`: semgrep or opengrep
+  on PATH, else the `semgrep/semgrep` image when Docker is present (with `KCC_CA_BUNDLE` mounted for a TLS-inspecting
+  proxy), else deferred. Round 14 deferred QG-SAST on every spec until the runner was switched by hand.
+- **Static rules understand multi-stage Dockerfiles.** QG-STATIC skips a `FROM <stage>` that names a stage declared
+  earlier in the same file, so a pinned-tag rule no longer flags `FROM toolchain AS build`. The architect profile says
+  how to write the rule (digests pass, hyphenated aliases).
+- **Dashboard: one agent is visible.** The concurrency strip drew a single agent under 3 px when the peak was 8; the
+  minimum is 5 px now and the strip is darker.
+- **No project names in the framework.** The review template's example image is `app-web:local`; nothing under
+  `.KCC/`, `cli/` or `docs/` names a test project.
+
+### Steer a running session, and survive a usage limit in VS Code
+
+- **`kcc hint "text"` and `/hint`** record guidance for the running session and every subagent: delivered on the next
+  tool call through hooks, `--to all|main|subagents|<agent>`, `--expires <minutes>`, `--list`, `--clear H-NNN`. On
+  Codex or OpenCode the agent reads `kcc hint --pending`. A hint never waives a gate, a safety rule or an earlier
+  instruction. Protocol: `.KCC/kernel/protocols/hints.md`.
+- **A usage limit in a session you started yourself** (VS Code, plain `claude`): the `StopFailure` hook runs
+  `kcc-limit-hook`, which reads the reset time from the transcript, writes a restore point and arms `kcc-limit-watch`;
+  the same session is resumed after the reset. `kcc doctor --fix-hooks` adds the hooks to an existing
+  `.claude/settings.json`; `kcc limits` shows the last limit and its reset time.
 
 ### Round 12 fixes: a red gate is routed, not looped
 
@@ -394,6 +440,36 @@ writes only what a later agent or a check reads, and the split names build-time 
 - **Less harness time under fast track.** Single-agent states (IDEA, ARCH, SPECS, IMPLEMENT, TEST,
   REVIEW) run as the agent itself (`claude --agent`, `run.fasttrack_direct` now defaults to true);
   hand-backs are a 10-line summary plus a file list.
+
+## Breaking changes
+
+None in the files a run reads or writes. Three behaviours differ:
+
+- `quality.scanners.sast_runner` defaults to `auto` (was `local`): a machine without semgrep but with Docker now runs
+  SAST through the image instead of deferring it. Set `local` to keep the old behaviour.
+- `kcc run --resume` on a done run that still has unmerged lanes reopens the run; it used to print "nothing to resume".
+- The review verdict set has `WAIVER_NEEDED` (see above). Anything that reads `review.md` must accept it.
+
+## Known limits
+
+- **Two parallel lanes can edit the same shared files.** In round 14, SPEC-003 and SPEC-004 both patched the inherited
+  live-stack probe and its tests (each lane saw the workspace tests fail for a reason outside its plan), and the
+  second merge conflicted. The wave-scope check guards a lane against its own plan, not against a sibling lane. Until a
+  serialized workspace-health step exists, run the build lanes with `--max-parallel 1` when the inherited tests are
+  red, or merge by hand as Needs attention says.
+- **Waves inside one spec run one after another in the fast track.** The driver dispatches one implementer per wave,
+  and the items of a wave are done by that implementer in turn. The time is saved across specs (lanes); parallel items
+  inside a wave are planned for a later release.
+- **The implementer stays on the balanced tier.** Routing runs per backlog item at plan time and per state at dispatch,
+  but the implementer's default is `balanced` (round 9: the fast tier wrote weaker code) and only `docs` and `scaffold`
+  items on a common domain step down, so a run on Claude shows Sonnet for every implementer. `.KCC/model-overrides`
+  changes that per agent.
+- **The spec file's `status:` is not changed by the driver** after a review. The verdict lives in `review.md`, which
+  the dashboard reads.
+- Prices for Haiku 5.5 and Sonnet 5.5 are not measured (a Claude Code 2.1.x fallback price), so every reported cost is
+  an estimate (`models.json -> tier_cost_observed`).
+- The macOS and Linux binaries are built and smoke-tested by the release workflow and have not been used on a real
+  project.
 
 ## Updating an existing workspace
 

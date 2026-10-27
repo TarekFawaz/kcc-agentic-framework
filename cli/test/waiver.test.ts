@@ -120,6 +120,24 @@ const reviewMd = (verdict: string, commit: string): string => `---\nspec-id: SPE
 
 for (const [dname, run] of drivers) {
   describe(`a gate no code change can turn green is a waiver, not a loop (${dname})`, () => {
+    test("a deferral accepted at TEST (exit 3) does not hide the waiver at REVIEW: the waiver gate still opens (round 14, SPEC-001)", () => {
+      const root = scenario();
+      putBug(root, "Bug-001", "verified");
+      stubFile(root, "verdict", "WAIVER_NEEDED");
+      stubFile(root, "check-traceability.rc", "3");
+      stubFile(root, "quality-gate.rc", "0");
+      stubFile(root, "quality-gate.json", GREEN_QG);
+      const r = run(root, ["--resume", "--from", "16", "--until", "17"]);
+      expect(r.status).toBe(0);
+      expect(calls(root, 19)).toBe(0);
+      const d = events(root).filter((e) => e.kind === "deferral-accepted");
+      expect(d.map((e) => e.payload.gate)).toEqual(["quality-deferred-on-exit-3", "waiver"]);
+      expect(d[1].payload.verdict).toBe("WAIVER_NEEDED");
+      expect(events(root).some((e) => e.kind === "human-gate-triggered" && e.payload.gate === "waiver")).toBe(true);
+      expect(r.stdout).toContain("WAIVER NEEDED, NOT A PASS");
+      expect(text(root, "coordination/NeedsAttention.md")).toContain("## [decided] SPEC-001 | waiver");
+    });
+
     test("WAIVER_NEEDED with every bug closed: TEST once, REVIEW once, no FIX; the spec closes as WAIVER_NEEDED by policy and the message says what a human does", () => {
       const root = scenario();
       putBug(root, "Bug-001", "verified");

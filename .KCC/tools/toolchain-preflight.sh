@@ -139,6 +139,11 @@ done
 # once instead of finding out after a 20-minute build attempt (round 12). Printed as `LIMIT <what>: <why>`; never a missing tool.
 probe_docker_registry() {
   local out rc=0 t=()
+  # The daemon first: `docker` on PATH with Docker Desktop (or the service) stopped is not a registry problem (round 14 named it one).
+  if ! docker info --format '{{.ServerVersion}}' >/dev/null 2>&1; then
+    echo 'LIMIT docker-daemon unreachable: docker is installed but its daemon is not running (start Docker Desktop or the docker service); image pulls, builds and compose up will fail until it is'
+    return 0
+  fi
   command -v timeout >/dev/null 2>&1 && t=(timeout 90)
   out="$("${t[@]}" docker pull -q hello-world:latest 2>&1)" || rc=$?
   if [[ $rc -ne 0 ]]; then

@@ -368,6 +368,14 @@ export function liveSyncAllLanes(root: string): void {
   for (const e of readdirSync(dir, { withFileTypes: true })) if (e.isDirectory()) liveSyncLane(root, join(dir, e.name), e.name);
 }
 
+/** Specs whose lane is not merged: failed, parked as needs-attention, or still marked running (round 14: a closed run must reopen for them). */
+export function unfinishedLanes(root: string): string[] {
+  const state = readJson<Record<string, LaneState>>(lanesFile(root)) ?? {};
+  return Object.entries(state)
+    .filter(([, l]) => l.status === "failed" || l.status === "needs-attention" || l.status === "running")
+    .map(([s]) => s);
+}
+
 export function lanesFile(root: string): string {
   return join(root, "coordination", "lanes.json");
 }
@@ -796,6 +804,24 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
     return r.status;
   });
 
+  // A lane that stopped on a merge conflict and was merged by hand (its branch is in HEAD now) is merged: nothing to resume and
+  // nothing to rebuild (round 14: without this the scheduler built SPEC-004 a second time).
+  if (!o.fanout && isGitWorkspace(root)) {
+    for (const [spec, lane] of Object.entries(state)) {
+      if (lane.status !== "failed" || !/merge conflict/.test(lane.reason ?? "")) continue;
+      const branch = laneBranch(spec);
+      if (git(root, "merge-base", "--is-ancestor", branch, "HEAD").status !== 0) continue;
+      lane.status = "merged";
+      lane.exit = 0;
+      lane.finished = new Date().toISOString();
+      delete lane.reason;
+      if (existsSync(lane.dir)) removeLane(root, lane.dir);
+      emit(root, "lane-merged", spec, { files: 0, removed: 0, events: 0, mode: "worktree", by: "hand" });
+      if (o.passthrough.includes("--silent")) appendAttention(root, { spec, gate: "merge-conflict", status: "decided", decided: `${branch} was merged by hand; the lane is merged and the run goes on`, why: "the lane's branch is in HEAD", todo: "none" });
+      log(`kcc: ${spec}: ${branch} was merged by hand; the lane is merged`);
+    }
+    save();
+  }
   // A lane that stopped earlier (gate, failure, parked as needs-attention) is resumed, not recreated. A spec parked in this very
   // run (o.hold, from the fan-out phase) stays parked: retrying it at once would only repeat the failure.
   for (const [spec, lane] of Object.entries(state)) {
@@ -862,7 +888,7 @@ export async function scheduleSpecs(root: string, o: ScheduleOptions): Promise<n
           lane.status = "failed";
           lane.reason = `merge conflict: ${m.conflicts.join(", ")}`;
           const todo = worktree
-            ? `in the workspace run: git merge ${laneBranch(spec)} ; resolve the files, commit, then: kcc run --resume`
+            ? `in the workspace run: git merge ${laneBranch(spec)} ; resolve every conflict marker, commit, then: kcc run --resume (the lane's review and test results stay on that branch until then)`
             : `compare each file with ${laneDir(root, spec)}/<file>, merge by hand, then: kcc run --resume`;
           if (silent) appendAttention(root, { spec, gate: "merge-conflict", status: "open", decided: worktree ? `the merge of ${laneBranch(spec)} was aborted; the workspace is unchanged and the lane's work is on its branch` : "kept the workspace copy of the files both sides changed; the lane is kept", why: `the lane and the workspace both changed: ${m.conflicts.join(", ")}`, todo, links: laneDir(root, spec) });
           emit(root, "lane-blocked", spec, { reason: lane.reason });
