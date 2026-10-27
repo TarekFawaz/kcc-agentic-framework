@@ -44,8 +44,19 @@ jobs:
           cat /tmp/sync.out
           echo "--- generated after direct sync"; ls .claude/agents | wc -l
           echo "--- trace tail"; tail -n 60 /tmp/sync.trace | cut -c1-300
-          echo "--- trace: errors and warnings"; grep -n -i "error\|warning\|No such\|command not found\|syntax" /tmp/sync.trace | head -40 | cut -c1-300
-          echo "--- cache dir"; ls -la "$(grep -o 'CACHE=[^ ]*' /tmp/sync.trace | head -1 | cut -d= -f2-)" 2>/dev/null | head -20 || true
+          echo "--- trace: errors and warnings"; grep -n -i "error\|warning\|No such\|command not found\|syntax" /tmp/sync.trace | head -10 | cut -c1-300
+          echo "--- trace: first load_meta"; grep -n -A25 "load_meta a0" /tmp/sync.trace | head -60 | cut -c1-300
+          echo "--- trace: SEP"; grep -n "SEP=" /tmp/sync.trace | head -5 | cat -v | cut -c1-200
+          echo "--- parse.awk on one agent, meta as cat -v"
+          sed -n "/^cat > \"\$CACHE\/parse.awk\" <<'AWK'\$/,/^AWK\$/p" .KCC/tools/sync-adapters.sh | sed '1d;$d' > /tmp/parse.awk
+          wc -l /tmp/parse.awk
+          awk -v META=/tmp/a0.meta -v BODY=/tmp/a0.body -v SEP="$(printf '\001')" -v FNAME=architect -f /tmp/parse.awk .KCC/capabilities/agents/architect.md; echo "awk exit $?"
+          ls -la /tmp/a0.meta /tmp/a0.body 2>&1
+          head -c 600 /tmp/a0.meta | cat -v; echo
+          echo "--- bash 3.2 read with IFS=\\001"
+          SEP="$(printf '\001')"; printf 'k1\001s\001v1\nk2\001l\001v2\n' > /tmp/t.meta
+          while IFS="$SEP" read -r k t v; do echo "k=[$k] t=[$t] v=[$v]"; done < /tmp/t.meta
+          while IFS="$SEP" read -r k t v; do echo "meta k=[$k] t=[$t] v=[${v:0:40}]"; done < /tmp/a0.meta | head -8
 
       - name: tailor and doctor
         shell: bash
