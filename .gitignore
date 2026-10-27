@@ -142,3 +142,4 @@ TestResults/*
 migrations/*
 /CLAUDE.md
 /AGENTS.md
+docs/launch/*
