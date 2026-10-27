@@ -252,7 +252,9 @@ describe("QG-DEPS scans the lockfiles and is never a pass when it scanned nothin
       expect(r.exit, why(s, r)).toBe(0);
     }
     expect(args()).toMatch(/-L \S*package-lock\.json/);
-    expect(args()).not.toContain("-r"); // osv-scanner 2.x stops with exit 127 when -L and -r are combined (round 12)
+    // osv-scanner 2.x stops with exit 127 when -L and -r are combined (round 12); as a token, not a substring: the temp
+    // folder's random name can contain "-r" (the second v0.6.0 release run: /tmp/kcc-qgstatic-rZKKll)
+    expect(args().split(/\s+/)).not.toContain("-r");
     for (const [s, r] of await both("deps", osvEnv("findings"))) {
       const d = find(r, "QG-DEPS");
       expect(d[0]!.status, why(s, r)).toBe("fail");
