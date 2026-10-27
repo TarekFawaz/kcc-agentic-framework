@@ -1,0 +1,59 @@
+# Manual diagnostic: repeats the release smoke on one runner with every intermediate state printed.
+# Run it from the Actions tab (or the API) when a smoke job fails; it changes nothing in the repository.
+name: smoke-debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: runner (macos-latest, ubuntu-latest)
+        default: macos-latest
+      version:
+        description: release tag to install (vX.Y.Z)
+        default: v0.6.0
+
+jobs:
+  debug:
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Tools on this runner
+        run: |
+          uname -a; bash --version | head -1; awk --version 2>&1 | head -1 || awk -W version 2>&1 | head -1; sed --version 2>&1 | head -1; which awk sed grep find
+
+      - name: Install kcc
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ inputs.version }}/install.sh" | sh -s -- --version "${{ inputs.version }}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: init
+        shell: bash
+        run: |
+          mkdir work && cd work
+          kcc init claude; echo "init exit $?"
+          echo "--- sources"; ls .KCC/capabilities/agents | wc -l; ls .KCC/capabilities/agents
+          echo "--- generated"; ls .claude/agents | wc -l; ls .claude/agents
+          echo "--- doctor after init"; kcc doctor || true
+
+      - name: sync-adapters.sh directly, traced
+        shell: bash
+        run: |
+          cd work
+          rm -rf .claude/agents
+          bash -x .KCC/tools/sync-adapters.sh --harness claude --repo-root "$PWD" > /tmp/sync.out 2> /tmp/sync.trace; echo "sync exit $?"
+          cat /tmp/sync.out
+          echo "--- generated after direct sync"; ls .claude/agents | wc -l
+          echo "--- trace tail"; tail -n 60 /tmp/sync.trace | cut -c1-300
+          echo "--- trace: errors and warnings"; grep -n -i "error\|warning\|No such\|command not found\|syntax" /tmp/sync.trace | head -40 | cut -c1-300
+          echo "--- cache dir"; ls -la "$(grep -o 'CACHE=[^ ]*' /tmp/sync.trace | head -1 | cut -d= -f2-)" 2>/dev/null | head -20 || true
+
+      - name: tailor and doctor
+        shell: bash
+        run: |
+          cd work
+          kcc tailor --yes; echo "tailor exit $?"
+          echo "--- sources after tailor"; ls .KCC/capabilities/agents | wc -l; ls .KCC/capabilities/agents
+          echo "--- generated after tailor"; ls .claude/agents | wc -l; ls .claude/agents
+          echo "--- registry"; ls .KCC; cat .KCC/tailor.json 2>/dev/null || true
+          kcc doctor || true
+          kcc validate || true
