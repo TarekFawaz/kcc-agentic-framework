@@ -35,9 +35,33 @@ jobs:
           echo "--- generated"; ls .claude/agents | wc -l; ls .claude/agents
           echo "--- doctor after init"; kcc doctor || true
 
+      - name: bash field splitting probes (control-character IFS)
+        shell: bash
+        run: |
+          set +e +o pipefail
+          echo "locale:"; locale
+          probe() {
+            echo "--- $1 (LC_ALL=${LC_ALL:-unset})"
+            local a b c line s x n
+            IFS=$'\001' read -r a b c <<< $'x\001y\001z'; echo "read IFS=\\001: a=[$a] b=[$b] c=[$c]"
+            IFS=$'\037' read -r a b c <<< $'x\037y\037z'; echo "read IFS=\\037: a=[$a] b=[$b] c=[$c]"
+            IFS=$'\t' read -r a b c <<< $'x\ty\tz'; echo "read IFS=tab: a=[$a] b=[$b] c=[$c]"
+            IFS='|' read -r a b c <<< 'x|y|z'; echo "read IFS=|: a=[$a] b=[$b] c=[$c]"
+            s=$'x\037y\037z'; n=0; ( IFS=$'\037'; for x in $s; do n=$((n+1)); echo "  word $n=[$x]"; done )
+            line=$'k\001t\001v'; echo "expansion: k=[${line%%$'\001'*}] rest=[${line#*$'\001'}]"
+            s=$'x\037y'; echo "expansion LSEP: first=[${s%%$'\037'*}] rest=[${s#*$'\037'}]"
+            printf 'k\001t\001v\n' | { IFS=$'\001' read -r a b c; echo "read from pipe: a=[$a] b=[$b] c=[$c]"; }
+            local -a arr=(); IFS=$'\037' read -r -a arr <<< $'p\037q\037r'; echo "read -a: n=${#arr[@]} [${arr[0]}] [${arr[1]}]"
+          }
+          probe "runner default"
+          LC_ALL=C probe "C locale"
+          LC_ALL=C bash -c 'IFS=$'"'"'\001'"'"' read -r a b c <<< $'"'"'x\001y\001z'"'"'; echo "fresh bash LC_ALL=C: a=[$a] b=[$b] c=[$c]"'
+          echo "bash: $BASH_VERSION"
+
       - name: sync-adapters.sh directly, traced
         shell: bash
         run: |
+          set +o pipefail
           cd work
           rm -rf .claude/agents
           bash -x .KCC/tools/sync-adapters.sh --harness claude --repo-root "$PWD" > /tmp/sync.out 2> /tmp/sync.trace; echo "sync exit $?"
