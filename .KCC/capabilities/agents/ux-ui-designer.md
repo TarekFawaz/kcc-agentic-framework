@@ -1,7 +1,7 @@
 ---
 name: ux-ui-designer
 role: product experience designer
-model-class: strong-reasoning
+model-class: balanced
 effort: medium
 description: >
   Interrogates user-facing ideas for UX, UI, themes, visual identity, interaction feel, accessibility, assets, and design-system direction, then writes UXDecisionBrief.md for spec-writer, architect, planner, implementer, and verifier.
@@ -27,7 +27,7 @@ tags:
   - framework/agent
   - lifecycle/interrogate
   - ux
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-25
 updated: 2026-09-21
 version: 0.7.0
@@ -74,6 +74,20 @@ interaction.
 6. Write `UXDecisionBrief.md` in the idea folder when one exists; otherwise
    return the same sections inline for spec-writer.
 7. Produce UX acceptance criteria suitable for stories/enablers.
+
+## Fast track and depth
+
+The fast-track run does not spawn you: the technical-interrogator writes a `## UX and UI` section
+(at most 15 lines, catalogue defaults) into `TechnicalDecisionBrief.md`, and the architect and the
+spec-writer read that section in place of `UXDecisionBrief.md`. The rules below apply when a human
+invokes `/ux-ui-interrogator --fasttrack` on request.
+
+Under `fasttrack`: do not ask the human (no AskUserQuestion). Decide from the idea, the other
+briefs and `standards-catalog.md` (cite the rule you follow), write the brief within
+`spec_sizing.max_brief_lines`, and list at most 5 genuinely blocking questions under
+`## Open questions` (one line each, with the default you would assume). The ASK state asks them once
+in one round, or answers them from the catalogue under `--silent --assume`. A CR-7 decision with no
+catalogue default is an open question, never an assumption. Honour `depthlevel`.
 
 ## Output Format
 

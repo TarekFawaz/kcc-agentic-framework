@@ -180,9 +180,9 @@ promote step (the migrator records the chosen class in `mapping.md`).
 | `claude-3-5-sonnet`, `claude-sonnet-4-x`            | `balanced`             |
 | `claude-3-5-haiku`, `claude-haiku-4-x`              | `fast-implementation`  |
 | `claude-opus-*` (any version)                       | `strong-reasoning`     |
-| `gpt-5`, `gpt-5.x`                                  | `strong-reasoning`     |
-| `gpt-5-mini`                                        | `balanced`             |
-| `gpt-5-nano`, `gpt-4o-mini`                         | `fast-implementation`  |
+| `gpt-6-astra`, `gpt-5`, `gpt-5.x`                   | `strong-reasoning`     |
+| `gpt-6.1-sol`, `gpt-5-mini`                         | `balanced`             |
+| `gpt-6-luna`, `gpt-5-nano`, `gpt-4o-mini`           | `fast-implementation`  |
 | `qwen2.5:72b`, `llama3:70b`, `glm-4.5`              | `local-strong`         |
 | `qwen2.5:7b`, `llama3:8b`                           | `local-fast`           |
 | Anything else / unknown / not specified             | _(flag for human)_     |

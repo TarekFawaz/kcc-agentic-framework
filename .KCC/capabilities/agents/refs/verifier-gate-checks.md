@@ -27,7 +27,12 @@ Full check detail for verifier Process steps 9-9d.
    - Every spec folder under verification has an `arch.md` that meets the
      **content bar**: at least one embedded ```mermaid``` block (not just
      links) plus the per-spec design narrative. A link-only `arch.md` or a
-     sub-1 KB stub is **CHANGES_NEEDED**.
+     sub-1 KB stub is **CHANGES_NEEDED**. Full lifecycle only: under
+     `fasttrack` no spec `arch.md` exists (the note's `## Architecture
+     references` and `architecture.md` are the design inputs), and a missing
+     or placeholder `arch.md` is never a finding; the same holds for
+     standalone `c4-*.md` files and `flowcharts/`, which that profile does not
+     write.
    - Architecture diagrams are **named `.md` files with embedded inline
      ```mermaid``` blocks** (e.g. `architecture/c4-context.md`,
      `architecture/flowcharts/*.md`, `architecture/dfds/*.md`,

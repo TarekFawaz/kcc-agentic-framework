@@ -1,10 +1,13 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse, target } from "../args";
+import { mergeClaudeHooks } from "./hooks";
 import { drift, readLock } from "../lock";
 import { payloadVersion } from "../payload";
 import { findRoot, isWindows, powershellExe, which } from "../platform";
 import { readSettings } from "../settings";
+import { loadRegistry } from "../run/router";
+import { registryAge } from "./models";
 import { CLI_VERSION } from "../version";
 
 interface Finding {
@@ -21,7 +24,7 @@ function count(dir: string, ext: string): number {
 
 /** Health check of a KCC workspace. Output follows the tool contract; exit 1 when something must be fixed. */
 export function doctor(argv: string[]): number {
-  const { positionals, values } = parse(argv, ["json"], ["dir"]);
+  const { positionals, values } = parse(argv, ["json", "fix-hooks"], ["dir"]);
   const start = target(positionals, values.dir, false).dir ?? process.cwd();
   const root = findRoot(start);
   const findings: Finding[] = [];
@@ -43,6 +46,12 @@ export function doctor(argv: string[]): number {
       if (lock.payload_version !== payloadVersion) add("DOCTOR-VERSION-001", "warning", ".KCC/kcc.lock", `.KCC/ is at ${lock.payload_version}, this CLI ships ${payloadVersion}. Run: kcc upgrade`);
       const d = drift(root);
       for (const f of d.missing) add("DOCTOR-DRIFT-001", "error", `.KCC/${f}`, "framework file is missing. Run: kcc upgrade");
+      {
+        // The model registry goes stale: a newer generation ships and the pinned ids fall behind.
+        const reg = loadRegistry(root);
+        if (!reg) add("DOCTOR-MODELS-001", "warning", ".KCC/kernel/models.json", "no model registry. Run: kcc upgrade");
+        else if (registryAge(reg) > 30) add("DOCTOR-MODELS-002", "warning", ".KCC/kernel/models.json", `model registry last verified ${registryAge(reg)} days ago. Run: kcc models --refresh`);
+      }
       if (d.modified.length) add("DOCTOR-DRIFT-002", "warning", ".KCC", `${d.modified.length} framework file(s) edited locally (kept on upgrade): ${d.modified.slice(0, 5).join(", ")}${d.modified.length > 5 ? ", ..." : ""}`);
     }
 
@@ -52,9 +61,16 @@ export function doctor(argv: string[]): number {
     if (existsSync(claudeAgents) && count(claudeAgents, ".md") !== agents) add("DOCTOR-SYNC-001", "error", ".claude/agents", `${count(claudeAgents, ".md")} generated agents but ${agents} sources. Run: kcc sync`);
 
     const claudeSettings = join(root, ".claude", "settings.json");
+    if (existsSync(claudeSettings) && values["fix-hooks"] === true) {
+      const added = mergeClaudeHooks(root, true);
+      console.log(added.length ? `Added to .claude/settings.json: ${added.join("; ")}` : "Claude Code hooks already match the template.");
+    }
     if (existsSync(claudeSettings)) {
       const text = readFileSync(claudeSettings, "utf8");
       if (!text.includes("kcc-limit-guard")) add("DOCTOR-HOOK-001", "warning", ".claude/settings.json", "the usage-limit guard hook is not configured. Merge the PreToolUse and statusLine entries from .KCC/kernel/templates/claude-settings.json");
+      if (!text.includes("kcc-limit-hook")) add("DOCTOR-HOOK-004", "warning", ".claude/settings.json", "the StopFailure hook is not configured, so a usage limit hit in the VS Code extension or a plain session is not resumed. Run: kcc doctor --fix-hooks");
+      if (!text.includes("kcc-hint")) add("DOCTOR-HOOK-005", "warning", ".claude/settings.json", "the hint hooks are not configured, so `kcc hint` cannot reach a running session. Run: kcc doctor --fix-hooks");
+      if (text.includes("%CLAUDE_PROJECT_DIR%")) add("DOCTOR-HOOK-006", "warning", ".claude/settings.json", "a hook uses a %CLAUDE_PROJECT_DIR% path that Git Bash does not expand, so it fails on every session (the token-actuals hook). Run: kcc doctor --fix-hooks");
       if (!text.includes("check-impl-lock")) add("DOCTOR-HOOK-002", "warning", ".claude/settings.json", "the implementation-lock hook is not configured. Merge the PreToolUse entry from .KCC/kernel/templates/claude-settings.json");
     }
 

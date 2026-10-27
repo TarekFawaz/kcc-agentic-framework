@@ -5,7 +5,7 @@ description: >
   Run the architecture-critic over the produced `architecture/` artifacts and
   print a semantic conformance verdict (CONFORMANT / DRIFT) plus specific drift
   findings and required fixes. Read-only and cheaper than the architect; it
-  reviews, the architect fixes. Usage: /architecture-review
+  reviews, the architect fixes. Usage: /architecture-review [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - architecture-critic
@@ -34,6 +34,10 @@ Run a semantic conformance review of the architect's output via the
 catches drift (thin `architecture.md`, `.mmd`/`diagrams/` files, missing or
 boilerplate supporting docs, degraded/placeholder design) and pushes the
 architect back to standard.
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: one lean pass. Read `architecture.md` (its `## Decisions` table stands in for ADRs) and `quality-gates.md` only; no spec `arch.md` exists in that profile, so never ask for one. Return the verdict and the drift findings in 150 words or less. If it says DRIFT the architect fixes those findings once; there is no re-review loop (the verifier's QG-ARCH-CONFORMANCE check still compares the code to the design).
 
 ## Steps
 

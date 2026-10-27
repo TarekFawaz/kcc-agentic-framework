@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-implement
 description: >
- Implement a spec, wave (`plan.md -> ## Waves`), or backlog item (Story/Enabler/Bug) from its approved plan, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001|Bug-001]
+ Implement a spec, wave (`plan.md -> ## Waves`), or backlog item (Story/Enabler/Bug) from its approved plan, writing code under `src/IDEA-{ID}-{slug}/`, and turning the planner's atomic test cases into real tests via the `testing-unit`, `testing-integration`, and optionally `testing-performance` / `testing-security` dialects. Usage: /spec-implement SPEC-003 [--wave N|Story-001|Enabler-001|Bug-001] [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - implementer
@@ -27,6 +27,20 @@ status: active
 
 Implement spec <ARGS>.
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: skip step 4 (the `fasttrack-approved` backchannel event opens `check-impl-lock`), and the butler and token-guard. The preflight (5b) and all other steps stay.
+
+`--bugs`: the fix pass of a run (the FIX state, after TEST or REVIEW sent the spec back). Scope is every Bug item in the
+spec `Backlog/` whose Status is `open` or `fixing` (never `blocked`: that Bug waits for a human ruling), plus any exit-check violation quoted in the prompt. Per Bug: write
+the regression test named in its table first (red), fix the files under its `## Impacted Files`, make it green, set
+its Status to `fixed`. A violation that names no Bug (a test ID nothing references, a stale assertion) gets the same
+treatment: test first, then the fix. Touch no file the Bug items and violations do not name. Wave scope checks do not
+apply to this pass; the verifier re-tests afterwards. The Regression test cell must name a Test ID that `plan.md ->
+## Atomic test cases` already lists. A Bug no test can express (a missing document, a gate) says `n/a (<reason>)`;
+never invent a Test ID the plan does not have. A Bug you may not fix (it needs a ruling) gets `Status: blocked` and one
+`## Ruling needed` section (blocker, options, recommended option); do not leave it `open` and do not write a note per retry.
+
 ## Steps
 
 1. Parse the SPEC-ID and optional scope from arguments. Scope may be the
@@ -40,8 +54,9 @@ Implement spec <ARGS>.
    `/spec-plan SPEC-{ID}` first.
 3. Verify `SPEC-{ID}-{slug}.md`, `Backlog/*.md`, and `plan.md -> ## Waves`
    exist (legacy v5: `backlog.md` / `parallelization.md` fallback) and the
-   plan maps changes to item keys.
-4. Verify a post-plan `/token-estimate SPEC-{ID}` approval is recorded in
+   plan maps changes to item keys. Every spec in its `Depends on` must have an
+   APPROVED `review.md`; otherwise this spec waits (its plan may already be done).
+4. (Skip under `--fasttrack`.) Verify a post-plan `/token-estimate SPEC-{ID}` approval is recorded in
    the session trace or `ROADMAP.md` Token Plan for the implement stage. Valid
    approvals are explicit human approval or AutoPolicy `auto-approved` with
    cumulative hosted-model spend still inside the approved budget cap. If

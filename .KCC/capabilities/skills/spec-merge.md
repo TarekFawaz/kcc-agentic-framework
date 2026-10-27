@@ -47,7 +47,7 @@ Parse the SPEC-ID (required). Accept `SPEC-{ID}` or `SPEC-{ID}-{slug}`.
 1. **Locate the spec folder.** Resolve to
    `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/`. Abort if not found.
 2. **Require an approved review.** `review.md` must exist with verdict
-   `APPROVED`. `CHANGES_NEEDED`, `QUALITY_DEFERRED`, `TOOLCHAIN_DEFERRED`, or
+   `APPROVED`. `CHANGES_NEEDED`, `WAIVER_NEEDED`, `QUALITY_DEFERRED`, `TOOLCHAIN_DEFERRED`, or
    no review -> refuse with
    `spec-merge: SPEC-{ID} has no APPROVED review - run /spec-test first`.
 3. **Require a git repo.** `repo-bootstrap -Json` must report `git: repo`.

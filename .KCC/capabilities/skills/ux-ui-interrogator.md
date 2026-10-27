@@ -27,6 +27,10 @@ status: active
 
 Interrogate user experience for: <ARGS>
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: run only when `auto` found a UX trigger the human must decide; keep the brief to decisions.
+
 ## Steps
 
 1. Resolve `<ARGS>` to an idea folder, spec request, or backlog item.

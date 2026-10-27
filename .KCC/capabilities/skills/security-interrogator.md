@@ -27,12 +27,18 @@ status: active
 
 Interrogate security concerns for: <ARGS>
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: still runs when CR-7 triggers it. Ask only blocking questions; never assume security-class answers.
+
 ## Steps
 
 1. Resolve `<ARGS>` to an idea folder, technical brief, or spec request.
 2. Delegate to **security-analyst**.
 3. Require `SecurityDecisionBrief.md` when data, identity, integration,
-   public exposure, or compliance risk exists.
+   public exposure, or compliance risk exists. When users or data sit in the
+   EU, GCC or US, the brief names `privacy-and-cybersecurity-regions` and the
+   regions in scope; that protocol is selected from context, not always-on.
 4. Pass candidate guardrails and quality gates to architect and spec-writer.
 5. If confidence is below the active threshold, invoke `/critical-human-gate`.
 

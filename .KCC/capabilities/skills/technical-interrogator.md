@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: technical-interrogator
 description: >
- Interrogate the human about technical decisions, architecture depth, and candidate dialects before spec creation, then produce a TechnicalDecisionBrief for the architect. Usage: /technical-interrogator <idea-folder or spec request>
+ Interrogate the human about technical decisions, architecture depth, and candidate dialects before spec creation, then produce a TechnicalDecisionBrief for the architect. Usage: /technical-interrogator <idea-folder or spec request> [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - technical-interrogator
@@ -30,6 +30,10 @@ status: active
 
 Interrogate technical decisions for: <ARGS>
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: quick mode. Ask 3-5 questions that block architecture or stack choice, assume the rest (never security-class items), and write a short `TechnicalDecisionBrief.md` with two extra sections, `## UX and UI` and `## Infrastructure and packaging` (at most 15 lines each, from the catalogue defaults): the fast-track run does not spawn the UX and infrastructure specialists, and the architect and the spec-writer read these sections in place of their briefs. Architecture depth defaults to `lite`.
+
 ## Steps
 
 1. Resolve `<ARGS>` to a source idea folder, `SpecWriterStarter.md`, or ad-hoc
@@ -40,7 +44,11 @@ Interrogate technical decisions for: <ARGS>
    folder exists, or an inline technical decision brief for ad-hoc requests.
    The brief must include architecture depth, candidate technical approach,
    selected or candidate tech stack, selected KCC dialects from
-   `.KCC/kernel/protocols/dialects/`, and open technical decisions.
+   `.KCC/kernel/protocols/dialects/`, and open technical decisions. When the
+   idea is mobile, data/ML, or has users or data in the EU, GCC or US, the
+   brief also names the matching domain protocol (`mobile-app-architecture`,
+   `data-engineering-and-science`, `privacy-and-cybersecurity-regions`);
+   these are selected from the idea's context, never applied to every idea.
 4. If the agent reports confidence below the configured threshold (95% by
    default), invoke `/critical-human-gate` and pause `/spec-create`.
 5. Pass the technical decision brief to the **architect**, specialist

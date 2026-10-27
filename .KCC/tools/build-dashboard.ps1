@@ -2,34 +2,35 @@
 KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the terms in LICENSE.
 
 .SYNOPSIS
-    Generate a self-contained, offline KCC progress + activity dashboard.
+    Generate the self-contained, offline KCC delivery dashboard (dashboard/index.html).
 
 .DESCRIPTION
-    Reads the framework's progress and telemetry surfaces (ideas, specs,
-    stories/enablers, backchannel events, trace sessions, test verdicts, and
-    memory index) at generation time, then writes a single self-contained
-    HTML file to dashboard/index.html. The HTML embeds all parsed data as a
-    JSON blob and renders two tabs entirely with inline CSS + vanilla JS:
+    Collects the framework's progress and telemetry surfaces, then fills the shared page
+    template (.KCC/kernel/templates/dashboard.html) with one JSON data block:
 
-      - Progress  : idea -> spec -> story/enabler tree with status badges,
-                    counts, and test verdicts.
-      - Activity  : chronological backchannel timeline + per-session trace
-                    summaries, filterable by spec and event kind.
+      - roadmaps    specs/IDEA-*-Specs/ROADMAP.md
+      - specs       spec notes, Backlog/ stories, enablers and bugs, plan.md, review.md,
+                    TestResults, and the ADRs they reference
+      - events      coordination/backchannel.jsonl
+      - checkpoints coordination/checkpoints/CP-*.md
+      - run         coordination/run/run.json plus the state table (kernel/auto-states.json)
+      - traces      Traces/Session-*/ (the seven files, plus parsed Decisions / HumanDecisions)
 
-    There are NO external CDNs or network calls, so the page opens offline in
-    any browser and is re-openable without re-running this script.
+    The page uses the Tikasway.dev theme (light and dark), shows overall statistics, lets the
+    reader follow one spec and the decisions behind it, and can reload itself ("Live").
+    No external CDNs or network calls: it opens offline and can be re-opened without this script.
 
     PowerShell 5.1 compatible. UTF-8 (no BOM) output. No && operator.
 
 .PARAMETER RepoRoot
-    Path to the repo root. Defaults to the parent of .KCC when this script
-    lives in {repo}/.KCC/tools/.
+    Path to the repo root. Defaults to the parent of .KCC when this script lives in {repo}/.KCC/tools/.
+
+.PARAMETER Template
+    Page template to use instead of the workspace's .KCC/kernel/templates/dashboard.html (for example to view an
+    older workspace with the newest page).
 
 .PARAMETER Open
-    Launch the generated dashboard in the default browser when set.
-
-.EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .KCC\tools\build-dashboard.ps1
+    Launch the generated dashboard in the default browser.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .KCC\tools\build-dashboard.ps1 -Open
@@ -38,345 +39,829 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 [CmdletBinding()]
 param(
     [string]$RepoRoot,
+    [string]$Template,
     [switch]$Open
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Resolve-RepoRootFromTool {
-    if ($PSScriptRoot) { $toolDir = $PSScriptRoot }
-    elseif ($MyInvocation.MyCommand.Path) { $toolDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
-    else { return (Get-Location).Path }
-    $parent = Split-Path -Parent $toolDir
-    if ((Split-Path -Leaf $parent) -eq '.KCC') { return (Split-Path -Parent $parent) }
-    return $parent
+function Resolve-ToolDir {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    if ($MyInvocation.MyCommand.Path) { return (Split-Path -Parent $MyInvocation.MyCommand.Path) }
+    return (Get-Location).Path
 }
-
-if (-not $RepoRoot) { $RepoRoot = Resolve-RepoRootFromTool }
-
-# --- small helpers -------------------------------------------------------
-
-# Pull a single value out of YAML frontmatter (first '---' delimited block).
-function Get-Frontmatter {
-    param([string]$Text, [string]$Key)
-    if (-not $Text) { return $null }
-    $m = [regex]::Match($Text, "(?ms)^---\s*\r?\n(.*?)\r?\n---\s*")
-    if (-not $m.Success) { return $null }
-    $block = $m.Groups[1].Value
-    $km = [regex]::Match($block, "(?m)^\s*$([regex]::Escape($Key))\s*:\s*(.+?)\s*$")
-    if (-not $km.Success) { return $null }
-    return ($km.Groups[1].Value.Trim().Trim('"').Trim("'"))
+$ToolDir = Resolve-ToolDir
+if (-not $RepoRoot) {
+    $parent = Split-Path -Parent $ToolDir
+    if ((Split-Path -Leaf $parent) -eq '.KCC') { $RepoRoot = Split-Path -Parent $parent } else { $RepoRoot = $parent }
 }
+$RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\', '/')
 
-# Read a file as raw text, tolerating missing files.
-function Read-TextOrNull {
-    param([string]$Path)
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-        return (Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue)
+$MaxTraceChars = 24000
+$MaxEvents = 4000
+
+# ---- helpers ---------------------------------------------------------------
+
+# Opens with FileShare.ReadWrite: a log or transcript the harness is still writing must stay readable.
+function Open-SharedReader([string]$Path) {
+    $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    return (New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8))
+}
+function Read-TextOrNull([string]$Path) {
+    if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        try { $r = Open-SharedReader $Path; try { return $r.ReadToEnd() } finally { $r.Dispose() } } catch { return $null }
     }
     return $null
 }
-
-# Derive a human status from a story/enabler/spec body when frontmatter lacks it.
-function Get-StatusFromText {
-    param([string]$Text)
-    if (-not $Text) { return 'Unknown' }
-    $fm = Get-Frontmatter -Text $Text -Key 'status'
-    if ($fm) { return $fm }
-    $m = [regex]::Match($Text, "(?im)^\s*\|?\s*status\s*\|?\s*:?\s*\|?\s*([A-Za-z ]+)")
-    if ($m.Success) { return $m.Groups[1].Value.Trim() }
-    return 'Unknown'
+function Read-FirstLine([string]$Path) {
+    try { $r = Open-SharedReader $Path; try { return [string]$r.ReadLine() } finally { $r.Dispose() } } catch { return '' }
 }
 
-# --- collectors ----------------------------------------------------------
+function Get-Frontmatter([string]$Text, [string]$Key) {
+    if (-not $Text) { return $null }
+    $m = [regex]::Match($Text, '(?s)\A\s*---\s*\r?\n(.*?)\r?\n---')
+    if (-not $m.Success) { return $null }
+    $km = [regex]::Match($m.Groups[1].Value, '(?m)^' + [regex]::Escape($Key) + '\s*:\s*(.+?)\s*$')
+    if (-not $km.Success) { return $null }
+    return $km.Groups[1].Value.Trim().Trim('"').Trim("'")
+}
+
+function Get-Lines([string]$Text) {
+    if (-not $Text) { return @() }
+    return @($Text -split "\r?\n")
+}
+
+# Lines under the first heading matching $Pattern (any level), up to the next heading of the same or higher level.
+function Get-Section([string[]]$Lines, [string]$Pattern) {
+    $out = New-Object System.Collections.ArrayList
+    $inside = $false; $level = 0
+    foreach ($l in $Lines) {
+        $hm = [regex]::Match($l, '^(#{1,6})\s+(.*)$')
+        if ($hm.Success) {
+            if ($inside -and $hm.Groups[1].Value.Length -le $level) { break }
+            if (-not $inside -and $hm.Groups[2].Value -match $Pattern) { $inside = $true; $level = $hm.Groups[1].Value.Length; continue }
+        }
+        if ($inside) { [void]$out.Add($l) }
+    }
+    return @($out)
+}
+
+function Split-Row([string]$Line) {
+    $t = $Line.Trim()
+    if ($t.StartsWith('|')) { $t = $t.Substring(1) }
+    if ($t.EndsWith('|')) { $t = $t.Substring(0, $t.Length - 1) }
+    return @($t -split '(?<!\\)\|' | ForEach-Object { $_.Trim() })
+}
+
+# First markdown table in $Lines -> array of hashtables keyed by lower-cased header cell.
+function Get-Table([string[]]$Lines) {
+    $rows = New-Object System.Collections.ArrayList
+    $head = $null
+    foreach ($l in $Lines) {
+        if ($l -notmatch '^\s*\|') { if ($head) { break } else { continue } }
+        $cells = Split-Row $l
+        if (-not $head) { $head = @($cells | ForEach-Object { $_.ToLowerInvariant() }); continue }
+        if ($l -match '^\s*\|[\s:|\-]+\|?\s*$') { continue }
+        $h = [ordered]@{}
+        for ($i = 0; $i -lt $head.Count; $i++) { if ($i -lt $cells.Count) { $h[$head[$i]] = $cells[$i] } else { $h[$head[$i]] = '' } }
+        [void]$rows.Add($h)
+    }
+    return @($rows)
+}
+
+function Clean-Link([string]$s) {
+    if ($null -eq $s) { return '' }
+    $x = [regex]::Replace($s, '\[\[([^\]|]+)\|?([^\]]*)\]\]', { param($m) if ($m.Groups[2].Value) { $m.Groups[2].Value } else { $m.Groups[1].Value } })
+    return ($x -replace '\*\*', '').Trim()
+}
+
+function Get-Cell($row, [string[]]$names) {
+    foreach ($n in $names) { if ($row.Contains($n) -and $row[$n]) { return (Clean-Link $row[$n]) } }
+    return ''
+}
+
+function Get-H1([string]$Text) {
+    $m = [regex]::Match([string]$Text, '(?m)^#\s+(.+?)\s*$')
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return ''
+}
+
+function To-Utc([string]$s) { return $s }
+
+# ---- data model -------------------------------------------------------------
 
 $data = [ordered]@{
-    generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    repoRoot    = $RepoRoot
-    ideas       = @()
-    specs       = @()
-    events      = @()
-    sessions    = @()
-    memory      = [ordered]@{ total = 0; byType = @{} }
-    notes       = @()
+    schema         = 2
+    generatedAt    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    repoRoot       = $RepoRoot
+    project        = (Split-Path -Leaf $RepoRoot)
+    run            = $null
+    states         = @()
+    ideas          = @()
+    specs          = @()
+    roadmaps       = @()
+    maxAttempts    = 3
+    events         = @()
+    laneEvents     = @()
+    needsAttention = @()
+    checkpoints    = @()
+    sessions       = @()
+    decisions      = @()
+    humanDecisions = @()
+    adrs           = @()
+    memory         = [ordered]@{ total = 0; byType = [ordered]@{} }
+    notes          = @()
 }
 
-# Ideas: one folder per idea under ideation/IDEA-*/
+# Run state + the lifecycle state table.
+$runObj = $null
+$runFile = Join-Path $RepoRoot 'coordination/run/run.json'
+$runText = Read-TextOrNull $runFile
+if ($runText) {
+    try { $runObj = $runText | ConvertFrom-Json } catch { $runObj = $null }
+}
+# Values come from the raw text: ConvertFrom-Json would turn ISO timestamps into locale dates.
+function Run-Val($name) {
+    if ($null -eq $runObj) { return '' }
+    $m = [regex]::Match($runText, '"' + [regex]::Escape($name) + '"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    if ($m.Success) { return [regex]::Unescape($m.Groups[1].Value) }
+    if ($runObj.PSObject.Properties.Name -contains $name) { return [string]$runObj.$name }
+    return ''
+}
+$fast = ((Run-Val 'fasttrack') -eq '1') -or ($runText -match '--fasttrack'); $par = ((Run-Val 'parallel') -eq '1') -or ($runText -match '--parallel')
+# A chat run may have no run.json at all: its policy is in the first auto-policy-parsed event.
+$bcEarly = Join-Path $RepoRoot 'coordination/backchannel.jsonl'
+if (Test-Path -LiteralPath $bcEarly) {
+    $pol = @(Get-Content -LiteralPath $bcEarly -ErrorAction SilentlyContinue | Where-Object { $_ -match '"kind"\s*:\s*"auto-policy-parsed"' } | Select-Object -First 1)
+    if ($pol.Count -gt 0) {
+        if ($pol[0] -match '--fasttrack|"fasttrack"\s*:\s*(true|"1")') { $fast = $true }
+        if ($pol[0] -match '--parallel|"parallel"\s*:\s*(true|"1")') { $par = $true }
+    }
+}
+$statesFile = Join-Path $RepoRoot '.KCC/kernel/auto-states.json'
+if ($fast -and (Test-Path -LiteralPath (Join-Path $RepoRoot '.KCC/kernel/auto-states-fasttrack.json'))) { $statesFile = Join-Path $RepoRoot '.KCC/kernel/auto-states-fasttrack.json' }
+$stText = Read-TextOrNull $statesFile
+if ($stText) {
+    try {
+        $sm = $stText | ConvertFrom-Json
+        $list = @()
+        foreach ($s in @($sm.states)) {
+            $skipped = $false
+            if ($s.PSObject.Properties.Name -contains 'skip_if_flag') {
+                foreach ($f in @($s.skip_if_flag)) {
+                    if (($f -eq 'fasttrack' -and $fast) -or ($f -eq 'parallel' -and $par)) { $skipped = $true }
+                }
+            }
+            if (($s.PSObject.Properties.Name -contains 'only_in') -and ((Run-Val 'scenario') -ne '') -and (@($s.only_in) -notcontains (Run-Val 'scenario'))) { $skipped = $true }
+            # goto = on_fail_goto: where a failed exit check sends the spec (the loop-back edge of the lifecycle flowchart)
+            $gt = $null; if ($s.PSObject.Properties.Name -contains 'on_fail_goto') { $gt = [int]$s.on_fail_goto }
+            $list += [ordered]@{ id = [int]$s.id; name = [string]$s.name; scope = [string]$s.scope; skipped = $skipped; goto = $gt }
+        }
+        $data.states = $list
+        if ($sm.PSObject.Properties.Name -contains 'max_attempts') { $data.maxAttempts = [int]$sm.max_attempts }
+    } catch { $data.notes += 'kernel/auto-states.json could not be parsed.' }
+}
+
+# ---- ideas ------------------------------------------------------------------
 $ideationDir = Join-Path $RepoRoot 'ideation'
 if (Test-Path -LiteralPath $ideationDir) {
-    foreach ($folder in (Get-ChildItem -LiteralPath $ideationDir -Directory -Filter 'IDEA-*' -ErrorAction SilentlyContinue)) {
+    foreach ($folder in @(Get-ChildItem -LiteralPath $ideationDir -Directory -Filter 'IDEA-*' -ErrorAction SilentlyContinue | Sort-Object Name)) {
         $ideaFile = Get-ChildItem -LiteralPath $folder.FullName -Filter 'idea-*.md' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        $text = if ($ideaFile) { Read-TextOrNull $ideaFile.FullName } else { $null }
-        $data.ideas += [ordered]@{
-            id     = (Get-Frontmatter -Text $text -Key 'idea_id')
-            slug   = (Get-Frontmatter -Text $text -Key 'slug')
-            title  = (Get-Frontmatter -Text $text -Key 'title')
-            status = (Get-Frontmatter -Text $text -Key 'status')
-            folder = $folder.Name
-        }
+        $text = $null; if ($ideaFile) { $text = Read-TextOrNull $ideaFile.FullName }
+        $idm = [regex]::Match($folder.Name, '^IDEA-\d+')
+        $title = Get-Frontmatter $text 'title'
+        if (-not $title) { $title = Get-H1 $text }
+        $files = @(Get-ChildItem -LiteralPath $folder.FullName -File -Filter '*.md' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+        $st = Get-Frontmatter $text 'status'
+        $data.ideas += [ordered]@{ id = $idm.Value; folder = $folder.Name; title = $title; slug = (Get-Frontmatter $text 'slug'); status = $st; files = $files }
     }
-} else {
-    $data.notes += 'No ideation/ folder yet - no ideas to show.'
+} else { $data.notes += 'No ideation/ folder yet.' }
+
+# ---- ADRs -------------------------------------------------------------------
+$adrDir = Join-Path $RepoRoot 'architecture/adrs'
+if (Test-Path -LiteralPath $adrDir) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $adrDir -Filter 'ADR-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $t = Read-TextOrNull $f.FullName
+        $idm = [regex]::Match($f.Name, '^ADR-\d+')
+        $title = (Get-H1 $t) -replace '^ADR-\d+\s*[:\-]?\s*', ''
+        $status = Get-Frontmatter $t 'status'
+        if (-not $status) { $sec = Get-Section (Get-Lines $t) '^Status'; $first = @($sec | Where-Object { $_.Trim() })[0]; if ($first) { $status = ($first -replace '\s*\(.*$', '').Trim() } }
+        $data.adrs += [ordered]@{ id = $idm.Value; title = $title; status = $status; file = ('architecture/adrs/' + $f.Name) }
+    }
 }
 
-# Specs: specs/IDEA-*-Specs/SPEC-*/SPEC-*.md plus their Backlog/ items.
+# ---- specs + roadmaps ---------------------------------------------------------
+function Parse-Acs([string[]]$Lines) {
+    $out = @()
+    foreach ($l in $Lines) {
+        $m = [regex]::Match($l, '^\s*[-*]\s*\[([ xX])\]\s*(AC-\d+)\s*[-:]?\s*(.*)$')
+        if ($m.Success) { $out += [ordered]@{ id = $m.Groups[2].Value; text = (Clean-Link $m.Groups[3].Value); done = ($m.Groups[1].Value -ne ' ') } }
+    }
+    return $out
+}
+
 $specsDir = Join-Path $RepoRoot 'specs'
 if (Test-Path -LiteralPath $specsDir) {
-    foreach ($ideaSpecs in (Get-ChildItem -LiteralPath $specsDir -Directory -Filter 'IDEA-*-Specs' -ErrorAction SilentlyContinue)) {
-        foreach ($specFolder in (Get-ChildItem -LiteralPath $ideaSpecs.FullName -Directory -Filter 'SPEC-*' -ErrorAction SilentlyContinue)) {
-            $specNote = Get-ChildItem -LiteralPath $specFolder.FullName -Filter 'SPEC-*.md' -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -notmatch 'backlog' } | Select-Object -First 1
-            $sText = if ($specNote) { Read-TextOrNull $specNote.FullName } else { $null }
-            $items = @()
-            $backlogDir = Join-Path $specFolder.FullName 'Backlog'
-            if (Test-Path -LiteralPath $backlogDir) {
-                foreach ($bi in (Get-ChildItem -LiteralPath $backlogDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
-                    $biText = Read-TextOrNull $bi.FullName
+    foreach ($group in @(Get-ChildItem -LiteralPath $specsDir -Directory -Filter 'IDEA-*-Specs' -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $ideaId = [regex]::Match($group.Name, '^IDEA-\d+').Value
+        # roadmap
+        $rm = Read-TextOrNull (Join-Path $group.FullName 'ROADMAP.md')
+        if ($rm) {
+            $rlines = Get-Lines $rm
+            $tbl = Get-Table (Get-Section $rlines '^Execution Plan')
+            if (@($tbl).Count -eq 0) { $tbl = Get-Table $rlines }
+            $keyMap = [ordered]@{ 'order' = 'order'; 'spec' = 'spec'; 'delivery' = 'delivery'; 'depends on' = 'dependsOn'; 'lane' = 'lane'; 'est. tokens' = 'tokens'; 'restore point' = 'restore' }
+            $rows = @()
+            foreach ($r in $tbl) {
+                $o = [ordered]@{}
+                foreach ($k in $keyMap.Keys) { if ($r.Contains($k)) { $o[$keyMap[$k]] = (Clean-Link $r[$k]) } }
+                $rows += $o
+            }
+            $data.roadmaps += [ordered]@{ ideaId = $ideaId; title = ((Get-H1 $rm) -replace '^Roadmap\s*[-:]\s*', ''); columns = @($keyMap.Values | Where-Object { $rows.Count -gt 0 -and $rows[0].Contains($_) }); rows = $rows }
+        }
+        foreach ($sf in @(Get-ChildItem -LiteralPath $group.FullName -Directory -Filter 'SPEC-*' -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            $specId = [regex]::Match($sf.Name, '^SPEC-[0-9A-Za-z]+').Value
+            # A spec being built in a lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) changes its backlog, plan, review and test results
+            # there; the workspace copy only catches up when the lane merges. Read the lane copy when there is one.
+            $sdir = $sf.FullName; $trRoot = $RepoRoot
+            foreach ($ld in @(".kcc-lanes", ".worktrees")) {
+                $laneRoot = Join-Path (Join-Path $RepoRoot $ld) $specId
+                $lc = Join-Path $laneRoot ("specs/" + $group.Name + "/" + $sf.Name)
+                if (Test-Path -LiteralPath $lc) { $sdir = $lc; $trRoot = $laneRoot; break }
+            }
+            $note = Get-ChildItem -LiteralPath $sdir -Filter 'SPEC-*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'backlog' } | Select-Object -First 1
+            $sText = $null; if ($note) { $sText = Read-TextOrNull $note.FullName }
+            $sLines = Get-Lines $sText
+            $head = @(Get-Table (@($sLines | Select-Object -First 12)))
+            $h0 = $null; if ($head.Count -gt 0) { $h0 = $head[0] }
+            $status = ''; $prio = ''; $cat = ''; $wave = ''
+            if ($h0) { $status = Get-Cell $h0 @('status'); $prio = Get-Cell $h0 @('priority'); $cat = Get-Cell $h0 @('category'); $wave = Get-Cell $h0 @('wave') }
+            if (-not $status) { $status = Get-Frontmatter $sText 'status' }
+            $title = (Get-H1 $sText) -replace '^SPEC-[0-9A-Za-z]+\s*[:\-]?\s*', ''
+            if (-not $title) { $title = Get-Frontmatter $sText 'title' }
+            # delivery brief bullets
+            $brief = [ordered]@{ who = ''; gets = ''; value = ''; measured = '' }
+            foreach ($l in (Get-Section $sLines '^Delivery Brief')) {
+                $bm = [regex]::Match($l, '^\s*[-*]\s*\*\*([^*:]+):?\*\*:?\s*(.+)$')
+                if ($bm.Success) {
+                    $k = $bm.Groups[1].Value.Trim().ToLowerInvariant()
+                    if ($k -eq 'who') { $brief.who = (Clean-Link $bm.Groups[2].Value) }
+                    elseif ($k -eq 'gets') { $brief.gets = (Clean-Link $bm.Groups[2].Value) }
+                    elseif ($k -eq 'value') { $brief.value = (Clean-Link $bm.Groups[2].Value) }
+                    elseif ($k -like 'measured*') { $brief.measured = (Clean-Link $bm.Groups[2].Value) }
+                }
+            }
+            $acs = @(Parse-Acs (Get-Section $sLines '^Acceptance Criteria'))
+            # backlog items: spec table first, then item files (status in the item file wins)
+            $blTable = @(Get-Table (Get-Section $sLines '^Backlog'))
+            $items = @(); $bugs = @()
+            $bdir = Join-Path $sdir 'Backlog'
+            $seen = @{}
+            if (Test-Path -LiteralPath $bdir) {
+                foreach ($bf in @(Get-ChildItem -LiteralPath $bdir -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                    $bt = Read-TextOrNull $bf.FullName
+                    $bl = Get-Lines $bt
+                    $key = [regex]::Match($bf.BaseName, '^(Story|Enabler|Bug)-\d+').Value
+                    if (-not $key) { continue }
+                    $type = ($key -split '-')[0]
+                    $tr = @(Get-Table (@($bl | Select-Object -First 14)))
+                    $r0 = $null; if ($tr.Count -gt 0) { $r0 = $tr[0] }
+                    $itTitle = ((Get-H1 $bt) -replace '^(Story|Enabler|Bug)-\d+\s*[:\-]?\s*', '')
+                    $seen[$key] = $true
+                    if ($type -eq 'Bug') {
+                        $bugs += [ordered]@{
+                            key = $key; title = $itTitle
+                            severity = ($(if ($r0) { Get-Cell $r0 @('severity') } else { '' }))
+                            status = ($(if ($r0) { Get-Cell $r0 @('status') } else { '' }))
+                            source = ($(if ($r0) { Get-Cell $r0 @('source', 'reporter') } else { '' }))
+                            ref = ($(if ($r0) { Get-Cell $r0 @('story / ac', 'against') } else { '' }))
+                            test = ($(if ($r0) { Get-Cell $r0 @('regression test') } else { '' }))
+                        }
+                        continue
+                    }
+                    $row = $null
+                    foreach ($t in $blTable) { if ((Get-Cell $t @('key')) -eq $key) { $row = $t; break } }
+                    $st = ''; if ($r0) { $st = Get-Cell $r0 @('status') }
+                    if (-not $st -and $row) { $st = Get-Cell $row @('status') }
                     $items += [ordered]@{
-                        key    = ($bi.BaseName)
-                        type   = if ($bi.Name -match '^(?i)Enabler') { 'Enabler' } else { 'Story' }
-                        title  = (Get-Frontmatter -Text $biText -Key 'title')
-                        status = (Get-StatusFromText -Text $biText)
+                        key = $key; type = $type
+                        title = ($(if ($itTitle) { $itTitle } elseif ($row) { Get-Cell $row @('title') } else { '' }))
+                        status = $st
+                        wave = ($(if ($row) { Get-Cell $row @('wave') } else { '' }))
+                        dependsOn = ($(if ($r0) { Get-Cell $r0 @('depends on') } elseif ($row) { Get-Cell $row @('depends on') } else { '' }))
+                        dialect = ($(if ($r0) { Get-Cell $r0 @('dialect') } else { '' }))
+                        acs = @(Parse-Acs (Get-Section $bl '^Acceptance Criteria'))
                     }
                 }
             }
-            # Test verdicts: TestResults/IDEA-*/SPEC-*/test-run-summary.md
-            $verdict = $null
-            $specIdShort = ($specFolder.Name -split '-')[0..1] -join '-'   # SPEC-001
-            $ideaIdShort = ($ideaSpecs.Name -split '-')[0..1] -join '-'    # IDEA-001
-            $trFile = Join-Path (Join-Path (Join-Path $RepoRoot 'TestResults') $ideaIdShort) (Join-Path $specIdShort 'test-run-summary.md')
-            $trText = Read-TextOrNull $trFile
-            if ($trText) {
-                $pass = ([regex]::Matches($trText, '(?i)\bPASS\b')).Count
-                $fail = ([regex]::Matches($trText, '(?i)\bFAIL\b')).Count
-                $verdict = [ordered]@{ pass = $pass; fail = $fail }
+            foreach ($t in $blTable) {   # table rows whose item file is missing
+                $k = Get-Cell $t @('key')
+                if ($k -and -not $seen.ContainsKey($k) -and $k -notmatch '^Bug-') {
+                    $items += [ordered]@{ key = $k; type = (Get-Cell $t @('type')); title = (Get-Cell $t @('title')); status = (Get-Cell $t @('status')); wave = (Get-Cell $t @('wave')); dependsOn = (Get-Cell $t @('depends on')); dialect = ''; acs = @() }
+                }
             }
+            # plan
+            $plan = [ordered]@{ exists = $false; status = ''; waves = 0; tests = 0 }
+            $pt = Read-TextOrNull (Join-Path $sdir 'plan.md')
+            if ($pt) {
+                $pl = Get-Lines $pt
+                $plan.exists = $true; $plan.status = (Get-Frontmatter $pt 'status')
+                $wvs = @(Get-Table (Get-Section $pl '^Waves'))
+                $plan.waves = @($wvs | ForEach-Object { Get-Cell $_ @('wave') } | Where-Object { $_ } | Select-Object -Unique).Count
+                $plan.tests = @(Get-Table (Get-Section $pl '^Atomic test cases')).Count
+            }
+            # review
+            $review = [ordered]@{ exists = $false; verdict = '' }
+            $rvt = Read-TextOrNull (Join-Path $sdir 'review.md')
+            if ($rvt) {
+                $review.exists = $true
+                # The verdict is the review's own word: its frontmatter "verdict:", else the "Verdict" section, else the first one named anywhere
+                # (a review quotes earlier verdicts in its text). QUALITY_DEFERRED (TOOLCHAIN_DEFERRED is the older name) is its own state.
+                $vre = '(?i)\b(APPROVED|CHANGES_NEEDED|QUALITY_DEFERRED|TOOLCHAIN_DEFERRED|WAIVER_NEEDED|BLOCKED)\b'
+                $vm = $null
+                $fmv = Get-Frontmatter $rvt 'verdict'
+                if ($fmv) { $vm = [regex]::Match($fmv, $vre) }
+                if (-not $vm -or -not $vm.Success) { $vm = [regex]::Match(((Get-Section (Get-Lines $rvt) '^Verdict') -join "`n"), $vre) }
+                if (-not $vm.Success) { $vm = [regex]::Match($rvt, $vre) }
+                if ($vm.Success) { $review.verdict = $vm.Groups[1].Value.ToUpperInvariant() }
+            }
+            # test verdicts
+            $verdict = $null
+            $trf = Join-Path (Join-Path (Join-Path $trRoot 'TestResults') $ideaId) (Join-Path $specId 'test-run-summary.md')
+            $trt = Read-TextOrNull $trf
+            if ($trt) {
+                $verdict = [ordered]@{ pass = ([regex]::Matches($trt, '(?i)\bPASS(ED)?\b')).Count; fail = ([regex]::Matches($trt, '(?i)\bFAIL(ED)?\b')).Count }
+            }
+            # ADR references
+            $refText = [string]$sText + [string](Read-TextOrNull (Join-Path $sdir 'arch.md')) + [string]$pt
+            $adrRefs = @([regex]::Matches($refText, 'ADR-\d+') | ForEach-Object { $_.Value } | Select-Object -Unique)
             $data.specs += [ordered]@{
-                id       = $specIdShort
-                ideaId   = $ideaIdShort
-                slug     = $specFolder.Name
-                title    = (Get-Frontmatter -Text $sText -Key 'title')
-                status   = (Get-StatusFromText -Text $sText)
-                items    = $items
-                verdict  = $verdict
+                id = $specId; ideaId = $ideaId; folder = $sf.Name; title = $title; status = $status; priority = $prio; category = $cat; wave = $wave
+                deliveryBrief = $brief; acs = $acs; items = $items; bugs = $bugs; plan = $plan; review = $review; verdict = $verdict; adrRefs = $adrRefs
             }
         }
     }
-} else {
-    $data.notes += 'No specs/ folder yet - no specs to show.'
+} else { $data.notes += 'No specs/ folder yet.' }
+
+# ---- run object (needs the spec list for currentSpec) --------------------------
+if ($runObj) {
+    $curSpec = ''
+    $entries = @((Run-Val 'specs') -split ' ' | Where-Object { $_ })
+    $si = 0; [void][int]::TryParse((Run-Val 'spec_index'), [ref]$si)
+    if ($entries.Count -gt $si) { $m = [regex]::Match($entries[$si], 'SPEC-[0-9A-Za-z]+'); if ($m.Success) { $curSpec = $m.Value } }
+    $stNum = 0; [void][int]::TryParse((Run-Val 'state'), [ref]$stNum)
+    $data.run = [ordered]@{
+        status = (Run-Val 'status'); state = $stNum; wave = (Run-Val 'wave'); scenario = (Run-Val 'scenario'); harness = (Run-Val 'harness')
+        fasttrack = $fast; parallel = $par; depthlevel = (Run-Val 'depthlevel'); reason = (Run-Val 'reason'); updated = (Run-Val 'updated')
+        created = (Run-Val 'created'); input = (Run-Val 'input'); idea = (Run-Val 'idea'); currentSpec = $curSpec; gate_name = (Run-Val 'gate_name')
+        attempts = (Run-Val 'attempts'); gate_id = (Run-Val 'gate_id'); gate_state = (Run-Val 'gate_state'); gate_spec = (Run-Val 'gate_spec')
+    }
 }
 
-# Backchannel events.
+# ---- backchannel events ---------------------------------------------------------
 $bcPath = Join-Path $RepoRoot 'coordination/backchannel.jsonl'
 if (Test-Path -LiteralPath $bcPath) {
-    foreach ($line in (Get-Content -LiteralPath $bcPath -ErrorAction SilentlyContinue)) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try {
-            $ev = $line | ConvertFrom-Json
-            $ts = if ($ev.PSObject.Properties.Name -contains 'ts') { $ev.ts } elseif ($ev.PSObject.Properties.Name -contains 'timestamp') { $ev.timestamp } else { '' }
-            $data.events += [ordered]@{
-                ts      = $ts
-                kind    = $ev.kind
-                from    = $ev.from
-                to      = $ev.to
-                spec    = $ev.spec
-                payload = (($ev.payload | ConvertTo-Json -Compress -Depth 6) -replace '^"|"$','')
-            }
-        } catch {
-            $data.events += [ordered]@{ ts=''; kind='invalid-json'; from=''; to=''; spec=''; payload=$line }
+    $all = @(Get-Content -LiteralPath $bcPath -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })
+    if ($all.Count -gt $MaxEvents) { $data.notes += ('Showing the last ' + $MaxEvents + ' of ' + $all.Count + ' backchannel events.'); $all = @($all | Select-Object -Last $MaxEvents) }
+    $evs = @()
+    # Fields are read from the raw line: ConvertFrom-Json would turn ISO timestamps into locale dates.
+    function Raw-Field([string]$Line, [string[]]$Keys) {
+        foreach ($k in $Keys) {
+            $m = [regex]::Match($Line, '"' + $k + '"\s*:\s*"((?:[^"\\]|\\.)*)"')
+            if ($m.Success) { return [regex]::Unescape($m.Groups[1].Value) }
+        }
+        return ''
+    }
+    foreach ($line in $all) {
+        $valid = $true
+        try { [void]($line | ConvertFrom-Json) } catch { $valid = $false }
+        if (-not $valid) { $evs += [ordered]@{ id = ''; ts = ''; kind = 'invalid-json'; from = ''; to = ''; spec = ''; payload = $line }; continue }
+        $pi = $line.IndexOf('"payload"')
+        $raw = ''
+        if ($pi -ge 0) {
+            $colon = $line.IndexOf(':', $pi)
+            $end = $line.LastIndexOf('}')
+            if ($colon -ge 0 -and $end -gt $colon) { $raw = $line.Substring($colon + 1, $end - $colon - 1).Trim() }
+        }
+        $head = $line; if ($pi -ge 0) { $head = $line.Substring(0, $pi) }
+        $evs += [ordered]@{
+            id = (Raw-Field $head @('id')); ts = (Raw-Field $head @('ts', 'timestamp')); kind = (Raw-Field $head @('kind', 'event'))
+            from = (Raw-Field $head @('from', 'agent')); to = (Raw-Field $head @('to')); spec = (Raw-Field $head @('spec'))
+            payload = $raw
         }
     }
-} else {
-    $data.notes += 'No coordination/backchannel.jsonl yet - timeline is empty.'
+    $data.events = $evs
+} else { $data.notes += 'No coordination/backchannel.jsonl yet.' }
+
+# A kcc lane (.kcc-lanes/SPEC-x) logs to its own coordination/backchannel.jsonl; the live sync copies those events into the
+# workspace file only while `kcc run` is alive. Events of a lane that the workspace file does not hold (same ts, kind, spec)
+# are listed here with the lane's name, so the lifecycle flowchart and the timeline see what the lane did.
+function Raw-Field2([string]$Line, [string[]]$Keys) {
+    foreach ($k in $Keys) {
+        $m = [regex]::Match($Line, '"' + $k + '"\s*:\s*"((?:[^"\\]|\\.)*)"')
+        if ($m.Success) { return [regex]::Unescape($m.Groups[1].Value) }
+    }
+    return ''
+}
+$mainKeys = @{}
+if (Test-Path -LiteralPath $bcPath) {
+    foreach ($ml in @(Get-Content -LiteralPath $bcPath -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })) {
+        $mpi = $ml.IndexOf('"payload"'); $mh = $ml; if ($mpi -ge 0) { $mh = $ml.Substring(0, $mpi) }
+        $mainKeys[((Raw-Field2 $mh @('ts', 'timestamp')) + '|' + (Raw-Field2 $mh @('kind', 'event')) + '|' + (Raw-Field2 $mh @('spec')))] = 1
+    }
+}
+$laneEvs = @()
+foreach ($ldn in @('.kcc-lanes', '.worktrees')) {
+    $lpd = Join-Path $RepoRoot $ldn
+    if (-not (Test-Path -LiteralPath $lpd)) { continue }
+    foreach ($lrd in @(Get-ChildItem -LiteralPath $lpd -Directory -ErrorAction SilentlyContinue)) {
+        $lbc = Join-Path $lrd.FullName 'coordination/backchannel.jsonl'
+        if (-not (Test-Path -LiteralPath $lbc)) { continue }
+        foreach ($ll in @(Get-Content -LiteralPath $lbc -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })) {
+            $lpi = $ll.IndexOf('"payload"'); $lh = $ll; if ($lpi -ge 0) { $lh = $ll.Substring(0, $lpi) }
+            $lts = Raw-Field2 $lh @('ts', 'timestamp'); $lkd = Raw-Field2 $lh @('kind', 'event'); $lsp = Raw-Field2 $lh @('spec')
+            if ($mainKeys.ContainsKey($lts + '|' + $lkd + '|' + $lsp)) { continue }
+            $lraw = ''
+            if ($lpi -ge 0) { $lc = $ll.IndexOf(':', $lpi); $le = $ll.LastIndexOf('}'); if ($lc -ge 0 -and $le -gt $lc) { $lraw = $ll.Substring($lc + 1, $le - $lc - 1).Trim() } }
+            $laneEvs += [ordered]@{ id = (Raw-Field2 $lh @('id')); ts = $lts; kind = $lkd; from = (Raw-Field2 $lh @('from', 'agent')); to = (Raw-Field2 $lh @('to')); spec = $lsp; lane = $lrd.Name; payload = $lraw }
+        }
+    }
+}
+$data.laneEvents = $laneEvs
+
+# ---- stage of a chat-driven run ----------------------------------------------------
+# The `auto` skill in a chat session records progress as backchannel events but does not keep the
+# driver's run.json `state`; without this the pipeline would sit on REPO for the whole run.
+if ((-not $runObj -or -not (Run-Val 'state')) -and @($data.events).Count -gt 0) {
+    $doneMap = @{ 'idea-interrogation-completed' = 1; 'architecture-pass-complete' = 6; 'spec-created' = 9; 'roadmap-created' = 9;
+        'plan-created' = 11; 'toolchain-preflight-result' = 14; 'implement-completed' = 15; 'test-completed' = 16; 'review-produced' = 17; 'session-closed' = 18 }
+    $startMap = @{ 'implement-started' = 15; 'test-started' = 16; 'toolchain-preflight-started' = 14 }
+    # Run-wide stages (up to SPECS) advance on any event; PLAN..REVIEW advance per spec, so the pipeline shows
+    # the earliest stage a spec is still in (a spec-less event, e.g. an early preflight, moves nothing).
+    $done = 0; $closed = $false; $specDone = @{}; $specStart = @{}
+    foreach ($e in @($data.events)) {
+        $k = [string]$e.kind; $id = -1; $sp = ''
+        if ([string]$e.spec -match '^SPEC-') { $sp = [string]$e.spec }
+        if ($k -eq 'specialist-brief-created') { if ([string]$e.from -match 'technical') { $id = 3 } else { $id = 4 } }
+        elseif ($doneMap.ContainsKey($k)) { $id = $doneMap[$k] }
+        if ($k -eq 'session-closed') { $closed = $true }
+        if ($k -eq 'spec-created' -and $sp -and -not $specDone.ContainsKey($sp)) { $specDone[$sp] = $(if (@($data.states | Where-Object { $_.name -eq 'WRITE' }).Count -gt 0) { 10 } else { 9 }) }
+        if ($id -ge 0 -and $id -lt 10) { if ($id -gt $done) { $done = $id } }
+        elseif ($id -ge 10 -and $sp) { if (-not $specDone.ContainsKey($sp) -or $id -gt $specDone[$sp]) { $specDone[$sp] = $id } }
+        elseif ($id -eq 18) { $done = 18 }
+        elseif ($id -eq 14 -and -not $sp) {
+            # One preflight for the whole run covers every spec that is already planned.
+            foreach ($x in @($specDone.Keys)) { if ($specDone[$x] -ge 11 -and $specDone[$x] -lt 14) { $specDone[$x] = 14 } }
+        }
+        if ($sp -and $startMap.ContainsKey($k)) { if (-not $specStart.ContainsKey($sp) -or $startMap[$k] -gt $specStart[$sp]) { $specStart[$sp] = $startMap[$k] } }
+    }
+    $nextAfter = { param($d) foreach ($s in @($data.states)) { if ([int]$s.id -gt $d -and -not $s.skipped) { return [int]$s.id } }; return $d }
+    if ($done -ge 9 -and $done -lt 18 -and $specDone.Count -gt 0) {
+        $cur = 99
+        foreach ($sp in @($specDone.Keys)) {
+            $n = & $nextAfter $specDone[$sp]
+            if ($specStart.ContainsKey($sp) -and $specStart[$sp] -gt $specDone[$sp]) { $n = $specStart[$sp] }
+            if ($n -lt $cur) { $cur = $n }
+        }
+    } else { $cur = & $nextAfter $done; if ($done -ge 18) { $cur = 18 } }
+    $status = 'running'; if ($closed) { $status = 'done' }
+    if ($data.run) { $data.run.state = $cur; if (-not $data.run.status) { $data.run.status = $status } }
+    else { $data.run = [ordered]@{ status = $status; state = $cur; wave = ''; scenario = (Run-Val 'scenario'); harness = 'chat'; fasttrack = $fast; parallel = $par; depthlevel = (Run-Val 'depthlevel'); reason = ''; updated = ''; created = ''; input = ''; idea = (Run-Val 'idea'); currentSpec = ''; gate_name = ''; attempts = ''; gate_id = ''; gate_state = ''; gate_spec = '' } }
+    $data.notes += 'Stage derived from backchannel events (chat-driven run).'
+    $script:derivedRun = $true
 }
 
-# Trace sessions: Traces/Session-*/ with the seven artifact files.
+# ---- checkpoints ------------------------------------------------------------------
+$cpDir = Join-Path $RepoRoot 'coordination/checkpoints'
+if (Test-Path -LiteralPath $cpDir) {
+    $latestId = Get-Frontmatter (Read-TextOrNull (Join-Path $cpDir 'latest.md')) 'points_to'
+    foreach ($f in @(Get-ChildItem -LiteralPath $cpDir -Filter 'CP-*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $t = Read-TextOrNull $f.FullName
+        $id = Get-Frontmatter $t 'id'; if (-not $id) { $id = $f.BaseName }
+        $data.checkpoints += [ordered]@{
+            id = $id; created = (Get-Frontmatter $t 'created'); reason = (Get-Frontmatter $t 'reason'); spec = (Get-Frontmatter $t 'spec'); stage = (Get-Frontmatter $t 'stage')
+            next_action = (Get-Frontmatter $t 'next_action'); git_tag = (Get-Frontmatter $t 'git_tag'); previous = (Get-Frontmatter $t 'previous'); latest = ($id -eq $latestId)
+        }
+    }
+}
+
+# ---- traces + parsed decisions -------------------------------------------------------
+function Parse-Decisions([string]$Text, [string]$Session, [bool]$Human) {
+    $out = @()
+    if (-not $Text) { return $out }
+    $parts = [regex]::Split($Text, '(?m)^##\s+\d+\.\s+')
+    for ($i = 1; $i -lt $parts.Count; $i++) {
+        $block = $parts[$i]
+        $nl = $block.IndexOf("`n")
+        if ($nl -lt 0) { $title = $block.Trim(); $body = '' } else { $title = $block.Substring(0, $nl).Trim(); $body = $block.Substring($nl + 1) }
+        if ($title -match '^<.*>$') { continue }   # untouched template placeholder
+        $e = [ordered]@{ session = $Session; title = $title; when = ''; by = ''; context = ''; options = ''; decision = ''; rationale = ''; impact = ''; text = ($title + "`n" + $body) }
+        foreach ($l in ($body -split "\r?\n")) {
+            $m = [regex]::Match($l, '^\s*[-*]\s*\*\*([^*:]+?):?\*\*:?\s*(.*)$')
+            if (-not $m.Success) { continue }
+            $k = $m.Groups[1].Value.Trim().ToLowerInvariant(); $v = (Clean-Link $m.Groups[2].Value)
+            if ($k -eq 'when') { $e.when = $v }
+            elseif ($k -eq 'by') { $e.by = $v }
+            elseif ($k -eq 'context' -or $k -like 'question*') { $e.context = $v }
+            elseif ($k -like 'options*') { $e.options = $v }
+            elseif ($k -eq 'decision' -or $k -eq 'human decision') { $e.decision = $v }
+            elseif ($k -like 'rationale*') { $e.rationale = $v }
+            elseif ($k -eq 'impact') { $e.impact = $v }
+        }
+        $out += $e
+    }
+    return $out
+}
+
 $tracesDir = Join-Path $RepoRoot 'Traces'
-$artifactNames = @('Decisions','Handovers','Actions','ToolsUsed','HumanActions','HumanDecisions','TokenUsage')
+$names7 = @('Decisions', 'HumanDecisions', 'Actions', 'Handovers', 'ToolsUsed', 'HumanActions', 'TokenUsage')
 if (Test-Path -LiteralPath $tracesDir) {
-    foreach ($sess in (Get-ChildItem -LiteralPath $tracesDir -Directory -Filter 'Session-*' -ErrorAction SilentlyContinue)) {
-        $artifacts = @()
-        foreach ($name in $artifactNames) {
-            $f = Join-Path $sess.FullName "$name.md"
-            $present = Test-Path -LiteralPath $f
-            $lines = 0
-            if ($present) { $lines = (Get-Content -LiteralPath $f -ErrorAction SilentlyContinue | Measure-Object -Line).Lines }
-            $artifacts += [ordered]@{ name = $name; present = $present; lines = $lines }
+    foreach ($sess in @(Get-ChildItem -LiteralPath $tracesDir -Directory -Filter 'Session-*' -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $files = @()
+        foreach ($n in $names7) {
+            $p = Join-Path $sess.FullName ($n + '.md')
+            $txt = Read-TextOrNull $p
+            $present = ($null -ne $txt)
+            $lines = 0; $trunc = $false; $body = ''
+            if ($present) {
+                $lines = @(Get-Lines $txt.TrimEnd("`r", "`n")).Count
+                $body = $txt
+                if ($body.Length -gt $MaxTraceChars) { $body = $body.Substring(0, $MaxTraceChars); $trunc = $true }
+            }
+            $files += [ordered]@{ name = $n; present = $present; lines = $lines; truncated = $trunc; text = $body }
+            if ($present -and $n -eq 'Decisions') { $data.decisions += @(Parse-Decisions $txt $sess.Name $false) }
+            if ($present -and $n -eq 'HumanDecisions') { $data.humanDecisions += @(Parse-Decisions $txt $sess.Name $true) }
         }
-        $data.sessions += [ordered]@{ name = $sess.Name; artifacts = $artifacts }
+        $data.sessions += [ordered]@{ name = $sess.Name; files = $files }
     }
-} else {
-    $data.notes += 'No Traces/ folder yet - no sessions to show.'
-}
+} else { $data.notes += 'No Traces/ folder yet (fast-track runs do not write traces).' }
 
-# Memory index counts.
-$memIdx = Join-Path $RepoRoot 'memory/index.json'
-$memText = Read-TextOrNull $memIdx
+# ---- memory ---------------------------------------------------------------------------------
+$memText = Read-TextOrNull (Join-Path $RepoRoot 'memory/index.json')
 if ($memText) {
     try {
         $mem = $memText | ConvertFrom-Json
         $entries = if ($mem.PSObject.Properties.Name -contains 'entries') { $mem.entries } else { $mem }
         $data.memory.total = @($entries).Count
-        $byType = @{}
-        foreach ($e in @($entries)) {
-            $t = if ($e.PSObject.Properties.Name -contains 'type') { "$($e.type)" } else { 'unknown' }
-            if (-not $byType.ContainsKey($t)) { $byType[$t] = 0 }
-            $byType[$t] = $byType[$t] + 1
-        }
-        $data.memory.byType = $byType
     } catch { $data.notes += 'memory/index.json present but not parseable.' }
 }
 
-# --- render HTML ---------------------------------------------------------
-
-# Embed the parsed model as a JSON blob; escape "</" so it cannot break the
-# enclosing <script> tag.
-$json = ($data | ConvertTo-Json -Depth 12) -replace '</','<\/'
-
-$html = @"
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KCC Dashboard</title>
-<style>
-  :root{--bg:#0f1117;--card:#171a23;--mut:#8a92a6;--fg:#e6e9ef;--acc:#4f8cff;--line:#262b38}
-  *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--fg)}
-  header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:16px}
-  h1{font-size:18px;margin:0}
-  .sub{color:var(--mut);font-size:12px}
-  .tabs{display:flex;gap:8px;padding:12px 24px 0}
-  .tab{padding:8px 14px;border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;cursor:pointer;background:var(--card);color:var(--mut)}
-  .tab.active{color:var(--fg);border-color:var(--acc)}
-  main{padding:20px 24px}
-  .view{display:none}.view.active{display:block}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 14px}
-  .idea-title{font-weight:600;font-size:15px}
-  .spec{margin:10px 0 4px 8px;border-left:2px solid var(--line);padding-left:12px}
-  .item{margin:2px 0 2px 20px;color:var(--mut)}
-  .badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line);margin-left:6px}
-  .b-Done{background:#16361f;color:#7ee2a0;border-color:#2c6b41}
-  .b-Inprogress,.b-Indelivery{background:#2a2410;color:#e6c873;border-color:#6b5a23}
-  .b-Inreview{background:#241a36;color:#c39fff;border-color:#4f3b6b}
-  .b-Blocked,.b-Abandoned{background:#361616;color:#ff9b9b;border-color:#6b2c2c}
-  .b-Ready,.b-Readyforspec,.b-Handedoff{background:#10262e;color:#7fd6e6;border-color:#23596b}
-  .b-Drafting,.b-Unknown{background:#22262f;color:#a7b0c2}
-  .pass{color:#7ee2a0}.fail{color:#ff9b9b}
-  .controls{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
-  select,input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
-  .ev{border-bottom:1px solid var(--line);padding:8px 0;display:grid;grid-template-columns:160px 150px 1fr;gap:10px}
-  .ev .k{color:var(--acc)}.ev .t{color:var(--mut);font-variant-numeric:tabular-nums}
-  .pay{color:var(--mut);font-family:Consolas,monospace;font-size:12px;word-break:break-word}
-  .sess{margin-bottom:8px}.chip{display:inline-block;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:8px;margin:2px}
-  .chip.on{color:#7ee2a0;border-color:#2c6b41}.chip.off{color:var(--mut)}
-  .empty{color:var(--mut);font-style:italic}
-</style>
-</head>
-<body>
-<header>
-  <h1>KCC Dashboard</h1>
-  <span class="sub" id="meta"></span>
-</header>
-<div class="tabs">
-  <div class="tab active" data-view="progress">Progress</div>
-  <div class="tab" data-view="activity">Activity / Replay</div>
-</div>
-<main>
-  <section id="progress" class="view active"></section>
-  <section id="activity" class="view"></section>
-</main>
-<script id="kcc-data" type="application/json">
-$json
-</script>
-<script>
-// Self-contained renderer. No network, no external libs.
-var DATA = JSON.parse(document.getElementById('kcc-data').textContent);
-function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function badge(s){var k=(s||'Unknown').replace(/[^A-Za-z]/g,'');return '<span class="badge b-'+esc(k)+'">'+esc(s||'Unknown')+'</span>';}
-
-document.getElementById('meta').textContent='generated '+DATA.generatedAt+' UTC  -  '+DATA.ideas.length+' ideas, '+DATA.specs.length+' specs, '+DATA.events.length+' events, '+DATA.sessions.length+' sessions, '+DATA.memory.total+' memory entries';
-
-// ---- Progress tab ----
-function renderProgress(){
-  var el=document.getElementById('progress'); var h='';
-  if(!DATA.ideas.length && !DATA.specs.length){ el.innerHTML='<p class="empty">No ideas or specs yet.</p>'; return; }
-  var specsByIdea={}; DATA.specs.forEach(function(s){ (specsByIdea[s.ideaId]=specsByIdea[s.ideaId]||[]).push(s); });
-  DATA.ideas.forEach(function(idea){
-    h+='<div class="card"><div class="idea-title">'+esc(idea.id||idea.folder)+' - '+esc(idea.title||idea.slug||'')+badge(idea.status)+'</div>';
-    var specs=specsByIdea[idea.id]||[];
-    if(!specs.length){ h+='<div class="item empty">no specs yet</div>'; }
-    specs.forEach(function(sp){ h+=renderSpec(sp); delete specsByIdea[idea.id]; });
-    h+='</div>';
-  });
-  // Specs whose idea folder was not found still get shown.
-  Object.keys(specsByIdea).forEach(function(iid){
-    h+='<div class="card"><div class="idea-title">'+esc(iid)+' (idea file not found)</div>';
-    specsByIdea[iid].forEach(function(sp){ h+=renderSpec(sp); });
-    h+='</div>';
-  });
-  el.innerHTML=h;
+# ---- agent history (Claude Code transcripts) --------------------------------------------------
+# Every headless session `kcc-run` starts (and every subagent it spawns) is a transcript under
+# ~/.claude/projects/<workspace path with non-alphanumerics replaced by '-'>/. They record the
+# resolved model, token usage and, per session, the cost summary. CLAUDE_CONFIG_DIR is honoured.
+$MaxSessions = 80
+function Get-ClaudeProjectDir([string]$Root = $RepoRoot) {
+    $base = $env:CLAUDE_CONFIG_DIR
+    if (-not $base) {
+        $h = $env:USERPROFILE; if (-not $h) { $h = $env:HOME }
+        if ($h) { $base = Join-Path $h '.claude' }
+    }
+    if (-not $base) { return '' }
+    return (Join-Path (Join-Path $base 'projects') ([regex]::Replace($Root, '[^A-Za-z0-9]', '-')))
 }
-function renderSpec(sp){
-  var h='<div class="spec"><strong>'+esc(sp.id)+'</strong> '+esc(sp.title||sp.slug||'')+badge(sp.status);
-  if(sp.verdict){ h+=' <span class="pass">'+sp.verdict.pass+' PASS</span> / <span class="fail">'+sp.verdict.fail+' FAIL</span>'; }
-  if(sp.items && sp.items.length){
-    sp.items.forEach(function(it){ h+='<div class="item">'+esc(it.type)+' '+esc(it.key)+badge(it.status)+'</div>'; });
-  } else { h+='<div class="item empty">no stories/enablers</div>'; }
-  return h+'</div>';
+# A spec built in a lane (.kcc-lanes/SPEC-x, .worktrees/SPEC-x) runs its sessions with the lane as the working
+# folder, so its transcripts live under the lane's own project folder, not the workspace's.
+function Get-LaneRoots {
+    $out = @()
+    foreach ($ld in @('.kcc-lanes', '.worktrees')) {
+        $lp = Join-Path $RepoRoot $ld
+        if (Test-Path -LiteralPath $lp) { foreach ($d in @(Get-ChildItem -LiteralPath $lp -Directory -ErrorAction SilentlyContinue)) { $out += $d.FullName } }
+    }
+    return $out
 }
-
-// ---- Activity / Replay tab ----
-function renderActivity(){
-  var el=document.getElementById('activity');
-  var specs=[...new Set(DATA.events.map(function(e){return e.spec;}).filter(Boolean))].sort();
-  var kinds=[...new Set(DATA.events.map(function(e){return e.kind;}).filter(Boolean))].sort();
-  var h='<div class="controls">';
-  h+='<select id="fSpec"><option value="">all specs</option>'+specs.map(function(s){return '<option>'+esc(s)+'</option>';}).join('')+'</select>';
-  h+='<select id="fKind"><option value="">all kinds</option>'+kinds.map(function(k){return '<option>'+esc(k)+'</option>';}).join('')+'</select>';
-  h+='</div><div id="timeline"></div>';
-  h+='<div class="card"><strong>Trace sessions</strong>';
-  if(!DATA.sessions.length){ h+='<div class="empty">no sessions</div>'; }
-  DATA.sessions.forEach(function(s){
-    h+='<div class="sess">'+esc(s.name)+'<br>'+s.artifacts.map(function(a){
-      return '<span class="chip '+(a.present?'on':'off')+'">'+esc(a.name)+(a.present?(' ('+a.lines+')'):'')+'</span>';}).join('')+'</div>';
-  });
-  h+='</div>';
-  el.innerHTML=h;
-  function draw(){
-    var fs=document.getElementById('fSpec').value, fk=document.getElementById('fKind').value;
-    var rows=DATA.events.filter(function(e){return (!fs||e.spec===fs)&&(!fk||e.kind===fk);});
-    var t=document.getElementById('timeline');
-    if(!rows.length){ t.innerHTML='<p class="empty">no events match.</p>'; return; }
-    t.innerHTML=rows.map(function(e){
-      var route=esc(e.from||'?')+(e.to?(' &rarr; '+esc(e.to)):'')+(e.spec?(' ['+esc(e.spec)+']'):'');
-      return '<div class="ev"><span class="t">'+esc(e.ts)+'</span><span class="k">'+esc(e.kind)+'</span>'+
-             '<span>'+route+'<div class="pay">'+esc(e.payload)+'</div></span></div>';
-    }).join('');
-  }
-  document.getElementById('fSpec').onchange=draw; document.getElementById('fKind').onchange=draw; draw();
+function Get-RawTs([string]$line) {
+    $m = [regex]::Match($line, '"timestamp"\s*:\s*"([^"]+)"')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+function Get-Utc([string]$s) {
+    if (-not $s) { return $null }
+    try { return [datetime]::Parse($s, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } catch { return $null }
+}
+# Totals for one transcript: dedupes by message id (a message is logged once per content block).
+function Read-Transcript([string]$Path) {
+    $res = [ordered]@{ first = ''; last = ''; effort = ''; label = ''; direct = ''; models = [ordered]@{}; cost = $null; ok = $false }
+    $lines = $null
+    try { $rd = Open-SharedReader $Path; try { $lines = @(); while ($null -ne ($ln = $rd.ReadLine())) { $lines += $ln } } finally { $rd.Dispose() } } catch { return $res }
+    $byMsg = [ordered]@{}
+    $effCount = @{}
+    $seenUser = 0
+    foreach ($line in $lines) {
+        if (-not $line) { continue }
+        $ts = Get-RawTs $line
+        if ($ts) { if (-not $res.first) { $res.first = $ts }; $res.last = $ts }
+        if ($line.Contains('"effort":"')) { $em = [regex]::Match($line, '"effort"\s*:\s*"([a-z]+)"'); if ($em.Success) { $effCount[$em.Groups[1].Value] = 1 + [int]$effCount[$em.Groups[1].Value] } }
+        if (-not $res.label -and $seenUser -lt 60) {
+            $seenUser++
+            $lm = [regex]::Match($line, 'KCC run state (\d+) ([A-Z0-9-]+)(?: for (SPEC-[0-9A-Za-z]+))?(?: wave (\d+))?')
+            if ($lm.Success) {
+                $res.label = $lm.Value
+                # `--fasttrack` worker states run AS the agent (claude --agent), with no orchestrator session above it.
+                $dm0 = [regex]::Match($line, 'You are the ([a-z][a-z0-9-]*) agent running this state directly')
+                if ($dm0.Success) { $res.direct = $dm0.Groups[1].Value }
+            }
+        }
+        if ($line.Contains('"type":"assistant"') -and $line.Contains('"usage"')) {
+            try { $o = $line | ConvertFrom-Json } catch { continue }
+            $msg = $o.message
+            if ($null -eq $msg -or $null -eq $msg.usage) { continue }
+            $id = [string]$msg.id; if (-not $id) { $id = [string]$o.uuid }
+            $byMsg[$id] = @{ model = [string]$msg.model; u = $msg.usage }
+        } elseif ($line.Contains('"type":"cost-state"')) {
+            $cm = [regex]::Match($line, '"totalCostUSD"\s*:\s*([0-9.eE+-]+)')
+            if ($cm.Success) { $res.cost = [double]::Parse($cm.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) }
+        }
+    }
+    foreach ($k in $byMsg.Keys) {
+        $e = $byMsg[$k]; $m = $e.model; if (-not $m) { $m = 'unknown' }
+        if (-not $res.models.Contains($m)) { $res.models[$m] = [ordered]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0; messages = 0 } }
+        $t = $res.models[$m]; $u = $e.u
+        $t.input += [int64]($u.input_tokens); $t.output += [int64]($u.output_tokens)
+        $t.cacheRead += [int64]($u.cache_read_input_tokens); $t.cacheWrite += [int64]($u.cache_creation_input_tokens); $t.messages += 1
+    }
+    if ($effCount.Count -gt 0) { $res.effort = ($effCount.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1).Key }
+    $res.ok = ($res.first -ne '')
+    return $res
+}
+function New-AgentRun($kind, $id, $parent, $agent, $desc, $tr, $label) {
+    $in = 0; $out = 0; $cr = 0; $cw = 0; $top = ''; $topOut = -1
+    foreach ($m in $tr.models.Keys) {
+        $t = $tr.models[$m]; $in += $t.input; $out += $t.output; $cr += $t.cacheRead; $cw += $t.cacheWrite
+        if ($t.output -gt $topOut) { $topOut = $t.output; $top = $m }
+    }
+    $a = Get-Utc $tr.first; $b = Get-Utc $tr.last; $dur = 0
+    if ($a -and $b) { $dur = [int64]($b - $a).TotalMilliseconds }
+    $state = ''; $stateName = ''; $spec = ''; $wave = ''
+    if ($label) {
+        $m = [regex]::Match($label, 'state (\d+) ([A-Z0-9-]+)(?: for (SPEC-[0-9A-Za-z]+))?(?: wave (\d+))?')
+        if ($m.Success) { $state = $m.Groups[1].Value; $stateName = $m.Groups[2].Value; $spec = $m.Groups[3].Value; $wave = $m.Groups[4].Value }
+    }
+    if (-not $spec) { $sm = [regex]::Match([string]$desc, 'SPEC-[0-9A-Za-z]+'); if ($sm.Success) { $spec = $sm.Value } }
+    return [ordered]@{
+        id = $id; kind = $kind; parent = $parent; agent = $agent; description = $desc
+        state = $state; stateName = $stateName; spec = $spec; wave = $wave
+        started = $tr.first; ended = $tr.last; durationMs = $dur
+        model = $top; effort = $tr.effort; effortSource = ($(if ($tr.effort) { 'transcript' } else { '' }))
+        tokens = [ordered]@{ input = $in; output = $out; cacheRead = $cr; cacheWrite = $cw }
+        models = $tr.models; costUSD = $tr.cost
+    }
 }
 
-renderProgress(); renderActivity();
-document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){
-  document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active');});
-  document.querySelectorAll('.view').forEach(function(x){x.classList.remove('active');});
-  t.classList.add('active'); document.getElementById(t.dataset.view).classList.add('active');
-};});
-</script>
-</body>
-</html>
-"@
+$projDir = Get-ClaudeProjectDir
+$profiles = @{}
+$agentsDir = Join-Path $RepoRoot '.claude/agents'
+if (Test-Path -LiteralPath $agentsDir) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+        $t = Read-TextOrNull $f.FullName
+        $nm = Get-Frontmatter $t 'name'; if (-not $nm) { $nm = $f.BaseName }
+        $profiles[$nm] = [ordered]@{ name = $nm; model = (Get-Frontmatter $t 'model'); effort = (Get-Frontmatter $t 'effort') }
+    }
+}
+$data['profiles'] = @($profiles.Values | Sort-Object { $_.name })
+$agentRuns = @()
+$projDirs = @(); if ($projDir) { $projDirs += $projDir }
+foreach ($lr0 in @(Get-LaneRoots)) { $lpd = Get-ClaudeProjectDir $lr0; if ($lpd) { $projDirs += $lpd } }
+$projDirs = @($projDirs | Where-Object { Test-Path -LiteralPath $_ })
+if ($projDirs.Count -gt 0) {
+    $sessions = @($projDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.jsonl' -File -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending)
+    if ($sessions.Count -gt $MaxSessions) { $data.notes += ('Agent history shows the newest ' + $MaxSessions + ' of ' + $sessions.Count + ' Claude sessions.'); $sessions = @($sessions | Select-Object -First $MaxSessions) }
+    foreach ($sf in $sessions) {
+        $sid = $sf.BaseName
+        $tr = Read-Transcript $sf.FullName
+        if (-not $tr.ok) { continue }
+        $label = $tr.label
+        $agentName = 'main session'; if ($tr.direct) { $agentName = $tr.direct }
+        $srun = New-AgentRun 'session' $sid '' $agentName $label $tr $label
+        $srun['mode'] = $(if ($tr.direct) { 'direct' } else { 'orchestrator' })
+        if ($tr.direct -and $profiles.Contains($tr.direct)) { $srun['profileModel'] = $profiles[$tr.direct].model }
+        $agentRuns += $srun
+        $subDir = Join-Path (Join-Path $sf.DirectoryName $sid) 'subagents'
+        if (Test-Path -LiteralPath $subDir) {
+            foreach ($jf in @(Get-ChildItem -LiteralPath $subDir -Filter 'agent-*.jsonl' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                $metaText = Read-TextOrNull ([System.IO.Path]::ChangeExtension($jf.FullName, '.meta.json'))
+                $atype = ''; $adesc = ''
+                if ($metaText) {
+                    $am = [regex]::Match($metaText, '"agentType"\s*:\s*"([^"]*)"'); if ($am.Success) { $atype = $am.Groups[1].Value }
+                    $dm = [regex]::Match($metaText, '"description"\s*:\s*"((?:[^"\\]|\\.)*)"'); if ($dm.Success) { $adesc = [regex]::Unescape($dm.Groups[1].Value) }
+                }
+                if (-not $atype) { $atype = 'subagent' }
+                $str = Read-Transcript $jf.FullName
+                if (-not $str.ok) { continue }
+                $run = New-AgentRun 'subagent' ($sid + '/' + $jf.BaseName) $sid $atype $adesc $str $label
+                $run['mode'] = 'subagent'
+                if ($profiles.Contains($atype)) { $run['effort'] = $profiles[$atype].effort; $run['effortSource'] = 'profile'; $run['profileModel'] = $profiles[$atype].model }
+                $agentRuns += $run
+            }
+        }
+    }
+}
+$data['agents'] = $agentRuns
+
+# A chat run has no driver to say it stopped. When nothing happened for 30 minutes (no event, no agent
+# transcript written), the run is idle: the page must not keep a timer running on it.
+if ($script:derivedRun -and $data.run -and $data.run.status -eq 'running') {
+    $lastAct = [DateTime]::MinValue
+    foreach ($e in @($data.events)) { $t = Get-Utc $e.ts; if ($t -and $t -gt $lastAct) { $lastAct = $t } }
+    foreach ($a in @($agentRuns)) { $t = Get-Utc $a.ended; if ($t -and $t -gt $lastAct) { $lastAct = $t } }
+    if ($lastAct -ne [DateTime]::MinValue -and ([DateTime]::UtcNow - $lastAct).TotalMinutes -gt 30) {
+        $data.run.status = 'idle'
+        $data.run.reason = ('no event or agent activity since ' + $lastAct.ToString('yyyy-MM-ddTHH:mm:ssZ') + '; resume with: auto resume')
+        $data.notes += 'Run marked idle: nothing happened for more than 30 minutes.'
+    }
+}
+
+# ---- stage timing: one row per harness dispatch (coordination/run/logs/state-*.log) -------------------
+# The log header carries the start time; the last write is the end (the harness writes at exit).
+$runLogs = @()
+$logDirs = @($RepoRoot)
+foreach ($lr1 in @(Get-LaneRoots)) { $logDirs += $lr1 }
+foreach ($root1 in $logDirs) {
+    $logDir = Join-Path $root1 'coordination/run/logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { continue }
+    $relBase = ''; if ($root1 -ne $RepoRoot) { $relBase = ($root1.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/') + '/' }
+    foreach ($lf in @(Get-ChildItem -LiteralPath $logDir -Filter 'state-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc)) {
+        $lm = [regex]::Match($lf.Name, '^state-(\d+)-(run|SPEC-[0-9A-Za-z]+)(?:-w(\d+))?-(\d+|install)\.log$')
+        if (-not $lm.Success) { continue }
+        $first = ''
+        $first = Read-FirstLine $lf.FullName
+        $hm = [regex]::Match($first, '^# kcc-run (\S+)')
+        $sp = $lm.Groups[2].Value; if ($sp -eq 'run') { $sp = '' }
+        # line 2 of the log is the harness command: it names the agent, model and effort of this dispatch
+        $h2 = ''; try { $r2 = Open-SharedReader $lf.FullName; try { [void]$r2.ReadLine(); $h2 = [string]$r2.ReadLine() } finally { $r2.Dispose() } } catch { $h2 = '' }
+        if ($h2.Length -gt 600) { $h2 = $h2.Substring(0, 600) }
+        $ha = [regex]::Match($h2, '--agent (\S+)').Groups[1].Value; $hmod = [regex]::Match($h2, '--model (\S+)').Groups[1].Value; $hef = [regex]::Match($h2, '--effort (\S+)').Groups[1].Value
+        $runLogs += [ordered]@{
+            state = [int]$lm.Groups[1].Value; spec = $sp; wave = $lm.Groups[3].Value; attempt = $lm.Groups[4].Value; agent = $ha; model = $hmod; effort = $hef
+            started = $(if ($hm.Success) { $hm.Groups[1].Value } else { '' })
+            ended = $lf.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); file = ($relBase + 'coordination/run/logs/' + $lf.Name)
+        }
+    }
+}
+$data['runLogs'] = $runLogs
+
+# ---- lanes: git worktrees (.worktrees/) and kcc run lanes (.kcc-lanes/) where specs are being built ----
+$lanes = @()
+foreach ($ld in @('.worktrees', '.kcc-lanes')) {
+    $lp = Join-Path $RepoRoot $ld
+    if (-not (Test-Path -LiteralPath $lp)) { continue }
+    foreach ($d in @(Get-ChildItem -LiteralPath $lp -Directory -ErrorAction SilentlyContinue)) {
+        $src = Join-Path $d.FullName 'src'
+        $files = @(); if (Test-Path -LiteralPath $src) { $files = @(Get-ChildItem -LiteralPath $src -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' }) }
+        $last = $d.LastWriteTimeUtc; foreach ($f in $files) { if ($f.LastWriteTimeUtc -gt $last) { $last = $f.LastWriteTimeUtc } }
+        $sm = [regex]::Match($d.Name, 'SPEC-[0-9A-Za-z]+')
+        # A kcc lane runs its own kcc-run: its state, wave and status say which stage the spec is in.
+        $lr = $null; $lrp = Join-Path $d.FullName 'coordination/run/run.json'
+        $lrt = ''
+        if (Test-Path -LiteralPath $lrp) { try { $lrt = [System.IO.File]::ReadAllText($lrp); $lr = $lrt | ConvertFrom-Json } catch { $lr = $null } }
+        $lanes += [ordered]@{ name = $d.Name; kind = $ld.TrimStart('.'); spec = $sm.Value; files = $files.Count; updated = $last.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            runState = $(if ($lr) { [string]$lr.state } else { '' }); runWave = $(if ($lr) { [string]$lr.wave } else { '' }); runStatus = $(if ($lr) { [string]$lr.status } else { '' })
+            runReason = $(if ($lr) { [string]$lr.reason } else { '' }); runAttempts = $(if ($lr) { [string]$lr.attempts } else { '' }); runGateId = $(if ($lr) { [string]$lr.gate_id } else { '' })
+            runGateName = $(if ($lr) { [string]$lr.gate_name } else { '' }); runGateState = $(if ($lr) { [string]$lr.gate_state } else { '' }); runUpdated = $(if ($lrt -match '"updated"\s*:\s*"([^"]*)"') { $Matches[1] } else { '' }) }
+    }
+}
+$data['lanes'] = $lanes
+
+# ---- needs attention: coordination/NeedsAttention.md (a silent run decides by policy and records what a human should check) -------
+# One entry per file: the workspace's and each lane's. The page parses the text; here it is only read (first 600 lines, CR and control characters dropped).
+$naRoots = @($RepoRoot) + @(Get-LaneRoots | Sort-Object)
+foreach ($nr in $naRoots) {
+    $nf = Join-Path $nr 'coordination/NeedsAttention.md'
+    if (-not (Test-Path -LiteralPath $nf -PathType Leaf)) { continue }
+    $nlines = @(); try { $nrd = Open-SharedReader $nf; try { while ($null -ne ($nl = $nrd.ReadLine()) -and $nlines.Count -lt 600) { $nlines += $nl } } finally { $nrd.Dispose() } } catch { continue }
+    $ntxt = ([regex]::Replace(($nlines -join "`n"), '[\x00-\x08\x0B\x0C\x0E-\x1F]', '')).TrimEnd("`r", "`n")
+    $data.needsAttention += [ordered]@{ file = ($nf.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'); text = $ntxt }
+}
+
+# ---- fill the template ------------------------------------------------------------------------
+$tplPath = Join-Path $RepoRoot '.KCC/kernel/templates/dashboard.html'
+if ($Template) { $tplPath = $Template }
+if (-not (Test-Path -LiteralPath $tplPath)) { $tplPath = Join-Path (Split-Path -Parent $ToolDir) 'kernel/templates/dashboard.html' }
+$tpl = Read-TextOrNull $tplPath
+if (-not $tpl) { [Console]::Error.WriteLine("dashboard template not found: $tplPath"); exit 2 }
+
+$json = ConvertTo-Json -InputObject $data -Depth 14 -Compress
+$json = $json.Replace('</', '<\/').Replace([string][char]0x2028, ' ').Replace([string][char]0x2029, ' ')
+$html = $tpl.Replace('__KCC_DATA__', $json)
 
 $outDir = Join-Path $RepoRoot 'dashboard'
 if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 $outFile = Join-Path $outDir 'index.html'
-
-# UTF-8 without BOM so browsers and editors read it cleanly.
-$enc = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($outFile, $html, $enc)
+[System.IO.File]::WriteAllText($outFile, $html, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host "Dashboard written to $outFile"
-Write-Host ("  ideas={0} specs={1} events={2} sessions={3} memory={4}" -f $data.ideas.Count, $data.specs.Count, $data.events.Count, $data.sessions.Count, $data.memory.total)
-if ($Open) { Start-Process $outFile }
+Write-Host ("  ideas={0} specs={1} events={2} checkpoints={3} sessions={4} decisions={5}" -f @($data.ideas).Count, @($data.specs).Count, @($data.events).Count, @($data.checkpoints).Count, @($data.sessions).Count, (@($data.decisions).Count + @($data.humanDecisions).Count))
+# A lane (<root>/.kcc-lanes/SPEC-x) builds its own page, but the page people look at is the workspace's. Rebuild that one
+# too, so lane activity reaches it even when the scheduler that normally refreshes it is not running.
+$parentRoot = $null
+if (($env:KCC_DASH_PARENT -ne '1') -and ($RepoRoot -match '[\\/]\.kcc-lanes[\\/][^\\/]+$')) { $parentRoot = Split-Path -Parent (Split-Path -Parent $RepoRoot) }
+if ($parentRoot -and (Test-Path -LiteralPath (Join-Path $parentRoot 'coordination/lanes.json')) -and (Test-Path -LiteralPath (Join-Path $parentRoot '.KCC/tools/build-dashboard.ps1'))) {
+    $env:KCC_DASH_PARENT = '1'
+    try { & (Join-Path $parentRoot '.KCC/tools/build-dashboard.ps1') -RepoRoot $parentRoot *> $null } catch { } finally { $env:KCC_DASH_PARENT = $null }
+}
+if ($Open) {
+    # KCC_OPEN_LOG: automation hook. Record the path instead of launching a browser.
+    # KCC_DASHBOARD_URL: `kcc run` serves a live page; open that instead of the file so the page stays current.
+    $openTarget = $outFile; if ($env:KCC_DASHBOARD_URL) { $openTarget = $env:KCC_DASHBOARD_URL }
+    if ($env:KCC_OPEN_LOG) { Add-Content -LiteralPath $env:KCC_OPEN_LOG -Value $openTarget } else { Start-Process $openTarget }
+}

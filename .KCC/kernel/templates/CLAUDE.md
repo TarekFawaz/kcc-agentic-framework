@@ -44,6 +44,9 @@ re-read them.
   `auto resume` (continue from the latest restore point),
   `.KCC/tools/kcc-handover` (switch harness or CLI),
   `.KCC/tools/kcc-limit-watch` (unattended resume after a usage-limit reset),
+  `kcc hint "text"` or `/hint` (guidance for the running session and its
+  subagents, `.KCC/kernel/protocols/hints.md`; on a harness without hooks run
+  `kcc hint --pending --for main` at the start of each state and wave),
   `.KCC/tools/repo-bootstrap` (git init/remote and hooks, asked once),
   and the optional post-review steps `/spec-merge` (pull-request draft via
   `repo-steward`; never pushes) and `/spec-deploy` (pipeline + IaC files;

@@ -41,6 +41,15 @@ ladder) are published in `coordination/orchestrator.md` and
 `coordination/orchestrator.json`. Callers spawn by agent name and never
 restate model or effort inline.
 
+Default tiers: `balanced` for interrogation, architecture, spec writing and
+planning; `fast-implementation` (the executor) for the `implementer`;
+`strong-reasoning` only on an approved escalation. The `deep` tier
+(`protocols/deep-thinking.md`) is never a class or a default: four named analysis tasks,
+each after a human has seen the cost. A workspace can pin other
+tiers per agent in the user-owned `.KCC/model-overrides` file
+(`name = model-class [effort]`, applied at sync time and never overwritten by
+`kcc upgrade`).
+
 Required body sections:
 
 - `## Process`

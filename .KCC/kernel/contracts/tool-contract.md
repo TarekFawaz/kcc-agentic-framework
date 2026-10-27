@@ -81,3 +81,22 @@ JSON mode:
 - **Emit evidence:** tools that close a gate append a backchannel event through
   `backchannel-append` when `-Emit` / `--emit` is passed.
 - **Idempotent:** running a tool twice yields the same result.
+
+## quality-gate checks and scopes
+
+`quality-gate` (`--scope all` by default, or a comma list) runs: `lock`, `build`,
+`lint`, `test`, `coverage`, `secrets`, `deps`, `sast`, `static`, `sbom`, `image`.
+
+- `static` -> `QG-STATIC static-rules`. Reads `architecture/static-rules.tsv`
+  (tab-separated, `#` comments; columns `id`, `files`, `forbidden`,
+  `allowed_in`, `message`; the regexes are matched against paths relative to
+  the workspace, `allowed_in` may be empty). No file: `skipped`. A malformed
+  line, or any hit outside `allowed_in`, fails (`file:line rule-id` in the
+  evidence file). `node_modules`, `dist`, `build`, `.git`, `coverage` and
+  lockfiles are not scanned; test files are.
+- `image` -> `QG-IMAGE image-scan` (`trivy fs` on the source) **and**
+  `QG-IMAGE image-scan-built` (`trivy image --ignore-unfixed` on every image the
+  compose file builds). Findings with a fix fail; findings with no fix are
+  counted in the message and never gate. An image that is not built, or a
+  missing `docker`/`trivy`, is `deferred`, never a pass; the tool never builds
+  or installs.

@@ -1,7 +1,7 @@
 export const PROJECT_TYPES = ["web-app", "api-service", "cli-tool", "library", "mobile", "embedded", "data-pipeline", "other"] as const;
 export const DEPLOYMENTS = ["none", "cloud", "kubernetes", "onprem", "hybrid"] as const;
 export const SENSITIVITIES = ["low", "medium", "high"] as const;
-export const STACKS = ["python", "nodejs", "nestjs", "mern", "react", "angular", "vanilla-js", "dotnet", "go", "rust", "java", "cpp", "c", "php"] as const;
+export const STACKS = ["python", "nodejs", "nestjs", "mern", "react", "angular", "vanilla-js", "dotnet", "go", "rust", "java", "cpp", "c", "php", "flutter", "kotlin", "swift", "ruby", "lua"] as const;
 
 export type ProjectType = (typeof PROJECT_TYPES)[number];
 export type Deployment = (typeof DEPLOYMENTS)[number];
@@ -43,6 +43,7 @@ export function defaultContext(): SolutionContext {
 const STACK_ALIASES: Record<string, Stack> = {
   py: "python", node: "nodejs", "node.js": "nodejs", javascript: "nodejs", typescript: "nodejs", js: "nodejs", ts: "nodejs",
   nest: "nestjs", "c#": "dotnet", csharp: "dotnet", ".net": "dotnet", golang: "go", "c++": "cpp", vanilla: "vanilla-js",
+  dart: "flutter", kt: "kotlin", android: "kotlin", ios: "swift", rails: "ruby", rb: "ruby", luajit: "lua",
 };
 
 function asBool(v: unknown): boolean | undefined {

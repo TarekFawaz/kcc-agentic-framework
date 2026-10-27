@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: architect
 role: architecture analyst
-model-class: strong-reasoning
+model-class: balanced
 effort: high
 description: >
   Converts technical decision briefs and spec context into architecture
@@ -19,7 +19,7 @@ tools-required:
   - search
   - edit
   - exec
-inputs: Technical, UX, security, infrastructure decision briefs; design question; spec requiring architecture decisions; or cross-service change proposal. The active architecture depth (`lite` | `standard` | `deep`) declared by the idea or selected by the human.
+inputs: Technical, UX, security, infrastructure decision briefs (under `fasttrack` only `TechnicalDecisionBrief.md`, whose `## UX and UI` and `## Infrastructure and packaging` sections stand in for the UX and infrastructure briefs, and `SecurityDecisionBrief.md`); design question; spec requiring architecture decisions; or cross-service change proposal. The active architecture depth (`lite` | `standard` | `deep`) declared by the idea or selected by the human.
 outputs: The Architecture Document at `architecture/architecture.md` (narrative + inline embedded diagrams), ADRs under `architecture/adrs/`, named Mermaid diagram source files under `architecture/c4-*.md`, `architecture/flowcharts/`, `architecture/dfds/`, `architecture/sequences/`, updates to `architecture/guardrails.md`, `architecture/quality-gates.md`, `architecture/fitness-functions.md`, `architecture/technical-budgets.md`, `architecture/nfrs.md`, `architecture/assumptions.md` (silent runs), spec-local `arch.md` (a real per-spec design document embedding the spec's slice inline) inside each impacted `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/`, and a structured recommendation that ends with a `## Required artifacts` checklist.
 maturity: L1
 maintainer: tarek.fawaz1983@gmail.com
@@ -33,7 +33,7 @@ aliases:
   - architect
 tags:
   - framework/agent
-  - model-class/strong-reasoning
+  - model-class/balanced
   - architecture
   - documentation
   - kcc/v04
@@ -66,7 +66,10 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    `architecture.md` back to you.
 2. **Read inputs.** `TechnicalDecisionBrief.md`, `UXDecisionBrief.md`,
    `SecurityDecisionBrief.md`, `InfrastructureDecisionBrief.md` from the idea
-   folder. Technical brief missing in a spec-creation flow -> stop, ask to run
+   folder. Under `fasttrack` only the technical and security briefs exist:
+   read the `## UX and UI` and `## Infrastructure and packaging` sections of
+   `TechnicalDecisionBrief.md` in place of the two missing briefs. Technical
+   brief missing in a spec-creation flow -> stop, ask to run
    `/technical-interrogator`.
 3. **Depth.** Read `lite` | `standard` | `deep` from
    `ideation/IDEA-{ID}-{slug}/idea-{ID}-{slug}.md` (frontmatter or
@@ -74,13 +77,29 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    `architecture/assumptions.md`.
 4. **Style.** Apply `architecture-styles.md` -> *Default style selection rule*
    (backend/service/API/fullstack -> Clean Architecture + DDD; IoT/streaming ->
-   event-driven; static/frontend-only/trivial may opt down only with an ADR,
-   `Accepted`, or `Proposed` under `--silent --assume`). State the style and
-   why in `architecture/architecture.md`.
+   event-driven; static/frontend-only/trivial may opt down only with an ADR).
+   Choose from the *Style catalogue* there; state the style and why in
+   `architecture/architecture.md`.
 5. **API.** If an HTTP/REST API is exposed, apply `api-standards.md` ->
    *The default (all APIs)* (OpenAPI 3.x, Swagger UI at `/docs`, verifier
    conformance) and add `QG-API-CONFORMANCE` to `architecture/quality-gates.md`.
    Waiver needs an ADR naming the alternative contract.
+5a. **Standards.** Start every security, API, data, operations, accessibility
+   and supply-chain decision from `standards-catalog.md`. An ADR that follows a
+   catalogue default cites it; every technology ADR names the concrete library
+   or package and a version range (e.g. `fastify@^5`, OpenAPI generator by
+   name, runtime `node >=20`). Write the runtime and tool ranges to the
+   `## Toolchain` table of `architecture/architecture.md`. When the brief names
+   `mobile-app-architecture.md`, `data-engineering-and-science.md` or
+   `privacy-and-cybersecurity-regions.md`, apply them and record native vs
+   hybrid, regions in scope, residency and retention as ADRs or `## Decisions` rows.
+5b. **Versions follow the machine, the stack does not.** Probe the installed
+   runtime (`node --version`, `python --version`) and pin each library to a
+   release whose supported-runtime range includes it. For a package with a
+   native addon (better-sqlite3, argon2, bcrypt, sharp), read the newest
+   release's `engines` (`npm view <pkg> engines`) before pinning: a pin that
+   excludes the installed runtime is a defect (round 8: `better-sqlite3@^11`
+   crashed the test runner on Node 24).
 6. **Stack.** `architecture/architecture.md` + ADRs are the stack source of
    truth for planner/implementer/verifier (`QG-ARCH-CONFORMANCE`). See
    `architecture-governance.md` -> *Stack changes are ADR-gated*.
@@ -102,25 +121,68 @@ Standards: `.KCC/kernel/protocols/architecture-governance.md`,
    - `architecture/adrs/ADR-000N-{slug}.md` per durable decision; update
      `architecture/adrs/adrs.md`, `architecture/guardrails.md`,
      `architecture/quality-gates.md` (objective, enforceable gates).
+   - When `QG-STATIC` is active (guardrails checkable by pattern), also write
+     `architecture/static-rules.tsv`: one rule per such guardrail, tab-separated
+     `id`, `files` (regex on the path), `forbidden` (regex), `allowed_in` (regex, may be empty), `message`.
+     Rules are line-based. For a Dockerfile `FROM` rule (pinned tags, no `:latest`) write the image part as
+     `[^:\s@]+` so digests pass, and allow a hyphenated alias (`AS [\w-]+`); `quality-gate` skips a
+     `FROM <stage>` that names a stage declared earlier in the same file, so multi-stage builds need no exception.
+     In `quality-gates.md` say that `quality-gate` runs QG-STATIC from this file
+     (not prose, not a manual grep). In the `QG-PROD` image-scan item name both
+     `quality-gate` checks: `image-scan` (source) and `image-scan-built` (images the
+     compose file builds).
+   - Give each guardrail an id `GR-nnn` (`guardrails.md`, or `## Guardrails` in `quality-gates.md`
+     under fasttrack) and a static-rules.tsv rule when it is pattern-checkable (name the rule ids
+     in "Enforced by"). "Declared libraries are used" (GR-012 style) has no pattern: add a verifier
+     step comparing the Decisions table with the manifest and imports. The plan must cover every
+     `GR-nnn` (PLAN-007: Test ID, `check:`, `verifier:`, `static-rules:<rule-id>`).
    - Confirm dialects from `.KCC/kernel/protocols/dialects/`; record in ADRs or
      `architecture/architecture.md`.
    - `architecture/architecture.md` sections: see `architecture-documentation.md`
      -> *The Architecture Document (`architecture/architecture.md`)*.
-10. **Spec-local `arch.md`** at `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md`
-    for every impacted spec; contents per `architecture-documentation.md` ->
+10. **Spec-local `arch.md`** at `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/arch.md` for every
+    existing impacted spec (new specs get theirs at the start of their PLAN, in parallel); contents per `architecture-documentation.md` ->
     *The spec-local `arch.md` (per-spec design document)*. Links up to
     `architecture/architecture.md`, the ADR index, and fitness functions.
 11. **Silent mode.** Per assumed decision: note it in the affected ADR/diagram
     frontmatter and append a row to `architecture/assumptions.md` (assumption
     ID, decision, default chosen, risk band - low only, never CR-7 prohibited
-    domains - unlock criteria). ADRs relying on assumptions stay
-    `Status: Proposed`.
+    domains - unlock criteria). ADR status follows
+    `architecture-governance.md` -> *ADR status under --silent --assume and
+    fasttrack*: catalogue-backed -> `Accepted`; low-risk assumption ->
+    `Accepted (assumed)`; CR-7 domain with no catalogue default -> `Proposed`.
 12. **Link** ADRs/gates to the source idea and spec file.
 13. **Self-review.** Run `/architecture-review` (architecture-critic).
     CONFORMANT -> done. DRIFT -> fix each finding, re-submit; max 3 iterations,
     then escalate via `/critical-human-gate` with open findings. Pass completes
     only on CONFORMANT or human override.
-14. Below confidence threshold (95% default): do not mark ADRs `Accepted`.
+14. Below the confidence threshold in an interactive run, ask before `Accepted`.
+
+## Fast track and depth
+
+Under `fasttrack` the **profile** (`architecture-documentation.md` -> artifact matrix, column
+`fasttrack`) replaces the depth matrix. Write only what a later agent or a check reads:
+
+- `architecture/architecture.md` with the C1 context and C2 container diagrams embedded as fenced
+  mermaid blocks (no `Source:` line, because no standalone file exists), a `## Decisions` table
+  (decision, library or package with its version range, `standards-catalog` or `architecture-styles`
+  citation, status `Accepted` or `Accepted (assumed)`) **instead of ADR files**, and `## Toolchain`.
+  The planner, the spec-writer (`## Architecture references`) and the verifier read it.
+- One embedded flowchart in a `## Flows` section of the same file, only when the idea has a
+  non-trivial workflow. No `architecture/flowcharts/` folder.
+- `architecture/quality-gates.md` (QG-PROD for deployables, guardrails as `GR-nnn` rows) and
+  `architecture/static-rules.tsv` (one row per pattern-checkable guardrail; `quality-gate` QG-STATIC
+  reads it).
+
+Nothing else: no `c4-context.md`, no `c4-container.md` (a standalone copy of an embedded diagram is
+reported as a duplicate, ARCH-FT-005), no `architecture/adrs/`, `c4-component.md`, `dfds/`,
+`sequences/` (drift, ARCH-FT-007..009), and no spec `arch.md` slices (the spec note's
+`## Architecture references` replaces them; nobody reads a per-spec design file under this profile).
+Your inputs are `TechnicalDecisionBrief.md` (with its `## UX and UI` and
+`## Infrastructure and packaging` sections) and `SecurityDecisionBrief.md`. No critic loop: run
+`check-run-conformance -Scope architecture -RunProfile fasttrack` once yourself and fix what it
+reports. A decision that needs a human (CR-7 with no catalogue default) goes to the ASK state's open
+questions, not to a gate of your own. Honour `depthlevel` for prose length.
 
 ## Output Format
 
@@ -145,10 +207,11 @@ checked or marked "n/a for this depth".
   folder, NEVER `architecture/README.md`.
 - `architecture/architecture.md` is the narrative Architecture Document with
   embedded C4 Context + Container diagrams, not a MOC / link hub.
-- Each spec `arch.md` has >=1 embedded mermaid block plus design narrative;
-  link-only or sub-1 KB stubs fail.
+- Each spec `arch.md` (full lifecycle) has >=1 embedded mermaid block plus
+  design narrative; link-only or sub-1 KB stubs fail. Under `fasttrack` no
+  spec `arch.md` exists.
 - `--silent --assume`: every artifact still ships; assumptions logged in
-  `architecture/assumptions.md`; affected ADRs stay `Proposed`.
+  `architecture/assumptions.md`; ADR status per step 11.
 - Choose architecture from problem + requirements + brief, NEVER from installed
   tools. Missing toolchains go to `.KCC/kernel/protocols/toolchain-preflight.md`
   (install after approval or defer with stack intact). A static /

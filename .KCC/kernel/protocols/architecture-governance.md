@@ -310,10 +310,23 @@ and enablers do not link to `architecture/` directly; they go through the
 spec folder note, which links to `arch.md`, which links to the global
 artifacts.
 
-In `auto --silent --assume` mode, the same flow applies, but the architect
-documents low-risk assumptions in `architecture/assumptions.md` and keeps
-ADR `Status: Proposed` until the human confirms. The planner still reads
-everything as-is; the verifier flags any `Proposed`-status ADR that gated a
+### ADR status under --silent --assume and fasttrack
+
+Nobody is asked during these runs, so an ADR that waits for a human would stop
+the plan at implement. The architect therefore sets the status by what backs
+the decision:
+
+| The decision ... | Status | Plan |
+|--|--|--|
+| follows a default in [[standards-catalog]] or [[architecture-styles]] (cite it) | `Accepted` | proceeds |
+| is a low-risk assumption (not a CR-7 domain), recorded in `architecture/assumptions.md` | `Accepted (assumed)`, with `assumption: A-NNN` | proceeds; the CLOSE summary lists every assumed ADR for review |
+| touches a CR-7 prohibited domain (security, privacy, secrets, compliance) and no catalogue default covers it | `Proposed` | the planner marks the dependent items blocked and a human gate opens; nothing else waits |
+
+A minor or patch version bump inside the range an ADR declares is not an ADR
+change; a new major version or a different library is.
+
+The planner never adds a blanket "STOP before implement" for `Accepted` or
+`Accepted (assumed)` ADRs. The verifier flags any `Proposed` ADR that gated a
 quality check.
 
 ---
@@ -332,7 +345,7 @@ Each ADR contains:
 # ADR-0001: {Decision Title}
 
 ## Status
-Proposed | Accepted | Superseded | Deprecated
+Proposed | Accepted | Accepted (assumed) | Superseded | Deprecated
 
 ## Context
 {Forces, constraints, technical decision brief inputs, related specs}
@@ -380,6 +393,15 @@ Use this table:
 `architecture/quality-gates.md` captures objective checks. Verifier and planner
 must read this file for every spec.
 
+The planner maps every gate it cites to something runnable in the plan's `## Gates coverage`
+(`| Gate | Covered by |`: Test IDs, `check:<QG-ID>` for a check `quality-gate` implements, or
+`verifier:<step>`), one row per numbered `QG-PROD` checklist item as well; a gate no check implements
+gets its own Test ID. Every guardrail `GR-nnn` needs a row too, covered by the same forms,
+`static-rules:<rule-id>` (an id in `architecture/static-rules.tsv`) or `n/a:<reason>`. The architect
+therefore gives each guardrail an id and writes a `static-rules.tsv` rule for each pattern-checkable
+one; a guardrail with no pattern (GR-012, "declared libraries are used") gets a verifier step comparing
+the Decisions table with the manifest and imports. `check-run-conformance` enforces it as PLAN-007 (error, owner planner).
+
 Use this table:
 
 | ID | Gate | Evidence required | Applies to | Source ADR | Status |
@@ -396,8 +418,10 @@ The verifier enforces them. A gate can be dropped only through an ADR.
 | QG-ARCH-CONFORMANCE | The implemented stack matches the ADR-declared stack | Declared vs implemented languages, frameworks, API style, persistence | every spec |
 | QG-ARCH-DOCS | The architecture docs are reviewed and substantive | architecture-critic verdict **CONFORMANT** on record (or a human override); `architecture/architecture.md` is a narrative document, not a hub or a sub-1 KB stub; diagrams are embedded ```mermaid``` blocks with a `Source:` line; **no** `.mmd` files and **no** `architecture/diagrams/`; the supporting docs for the active depth are present and substantive (`fitness-functions.md`, `nfrs.md`, `technical-budgets.md`, `guardrails.md`, `quality-gates.md`, `adrs/` + `adrs.md`); `check-run-conformance -Scope architecture` exits 0 | every spec |
 | QG-TRACE | Every AC is proven by a passing test | `check-traceability -Spec` exits 0 | every spec |
-| QG-QUALITY | Build, lint, tests, coverage floor, lockfile, secrets, dependency audit, SAST | `quality-gate -Spec` exits 0 (exit 3 = deferred, **not** a pass). Coverage floor: `.KCC/settings.json` -> `quality.coverage_min_pct` (default 80) unless this file sets `coverage_min_pct: NN` | every spec with code |
-| QG-PROD | Production readiness | Health/readiness endpoint or CLI self-check; structured logging with no secrets in logs; configuration from environment or config files with no hard-coded secrets or hosts; graceful shutdown and timeouts on external calls; reversible data migrations with documented rollback; a documented rollback/redeploy path; for deployables, SBOM plus image/fs scan (`quality-gate` QG-SBOM/QG-IMAGE) | deployable, service, or API specs; `n/a` with a reason otherwise |
+| QG-SCOPE | The gate runs what the architecture declares | `quality-gate -Spec` takes its scope from the plan's `## Gates coverage` (the `check:QG-*` tokens, QG-QUALITY's eight checks, QG-STATIC) and reports the checks the plan does not cover as out of scope, never as failures; `--scope` overrides | every spec with code |
+| QG-QUALITY | Build, lint, tests, coverage floor, lockfile, secrets, dependency audit (production dependencies at or above `quality.fail_on.dependencies`; dev-only advisories gate only when `quality.audit_dev_dependencies` is true), SAST (`semgrep` or `opengrep`, `quality.scanners.sast`) | `quality-gate -Spec` exits 0 (exit 3 = deferred, **not** a pass; a scanner that could not run, a gate tool error or a built image older than the code is a deferral with its owner, never an implementer failure). Coverage floor: `.KCC/settings.json` -> `quality.coverage_min_pct` (default 80) unless this file sets `coverage_min_pct: NN` | every spec with code |
+| QG-PROD | Production readiness | Health/readiness endpoint or CLI self-check; structured logging with no secrets in logs; configuration from environment or config files with no hard-coded secrets or hosts; graceful shutdown and timeouts on external calls; reversible data migrations with documented rollback; a documented rollback/redeploy path; for deployables, SBOM plus image scans (`quality-gate` QG-SBOM and both QG-IMAGE checks: `image-scan` on the source and `image-scan-built` on the images the compose file builds; a spec cannot pass on the source scan alone) | deployable, service, or API specs; `n/a` with a reason otherwise |
+| QG-STATIC | Pattern-checkable guardrails hold in the code (e.g. no raw SQL outside repository files, no `dangerouslySetInnerHTML`, no token in `localStorage`/`sessionStorage`, no floating-point money) | `quality-gate` check `QG-STATIC` (scope `static`) runs the rules in `architecture/static-rules.tsv` (columns `id`, `files`, `forbidden`, `allowed_in`, `message`); the architect writes that file, one rule per pattern-checkable guardrail; secrets stay with `QG-SECRETS` | every spec with code, when the architect activates it |
 | QG-API-CONFORMANCE | The API matches its contract (OpenAPI/AsyncAPI) | Contract tests or schema validation | specs with an API |
 | QG-BUGS | No open blocker or major bugs | `check-run-conformance -Scope bugs` exits 0 | every spec |
 

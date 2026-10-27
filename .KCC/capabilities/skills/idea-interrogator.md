@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: idea-interrogator
 description: >
- Interrogate a raw idea and produce an Obsidian-friendly idea folder with `idea-{ID}-{slug}.md`, linked artifacts, architecture depth, and a spec-writer handoff. Usage: /idea-interrogator <idea>
+ Interrogate a raw idea and produce an Obsidian-friendly idea folder with `idea-{ID}-{slug}.md`, linked artifacts, architecture depth, and a spec-writer handoff. Usage: /idea-interrogator <idea> [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - idea-interrogator
@@ -49,6 +49,10 @@ stop for prohibited assumptions (legal, security, privacy, compliance, data
 sensitivity, authentication/authorization, destructive actions, external
 spend, production-impacting decisions) or any confidence below the configured
 threshold (95% default).
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack` (set by `auto --fasttrack`): lite mode. Ask at most 5 blocking questions. Write only the idea file (keep `## Reasoning` and `## Phases`, which carries the order of the epics), a short `Research.md`, and `SpecWriterStarter.md`. No `QuickRoadmap.md` (the spec-writer's `ROADMAP.md` supersedes it). Skip Questionnaire, HumanAnswers, ROI, Conclusion, the upfront budget and effort estimate. No butler, trace, token-guard, or token estimate.
 
 ## Steps
 
@@ -98,7 +102,11 @@ threshold (95% default).
    "we'll use Java because that's what we use" for a small CLI tool, the
    agent must surface alternatives (Go, Rust, single-binary trade-offs) and
    ask for an explicit decision. Output: `TechnicalDecisionBrief.md` in the
-   idea folder.
+   idea folder. The domain protocols under `.KCC/kernel/protocols/`
+   (`mobile-app-architecture`, `data-engineering-and-science`,
+   `privacy-and-cybersecurity-regions`) are selected from the idea's context
+   (mobile deliverable, data or ML work, users or data in the EU, GCC or US),
+   not applied to every idea.
 
 5. **UX interrogation (conditional).** If the idea is user-facing, invoke
    `/ux-ui-interrogator` with the idea folder. The ux-ui-designer agent MUST

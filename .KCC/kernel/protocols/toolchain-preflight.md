@@ -68,7 +68,11 @@ tech-stack decisions. Use this mapping as the baseline:
 | `backend-rust` | `rustup` / `cargo`, `git` |
 | `backend-java` | a JDK (`java`/`javac`), `maven` or `gradle`, `git` |
 | `backend-dotnet`, `fullstack-dotnet` | `dotnet` SDK, `git` |
-| flutter / mobile | `dart`, `flutter`, `git` |
+| `mobile-flutter` | `flutter`, `dart`, `git` |
+| `mobile-kotlin` | a JDK (`java`), `gradle` (wrapper), Android SDK, `git` |
+| `mobile-swift` | `swift`, `xcodebuild` (Xcode), `git` |
+| `backend-ruby` | `ruby`, `bundler`, `git` |
+| `scripting-lua` | `lua` (or `luajit`), `luarocks`, `git` |
 | `devops-cloud` | `terraform`, the cloud CLI (`aws` / `az` / `gcloud`), `git` |
 | `devops-k8s-onprem-agnostic` | `terraform`, `kubectl`, `helm`, `git` |
 | **always** | `git` |
@@ -216,6 +220,27 @@ If the human chooses `defer` (or declines an install):
 
 A deferred run is resumable: re-running the preflight after the tools exist lets
 the lifecycle continue from the build/test step.
+
+## Environment probes (`LIMIT` lines)
+
+Some limits are not a missing tool: the tool is there and still cannot do its
+job on this machine. When `docker` is among the required tools and present, the
+preflight runs two probes and prints one line each, `PROBE <what> reachable` or
+`LIMIT <what> unreachable: <why>`:
+
+- `docker-registry`: `docker pull hello-world` through the daemon;
+- `docker-build-network`: a one-line `docker build` whose `RUN` opens a TLS
+  connection to a package registry. Docker Desktop behind a TLS-intercepting
+  proxy or antivirus passes the first probe and fails this one: `npm ci`,
+  `pip install` and `apk` inside a build, and `compose up --build`, will fail.
+
+A `LIMIT` line never fails the preflight and never opens the install gate. The
+driver carries the lines into the verifier's TEST prompt as `KNOWN ENVIRONMENT
+LIMITS`, so the checks they rule out are recorded `DEFERRED` with that reason at
+once instead of after a long build attempt, and the review ends `WAIVER_NEEDED`
+(or `QUALITY_DEFERRED`) rather than `CHANGES_NEEDED`. The fix is the human's:
+trust the proxy's root certificate inside Docker (`KCC_CA_BUNDLE`), switch the
+HTTPS inspection off for Docker, or verify on another host.
 
 ## Related
 

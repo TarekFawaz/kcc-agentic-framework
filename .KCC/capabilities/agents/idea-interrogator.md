@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: idea-interrogator
 role: idea analyst
-model-class: strong-reasoning
+model-class: balanced
 effort: high
 description: >
   Interrogates a raw human idea to extract problem, audience, scope,
@@ -32,7 +32,7 @@ aliases:
 tags:
   - framework/agent
   - lifecycle/interrogate
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-24
 updated: 2026-09-21
 version: 2.9.0
@@ -154,6 +154,10 @@ Templates: read `.KCC/capabilities/agents/refs/idea-interrogator-templates.md`
     their decisions; drive the skill's consolidated confirmation (skill step 8):
     list every captured answer across foundational + tech + UX + security +
     infrastructure in one block for human confirmation.
+
+## Fast track and depth
+
+If the packet says `fasttrack` (or the prompt has `--fasttrack`): do not ask the human; collect at most 5 blocking questions under `## Open questions` in the idea file (the ASK state asks them once) and write only three files: the idea file (keep `## Reasoning` and `## Phases`; `## Phases` carries the order of the epics), a short `Research.md` with a `## Domain` line (`common`, `specialised` or `novel`: how well known the problem space is, which the model router reads), and `SpecWriterStarter.md`. No `QuickRoadmap.md` under fast track: the spec-writer's `ROADMAP.md` supersedes it and nothing else reads it. Skip Questionnaire, HumanAnswers, ROI, Conclusion, the upfront budget and effort estimate, and every butler/token-guard step. Likely epics: at most `spec_sizing.max_specs_fasttrack` (default 8), the first a runnable end-to-end skeleton, each next one a user-visible feature. Honour `depthlevel` (`.KCC/kernel/protocols/depth-levels.md`); an `architecture-depth` the human already chose stays.
 
 ## Output Format
 

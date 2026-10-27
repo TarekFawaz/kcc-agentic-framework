@@ -56,11 +56,15 @@ The root `AGENTS.md` is created when missing and never overwritten by normal syn
 
 | Neutral class         | Codex CLI model     |
 |--|--|
-| `strong-reasoning`    | `gpt-5-5`             |
-| `balanced`            | `gpt-5-mini`        |
-| `fast-implementation` | `gpt-5-nano`        |
-| `local-strong`        | falls back to `gpt-5-5` (or use Ollama adapter) |
-| `local-fast`          | falls back to `gpt-5-nano` (or use Ollama adapter) |
+| `strong-reasoning`    | `gpt-6-astra`         |
+| `balanced`            | `gpt-6.1-sol`         |
+| `fast-implementation` | `gpt-6-luna`          |
+| `local-strong`        | falls back to `gpt-6-astra` (or use Ollama adapter) |
+| `local-fast`          | falls back to `gpt-6-luna` (or use Ollama adapter) |
+
+The GPT-5.x IDs (`gpt-5.4`, `gpt-5.5`, `gpt-5.4-mini`) are retired from Codex with
+ChatGPT sign-in, so they are no longer the defaults. Change the IDs in `sync-adapters`
+when OpenAI ships a new generation.
 
 Resolution is documented in each `.codex/agents/{name}.md` frontmatter (`model:` field). The actual session model Codex uses is whatever the CLI was launched with. To enforce per-agent classes, drive Codex from a wrapper script that re-launches with the right `--model` flag per delegation.
 

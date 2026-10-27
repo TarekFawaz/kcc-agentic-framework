@@ -2,9 +2,9 @@
   "version": "1.0",
   "_note": "Shared by kcc-run, kcc-limit-watch, and the kcc CLI. Keep one key per line and no backslashes: the bash tools read this file with sed. Values are lower-case extended regular expressions matched against the last lines of harness output. See kernel/protocols/session-continuity.md.",
   "limit_regex.default": "usage limit|rate limit|rate-limit|ratelimit|limit reached|quota exceeded|exceeded your (current )?quota|too many requests|resource_exhausted|limit exceeded",
-  "limit_regex.claude": "hit your limit|limit will reset|5-hour limit|weekly limit|rate_limit_error",
+  "limit_regex.claude": "hit your (session |weekly |usage )?limit|session limit|limit will reset|5-hour limit|weekly limit|rate_limit_error|usage_limit_reached",
   "limit_regex.codex": "usage_limit_reached|hit your usage limit|rate_limit_exceeded|insufficient_quota",
   "limit_regex.opencode": "rate_limit_error|rate_limit_exceeded|insufficient_quota",
   "limit_regex.generic": "rate_limit_exceeded|insufficient_quota",
-  "structured_keys": ["rate_limit_error", "rate_limit_exceeded", "usage_limit_reached", "insufficient_quota", "rate_limits", "rate_limit", "resets_at", "reset_at", "retry_after"]
+  "structured_keys": ["usage_limit_reached", "rate_limit_error", "rate_limit_exceeded", "insufficient_quota", "rate_limits", "rate_limit", "resets_at", "reset_at", "retry_after"]
 }

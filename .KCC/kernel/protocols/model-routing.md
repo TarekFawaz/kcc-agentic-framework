@@ -1,0 +1,138 @@
+---
+# Functional fields
+description: How a model tier and an effort level are chosen for each agent run from the task, the domain, the risk, the size, the attempt and the budget, instead of one fixed model per agent.
+inputs: The agent's default class (frontmatter), the state, `Research.md -> ## Domain`, the plan's Complexity and item sizes, the attempt number, the remaining budget, and `kernel/models.json`.
+outputs: A tier (`strong` | `balanced` | `fast`), an effort (`low` .. `xhigh`), the reasons, recorded in the handover packet and a `model-selected` event.
+
+# Obsidian metadata
+title: "Model Routing Protocol"
+aliases:
+  - model-routing
+  - model-router
+tags:
+  - framework/protocol
+  - orchestration
+  - models
+created: 2026-10-16
+updated: 2026-10-16
+version: 1.0.0
+status: active
+copyright: "KCC framework (c) 2026 Tarek Fawaz"
+---
+
+# Model routing
+
+The router stops at `strong`. The `deep` tier (xhigh/max on the most capable model) is never a router
+output: it is a human-costed exception for four named tasks, see [[deep-thinking]].
+
+Each agent has a default class in its frontmatter (`model-class`) and a default effort. The router
+moves that default by at most one tier up or down, and sets the effort, from signals it can read.
+No signal, no move. The registry of what each tier is on each harness is `kernel/models.json`.
+
+## Signals
+
+| Signal | Read from | Values |
+|--|--|--|
+| Task | the state | `research` (IDEA), `architecture` (ARCH), `security` (security brief, CR-7 items), `spec`, `plan`, `review` (TEST, REVIEW), `implement`, `scaffold` (wave 1 enablers), `docs`, `close` |
+| Domain | `ideation/IDEA-*/Research.md -> ## Domain` | `common` (well-known problem space), `specialised`, `novel` |
+| Risk | CR-7 domains in the item, or `Complexity: high` / `extra-high` in `plan.md` | yes / no |
+| Size | the wave's items and the item's Impacted Files | items > 3 or files > 5 is "large" |
+| Attempt | the driver's attempt counter | 1, 2, 3 |
+| Budget | `--budget` remaining | % left |
+
+## Rules (applied in this order; tier is clamped to default +/- 1)
+
+1. Start at the agent's default tier and effort. The first reason of every pick says so
+   (`agent default: balanced / high`); each later reason names one adjustment and its cause.
+2. **Task floor.** `research`, `architecture`, `security`, `spec`, `plan` never run below `balanced`, whatever the domain
+   says (round 11: the per-spec spec-writers and planners ran on `fast`, four of five planners exited without writing
+   `plan.md`; the step down bought little, and the "same price per token" that was measured for Haiku and Sonnet then was a Claude
+   Code fallback price for ids that build did not know, see `models.json -> tier_cost_observed`).
+3. **Domain.** `novel`: one tier up and effort `high`. `common`: one tier down for `docs` and `scaffold` only
+   (mechanical text: PR drafts, config scaffolds), effort unchanged. `spec` and `plan` are not lowered by a common domain.
+4. **Risk.** Never below `balanced`; effort `high`.
+5. **Size.** Large: effort one step up.
+6. **Retry.** Attempt 2 or later, by task (`RETRY_RULES` in `router.ts`, the same table in both ports):
+   - `implement` (and the other fixers): one tier up and effort one step up.
+   - `spec`, `plan` (planning): the tier **does not** go up and the effort rises one step to at most `high`, never
+     `xhigh`; an effort the first run already had is not lowered. A planning retry is a rewrite of a file the first run
+     failed to write, not harder reasoning (round 11: Haiku, then Sonnet at xhigh for 10-19 minutes each).
+   - `review` (a verifier or critic): **never** escalated; its second run is a re-check of the fixes, not harder work
+     (round 10: a retried verifier ran on Opus at xhigh for 25 minutes).
+7. **Budget.** Under 20% left: never above `balanced` unless risk.
+8. Effort is clamped to `low` .. `xhigh`; `max` is a human choice only.
+9. **Caller ceilings.** `kcc-route -MaxTier / -MaxEffort` (`--max-tier / --max-effort`) cap the result. `kcc-run` caps REVIEW
+   (`/spec-review` is a quick diff review) and a scoped TEST re-verification at `balanced` tier and `high` effort.
+10. **Review ceiling.** A `review` task (verifier, critic) never runs above `high` unless the item's Complexity is `extra-high`:
+   a verification reads and runs what exists, and round 12's 51-minute first TEST pass at `xhigh` found the same four bugs a
+   `high` pass finds. Reason: `review: effort capped at high (xhigh only for extra-high complexity)`.
+
+Examples: an implementer (`fast`, `medium`) on a common CRUD wave stays `fast / medium`; the same
+implementer on an auth module (risk) runs `balanced / high`; a spec-writer or planner (`balanced`, `high`) on a
+common domain stays on `balanced / high`, and so does its retry; an architect (`balanced`, `high`) on a novel domain
+runs `strong / high`.
+
+## The reasons line
+
+`reasons` is a list joined with `; ` (events and the `## Routing` table show it verbatim, the dashboard too), in plain
+English, kept short (a typical pick is under 160 characters; four stacked adjustments plus a cap reach about 170). Every pick has at least the first item, so a default pick is
+no longer an empty or `default` reason. Example for an implementer retry on an auth item:
+
+`agent default: balanced / medium; security-sensitive (auth): effort high; large unit: effort up; attempt 2: tier up, effort unchanged`
+
+Other forms: `spec never runs below balanced: tier raised`, `novel domain: tier up, effort high`,
+`attempt 2: effort raised to high, tier unchanged for planning`, `budget under 20%: tier capped at balanced`,
+`capped at balanced for review`, `effort capped at high for review`. A verifier retry adds nothing (it is routed like its
+first run).
+
+## Plan time, per backlog item (`## Routing`)
+
+The architect and the planner are the ones who know how hard each item is, so the decision is taken once, after the plan,
+per item (story, enabler), not per agent for the whole run. `kcc route [SPEC-ID]` reads each item's `Complexity`, the
+files in its Backlog item, `Research.md -> ## Domain` and the CR-7 words in its notes and ACs (auth, password, session,
+csrf, token, crypto, payment, personal data), runs the rules above for the `implement` task, and writes
+`## Routing` into `plan.md`:
+
+| Item | Wave | Tier | Model | Effort | Why |
+
+- `kcc run` does this itself right after SPECS; in a chat run the orchestrator runs `kcc route SPEC-ID` after the plan.
+- Implementation is capped at `routing.implement_max_tier` (settings, default `balanced`): a novel domain raises its
+  effort, not its price class. `extra-high` Complexity gives `xhigh` effort. Set the cap to `strong` to let the
+  router go higher.
+- `kcc-run` reads the table and passes each wave (and the FIX pass) the strongest model and effort among that wave's
+  items, emitting `model-selected`. A retry raises the effort one step. The drivers hold no routing rules of their own
+  when the table exists; without it they keep their older subset.
+- The planner does not write this table by hand; it fills the `Complexity` column.
+
+## Where it runs: one router, three identical copies, every cycle
+
+The reference is `cli/src/run/router.ts`; `.KCC/tools/kcc-route.ps1` and `kcc-route.sh` are line-for-line ports and a parity
+test feeds all three the same cases. Every flow asks it before it spawns an agent:
+
+| Flow | Who asks | How |
+|--|--|--|
+| `kcc run` / `kcc-run`, every state, every cycle (full `auto` and `--fasttrack`) | the driver | `kcc-route -Agent <state agent> -Spec -Wave -Attempt`; a direct worker (fast track) gets the model and effort as flags, an orchestrator session is told in its prompt which tier, model and effort to spawn the agent on; `model-selected` records it |
+| chat `auto`, and any skill a developer runs by hand | the orchestrator | spawn rule 7: run `kcc-route` before each spawn and pass its model and effort to the Agent call |
+| `kcc route [SPEC-ID]` | anyone | writes the per-item `## Routing` table into `plan.md` for reading and review |
+
+The answer is already in the active harness's terms: the model id from `kernel/models.json` (its registry column, `run.registry`)
+and the effort folded onto what the harness accepts (`kernel/harnesses.json`), so Codex, OpenCode, Ollama-behind-OpenCode and
+Claude all route the same way with their own models.
+
+
+- **Chat (`auto`)**: the orchestrator applies the rules when it writes the handover packet
+  (`orchestrator.md` -> Spawn protocol rule 7) and names the tier, effort and reasons in the packet;
+  it emits `model-selected` (`agent`, `tier`, `model`, `effort`, `reasons`).
+- **Driver (`kcc-run`)**: for a direct agent run (`claude --agent`) it applies the same rules from
+  the signals it has (domain, complexity, attempt) and passes `--model` and `--effort`.
+- **CLI**: `kcc models` lists the registry; `kcc models --check` probes every pinned id against the
+  installed harness and fails on an unknown id or a disagreement with the generated agent files;
+  `kcc models --refresh` also reports what each alias resolves to today, so a newer generation is
+  noticed. `kcc doctor` warns when the registry's `verified` date is older than 30 days.
+
+## Related
+
+- DeepThinking: [[deep-thinking]]
+- Orchestrator spawn protocol: `kernel/templates/orchestrator.md`
+- Registry: `kernel/models.json`
+- Harness adapters: [[../adapters/claude|claude]], [[../adapters/codex|codex]]

@@ -105,6 +105,15 @@ combination may fire in a single run.
 
 ---
 
+## Fast track
+
+Under `--fasttrack` the confidence gate **records** the confidence (backchannel event, the
+brief or plan's `Confidence:` line) and the run continues; it does not pause. Two exceptions, and
+they are the only human stops of a fast-track run: the ASK state (one merged question round, where a
+CR-7 decision with no catalogue default is asked) and the spec-split approval in SPECS. Under
+`--silent --assume` neither pauses; the assumptions are written to `ideation/IDEA-*/Assumptions.md`
+for review afterwards.
+
 ## Related
 
 - Auto mode: [[auto-mode]]

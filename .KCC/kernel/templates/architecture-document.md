@@ -148,6 +148,12 @@ full ADR. Keep summaries to two or three sentences.}
 |--|--|--|--|
 | [[adrs/ADR-0001-{slug}\|ADR-0001]] | {decision} | {why} | Accepted |
 
+## Toolchain
+
+| Tool | Version |
+|--|--|
+| {runtime, e.g. node} | {major range from the ADRs, e.g. >=20} |
+
 ## 8. Quality attributes
 
 {Summarize the NFRs, fitness functions, and technical budgets in narrative,

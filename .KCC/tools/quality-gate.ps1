@@ -3,14 +3,14 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
 
 .SYNOPSIS
     Deterministic quality gate for a KCC workspace (build, lint, tests,
-    coverage, lockfile, secrets, dependencies, SAST, SBOM, image scan).
+    coverage, lockfile, secrets, dependencies, SAST, static rules, SBOM, image scan).
 
 .DESCRIPTION
     Mirror of quality-gate.sh (same check IDs, JSON shape, exit codes).
     Contract: .KCC/kernel/contracts/tool-contract.md
 
     Checks: QG-STACK QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS
-            QG-DEPS QG-SAST QG-SBOM QG-IMAGE
+            QG-DEPS QG-SAST QG-STATIC QG-SBOM QG-IMAGE
 
     Exit: 0 pass | 1 violations | 2 usage/environment | 3 deferred (a scanner
     or toolchain is missing; NOT a pass). This tool NEVER installs anything;
@@ -75,11 +75,39 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath.TrimEnd('\', '/')
 
 if ($Spec -and ($Spec -notmatch '^SPEC-[0-9A-Za-z]+$')) { Exit-Env "invalid -Spec '$Spec' (expected SPEC-{ID})" }
 $Scope = ($Scope.ToLowerInvariant() -replace '\s', '')
-$validScopes = @('all', 'lock', 'build', 'lint', 'test', 'coverage', 'secrets', 'deps', 'sast', 'sbom', 'image')
+$validScopes = @('all', 'lock', 'build', 'lint', 'test', 'coverage', 'secrets', 'deps', 'sast', 'static', 'sbom', 'image')
 foreach ($s in ($Scope -split ',')) { if ($validScopes -notcontains $s) { Exit-Env "unknown scope '$s'" } }
 if ($Fast) { $Scope = 'secrets' }
 $scopeList = @($Scope -split ',')
 function Test-InScope([string]$Name) { return (($scopeList -contains 'all') -or ($scopeList -contains $Name)) }
+$ScopeGiven = $PSBoundParameters.ContainsKey('Scope')
+$ScopeSource = 'default (all)'
+if ($ScopeGiven -or $Fast) { $ScopeSource = 'option' }
+# The architect decides which gates apply (architecture/quality-gates.md), the planner maps them in plan.md -> ## Gates coverage
+# (check:QG-ID tokens; PLAN-007). Without -Scope, a spec's gate runs exactly the checks that table covers, so a gate the
+# architecture excluded (round 12: image scans for a local tool) is reported as out of scope, not as a failure. No table: all.
+function Get-PlanScope([string]$SpecFolder) {
+    if (-not $SpecFolder) { return '' }
+    $plan = Join-Path $SpecFolder 'plan.md'
+    if (-not (Test-Path -LiteralPath $plan)) { return '' }
+    $lines = [IO.File]::ReadAllLines($plan)
+    $tbl = @(); $in = $false
+    foreach ($l in $lines) {
+        if ($l -match '^## Gates coverage') { $in = $true; continue }
+        if ($in -and ($l -match '^## ')) { break }
+        if ($in) { $tbl += $l }
+    }
+    if ($tbl.Count -eq 0) { return '' }
+    $text = ($tbl -join "`n")
+    $ids = New-Object System.Collections.ArrayList
+    foreach ($m in [regex]::Matches($text, 'check:(QG-[A-Z]+)')) { if (-not ($ids -contains $m.Groups[1].Value)) { [void]$ids.Add($m.Groups[1].Value) } }
+    if ($text -match '(?m)^\|\s*QG-QUALITY\s*\|') { foreach ($q in @('QG-LOCK', 'QG-BUILD', 'QG-LINT', 'QG-TEST', 'QG-COV', 'QG-SECRETS', 'QG-DEPS', 'QG-SAST')) { if (-not ($ids -contains $q)) { [void]$ids.Add($q) } } }
+    if ($text -match '(?m)^\|\s*QG-STATIC\s*\|') { if (-not ($ids -contains 'QG-STATIC')) { [void]$ids.Add('QG-STATIC') } }
+    $map = @{ 'QG-LOCK' = 'lock'; 'QG-BUILD' = 'build'; 'QG-LINT' = 'lint'; 'QG-TEST' = 'test'; 'QG-COV' = 'coverage'; 'QG-SECRETS' = 'secrets'; 'QG-DEPS' = 'deps'; 'QG-SAST' = 'sast'; 'QG-STATIC' = 'static'; 'QG-SBOM' = 'sbom'; 'QG-IMAGE' = 'image' }
+    $out = @()
+    foreach ($id in $ids) { if ($map.ContainsKey($id) -and -not ($out -contains $map[$id])) { $out += $map[$id] } }
+    return ($out -join ',')
+}
 
 $IsWin = ($env:OS -eq 'Windows_NT')
 $Sep = [IO.Path]::DirectorySeparatorChar
@@ -107,9 +135,14 @@ $CovMin = [double](Get-Setting 'quality.coverage_min_pct' 80)
 $CovSrc = 'settings.quality.coverage_min_pct'
 if (-not (Test-Path -LiteralPath $settingsFile)) { $CovSrc = 'default' }
 $FailDeps = ([string](Get-Setting 'quality.fail_on.dependencies' 'high')).ToLowerInvariant()
+# The npm audit gate covers what ships. Dev-only advisories (a test runner or bundler) are not exposed in production and
+# an unattended run cannot major-bump them without breaking its own pinned stack, so they gate only when asked to.
+$AuditDev = (([string](Get-Setting 'quality.audit_dev_dependencies' 'false')).ToLowerInvariant() -eq 'true')
 $FailSast = ([string](Get-Setting 'quality.fail_on.sast' 'error')).ToLowerInvariant()
 # 'local' (semgrep on PATH) or 'docker' (semgrep/semgrep image; for Windows, where semgrep has no native build).
-$SastRunner = ([string](Get-Setting 'quality.scanners.sast_runner' 'local')).ToLowerInvariant()
+$SastRunner = ([string](Get-Setting 'quality.scanners.sast_runner' 'auto')).ToLowerInvariant()   # auto | local | docker
+$SastTool = ([string](Get-Setting 'quality.scanners.sast' 'semgrep')).ToLowerInvariant()
+$SastRules = [string](Get-Setting 'quality.sast_rules' 'auto')
 $FailSecrets = ([string](Get-Setting 'quality.fail_on.secrets' 'any')).ToLowerInvariant()
 
 function Get-CovOverride([string]$File) {
@@ -411,11 +444,13 @@ function Get-DialectStacks {
         'backend-csharp' = 'dotnet'; 'fullstack-dotnet' = 'dotnet'; 'backend-go' = 'go'; 'fullstack-go' = 'go'
         'backend-rust' = 'rust'; 'embedded-rust' = 'rust'; 'backend-java' = 'java'; 'backend-cpp' = 'cpp'
         'embedded-c' = 'cpp'; 'embedded-cpp' = 'cpp'; 'backend-php' = 'php'
+        'mobile-flutter' = 'flutter'; 'mobile-kotlin' = 'kotlin'; 'mobile-swift' = 'swift'
+        'backend-ruby' = 'ruby'; 'scripting-lua' = 'lua'
     }
     $seen = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $SpecDir -Recurse -File -Filter '*.md' -ErrorAction SilentlyContinue)) {
         $text = [IO.File]::ReadAllText($f.FullName)
-        foreach ($m in [regex]::Matches($text, '\b(backend|fullstack|frontend|embedded)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php)\b')) {
+        foreach ($m in [regex]::Matches($text, '\b(backend|fullstack|frontend|embedded|mobile|scripting)-(nodejs|mern|nestjs|react|angular|vanilla-js|python|csharp|dotnet|go|rust|java|cpp|c|php|flutter|kotlin|swift|ruby|lua)\b')) {
             $d = $m.Value
             if ($map.ContainsKey($d) -and (-not $seen.ContainsKey($d))) { $seen[$d] = $true; [void]$res.Add(@{ stack = $map[$d]; dialect = $d }) }
         }
@@ -539,11 +574,30 @@ function Invoke-Simple([string]$Stack, [string]$Check, [string]$Id, [string]$Pro
 }
 
 # ------------------------------------------------------------------ lockfiles
+$NodeLockNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock')
+# The lockfile of an ancestor npm/yarn/pnpm workspace root (above the workspace, up to the repository root), or $null.
+function Get-NodeWsRootLock {
+    $a = Split-Path -Parent $WS
+    while ($a -and ($a.Length -ge $RepoRoot.Length)) {
+        $pj = Join-Path $a 'package.json'
+        $isWs = ((Test-Path -LiteralPath $pj) -and ([System.IO.File]::ReadAllText($pj) -match '"workspaces"')) -or (Test-Path -LiteralPath (Join-Path $a 'pnpm-workspace.yaml'))
+        if ($isWs) { foreach ($n in $NodeLockNames) { $c = Join-Path $a $n; if (Test-Path -LiteralPath $c) { return $c } } }
+        if ($a -ieq $RepoRoot) { break }
+        $a = Split-Path -Parent $a
+    }
+    return $null
+}
+
 function Test-Lock([string]$Stack, [string]$Project, [string]$Dir) {
     if (-not (Test-InScope 'lock')) { return }
     $f = $null
     switch ($Stack) {
-        'node' { $f = Find-Up $Dir @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock') }
+        'node' {
+            $f = Find-Up $Dir $NodeLockNames
+            # A monorepo keeps ONE lockfile at the workspace root, which can sit above the spec's src folder (npm/yarn/pnpm
+            # workspaces). Accept it from an ancestor, up to the repository root, when that ancestor declares workspaces.
+            if (-not $f) { $f = Get-NodeWsRootLock }
+        }
         'python' {
             $f = Find-Up $Dir @('poetry.lock', 'uv.lock', 'Pipfile.lock', 'pdm.lock')
             $req = Join-Path $Dir 'requirements.txt'
@@ -963,6 +1017,15 @@ function Invoke-SecretsCheck {
         $report = Join-Path $Art 'gitleaks.json'
         $glCfg = @(); $glRoot = $GitTop; if (-not $glRoot) { $glRoot = $RepoRoot }
         if ($glRoot -and (Test-Path -LiteralPath (Join-Path $glRoot '.gitleaks.toml'))) { $glCfg = @('-c', (Join-Path $glRoot '.gitleaks.toml')) }
+        elseif ($mode -eq 'staged') {
+            # Pre-commit scan: a freshly staged lockfile is megabytes of generated hashes and made every commit wait
+            # minutes. Skip lockfiles here; the full quality gate still scans them.
+            $fastCfg = Join-Path $Art 'gitleaks-fast.toml'
+            $toml = @('[extend]', 'useDefault = true', '[allowlist]', 'description = "KCC fast (pre-commit) scan: lockfiles are generated, skip them"',
+                "paths = ['''(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|poetry\.lock|Pipfile\.lock|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock)$''']") -join "`n"
+            [System.IO.File]::WriteAllText($fastCfg, $toml + "`n")
+            $glCfg = @('-c', $fastCfg)
+        }
         $newCli = ((Invoke-Native 'gitleaks' @('dir', '--help')).Code -eq 0)
         if ($mode -eq 'staged') {
             if ($newCli) { $argv = @('gitleaks', 'git') + $glCfg + @('--staged', '--no-banner', '--redact', '--exit-code', '1', '--report-format', 'json', '--report-path', $report, $GitTop) }
@@ -977,7 +1040,7 @@ function Invoke-SecretsCheck {
         if (Test-Path -LiteralPath $report) { $count = ([regex]::Matches([IO.File]::ReadAllText($report), '"RuleID"')).Count }
         if ($rc -eq 0) { Add-Check 'QG-SECRETS' 'secrets' '' '' 'pass' 'none' $shown $rc ('gitleaks: no leaks (' + $mode + ')') 'human' (Get-Rel $report) }
         elseif ($count -gt 0) { Add-Check 'QG-SECRETS' 'secrets' '' '' 'fail' 'error' $shown $rc ('gitleaks: ' + $count + ' potential secret(s) (redacted; fail_on=' + $FailSecrets + '); rotate and remove') 'human' (Get-Rel $report) }
-        else { Add-Check 'QG-SECRETS' 'secrets' '' '' 'fail' 'error' $shown $rc ('gitleaks failed to run (exit ' + $rc + ')') 'human' (Get-Rel $script:LastLog) }
+        else { Add-Check 'QG-SECRETS' 'secrets' '' '' 'deferred' 'warning' $shown $rc ('gitleaks exited ' + $rc + ' without a report (a tool error, not a finding); deferred (not a pass)') 'human' (Get-Rel $script:LastLog) }
         return
     }
     if ($null -eq $files) { $files = @(Get-WalkFiles $WS -1) }
@@ -993,15 +1056,17 @@ function Invoke-SecretsCheck {
     }
 }
 
+$script:OsvError = ''
 function Invoke-DepsFallback([string]$Stack, [string]$Dir, [string]$Project) {
     if (($Stack -eq 'node') -and (Test-Path -LiteralPath (Join-Path $Dir 'package-lock.json')) -and (Test-Tool 'npm')) {
         $lvl = $FailDeps
         if ($lvl -eq 'medium') { $lvl = 'moderate' }
         if ($lvl -eq 'any') { $lvl = 'low' }
-        $rc = Invoke-Logged -Dir $Dir -Argv @('npm', 'audit', '--json', ('--audit-level=' + $lvl))
+        $auditArgs = @('npm', 'audit', '--json', ('--audit-level=' + $lvl)); if (-not $AuditDev) { $auditArgs += '--omit=dev' }
+        $rc = Invoke-Logged -Dir $Dir -Argv $auditArgs
         $j = $null
         try { $j = [IO.File]::ReadAllText($script:LastOut) | ConvertFrom-Json } catch { $j = $null }
-        $shown = 'npm audit --json --audit-level=' + $lvl
+        $shown = 'npm audit --json --audit-level=' + $lvl + $(if ($AuditDev) { '' } else { ' --omit=dev' })
         if (($null -eq $j) -or ($null -eq $j.metadata) -or ($null -eq $j.metadata.vulnerabilities)) {
             if ($Require) { Add-Check 'QG-DEPS' 'dependencies' 'node' $Project 'fail' 'error' $shown $rc 'npm audit did not complete (registry unreachable?)' 'human' (Get-Rel $script:LastLog) }
             else { Add-Missing 'osv-scanner'; Add-Check 'QG-DEPS' 'dependencies' 'node' $Project 'deferred' 'warning' $shown $rc 'npm audit did not complete (registry unreachable?); install osv-scanner or retry online' 'human' (Get-Rel $script:LastLog) }
@@ -1041,7 +1106,25 @@ function Invoke-DepsFallback([string]$Stack, [string]$Dir, [string]$Project) {
     }
     $fb = ''
     if ($Stack -eq 'python') { $fb = ' (or pip-audit)' }
+    if ($script:OsvError) {
+        Add-Check 'QG-DEPS' 'dependencies' $Stack $Project 'deferred' 'warning' '' $null ('dependency scan' + $fb + ': ' + $script:OsvError + ' and no stack audit for ' + $Stack + '; deferred (not a pass): run the scanner by hand or set quality.scanners.dependencies') 'human' (Get-Rel $Dir)
+        return
+    }
     Add-Deferred 'QG-DEPS' 'dependencies' $Stack $Project 'osv-scanner' ('dependency scan' + $fb)
+}
+
+# The lockfiles of the workspace (and, when it has no node lockfile of its own, the lockfile of an ancestor npm/yarn/pnpm
+# workspace root, as QG-LOCK accepts it), for `osv-scanner -L`. Same set as deps_lockfiles in quality-gate.sh.
+function Get-DepsLockfiles([System.Collections.ArrayList]$Projects) {
+    $names = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'Cargo.lock', 'composer.lock', 'packages.lock.json', 'gradle.lockfile')
+    $found = @(Get-WalkFiles $WS 5 | Where-Object { $names -ccontains (Split-Path -Leaf $_) } | Sort-Object)
+    $nodeNames = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock')
+    $nodeFound = @($found | Where-Object { $nodeNames -ccontains (Split-Path -Leaf $_) }).Count -gt 0
+    if ((-not $nodeFound) -and (@($Projects | Where-Object { $_.stack -eq 'node' }).Count -gt 0)) {
+        $anc = Get-NodeWsRootLock
+        if ($anc -and ($nodeNames -ccontains (Split-Path -Leaf $anc))) { $found += $anc }
+    }
+    return $found
 }
 
 function Invoke-DepsCheck([System.Collections.ArrayList]$Projects) {
@@ -1049,20 +1132,63 @@ function Invoke-DepsCheck([System.Collections.ArrayList]$Projects) {
     if ($Projects.Count -eq 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'skipped' 'none' '' $null 'no dependency manifests detected' 'implementer' ''; return }
     if (Test-Tool 'osv-scanner') {
         $out = Join-Path $Art 'osv.json'
-        $rc = Invoke-Logged -Dir $WS -Argv @('osv-scanner', '--format', 'json', '-r', $WS)
+        # Scan the lockfiles by name as well as the directory: a directory walk can come back with "no packages" (gitignore, path form)
+        # although the workspace has a lockfile (round 11, npm workspaces). A lockfile named with -L is always read.
+        # The lockfiles by name (-L): a directory walk can come back with "no packages" although the workspace has a lockfile (round 11,
+        # npm workspaces). osv-scanner 2.x takes either -L or -r; given both it stops with exit 127 before scanning (round 12: QG-DEPS
+        # red for a whole run), so the directory walk runs only when no lockfile was found.
+        $lockfiles = @(Get-DepsLockfiles $Projects)
+        $argv = @('osv-scanner', '--format', 'json')
+        if ($lockfiles.Count -gt 0) { foreach ($lf in $lockfiles) { $argv += @('-L', $lf) }; $shown = 'osv-scanner --format json -L <lockfile>...' }
+        else { $argv += @('-r', $WS); $shown = 'osv-scanner --format json -r <ws>' }
+        $rc = Invoke-Logged -Dir $WS -Argv $argv
         Copy-Item -LiteralPath $script:LastOut -Destination $out -Force
-        $shown = 'osv-scanner --format json -r <ws>'
         if ($rc -eq 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc 'osv-scanner: no known vulnerabilities' 'implementer' (Get-Rel $out); return }
-        if ($rc -eq 128) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc 'osv-scanner: no packages found to scan' 'implementer' (Get-Rel $out); return }
-        if ($rc -ne 1) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ('osv-scanner failed (exit ' + $rc + ')') 'implementer' (Get-Rel $out); return }
-        $above = 0; $total = 0
-        foreach ($m in [regex]::Matches([IO.File]::ReadAllText($out), '"max_severity"\s*:\s*"([0-9.]*)"')) {
-            $total++
-            $sv = $m.Groups[1].Value
-            if ((-not $sv) -or ([double]$sv -ge $DepsFloor)) { $above++ }
+        if ($rc -eq 128) {
+            # The scanner looked and found no packages: nothing was checked, so this is not a pass.
+            $nomsg = 'osv-scanner found no packages to scan (nothing was checked)'
+            if ($Require) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ($nomsg + ' (--require)') 'implementer' (Get-Rel $out) }
+            else { Add-Check 'QG-DEPS' 'dependencies' '' '' 'deferred' 'warning' $shown $rc ($nomsg + '; deferred (not a pass)') 'human' (Get-Rel $out) }
+            return
         }
-        if ($above -gt 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ('osv-scanner: ' + $above + ' of ' + $total + " vulnerability group(s) at or above '" + $FailDeps + "' (unknown severity counts)") 'implementer' (Get-Rel $out) }
-        else { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc ('osv-scanner: ' + $total + " group(s), none at or above '" + $FailDeps + "'") 'implementer' (Get-Rel $out) }
+        if ($rc -ne 1) {
+            # The scanner stopped before it produced a result (a flag it rejects, a crash, a database it cannot load). That is a tool
+            # error, not a finding and not the implementer's code: the per-stack audit stands in where there is one, else the check is
+            # deferred to a human (never a pass, never a FIX pass).
+            $first = ''
+            try { $first = @([IO.File]::ReadAllLines($script:LastLog) | Where-Object { $_.Trim() } | Select-Object -First 1)[0]; if ($first -and $first.Length -gt 160) { $first = $first.Substring(0, 160) } } catch { $first = '' }
+            $script:OsvError = 'osv-scanner exited ' + $rc + ' before scanning (a tool error, not a result' + $(if ($first) { ': ' + $first } else { '' }) + ')'
+            Add-Check 'QG-DEPS' 'dependencies' '' '' 'skipped' 'warning' $shown $rc ($script:OsvError + '; the stack audit below stands in') 'human' (Get-Rel $script:LastLog)
+            foreach ($p in $Projects) { Invoke-DepsFallback $p.stack $p.dir (Get-Rel $p.dir) }
+            return
+        }
+        # osv-scanner marks each package with its dependency_groups (npm, pip, bundler...); a "dev" package gates only when
+        # quality.audit_dev_dependencies is true (round 12: vitest and tinypool advisories are not what ships). Unknown severity counts.
+        $above = 0; $total = 0; $devn = 0
+        $j = $null
+        try { $j = [IO.File]::ReadAllText($out) | ConvertFrom-Json } catch { $j = $null }
+        if ($null -ne $j -and $null -ne $j.results) {
+            foreach ($r in @($j.results)) {
+                foreach ($pk in @($r.packages)) {
+                    $isdev = (@($pk.dependency_groups) -contains 'dev')
+                    foreach ($g in @($pk.groups)) {
+                        if ($isdev -and -not $AuditDev) { $devn++; continue }
+                        $total++
+                        $sv = [string]$g.max_severity
+                        if ((-not $sv) -or ([double]$sv -ge $DepsFloor)) { $above++ }
+                    }
+                }
+            }
+        } else {
+            foreach ($m in [regex]::Matches([IO.File]::ReadAllText($out), '"max_severity"\s*:\s*"([0-9.]*)"')) {
+                $total++
+                $sv = $m.Groups[1].Value
+                if ((-not $sv) -or ([double]$sv -ge $DepsFloor)) { $above++ }
+            }
+        }
+        $devnote = ''; if ($devn -gt 0) { $devnote = '; ' + $devn + ' dev-only group(s) not gating (quality.audit_dev_dependencies=false)' }
+        if ($above -gt 0) { Add-Check 'QG-DEPS' 'dependencies' '' '' 'fail' 'error' $shown $rc ('osv-scanner: ' + $above + ' of ' + $total + " production vulnerability group(s) at or above '" + $FailDeps + "' (unknown severity counts)" + $devnote) 'implementer' (Get-Rel $out) }
+        else { Add-Check 'QG-DEPS' 'dependencies' '' '' 'pass' 'none' $shown $rc ('osv-scanner: ' + $total + " production group(s), none at or above '" + $FailDeps + "'" + $devnote) 'implementer' (Get-Rel $out) }
         return
     }
     Add-Missing 'osv-scanner'
@@ -1072,9 +1198,21 @@ function Invoke-DepsCheck([System.Collections.ArrayList]$Projects) {
 function Invoke-SastCheck {
     if (-not (Test-InScope 'sast')) { return }
     $useDocker = $false
-    if (-not (Test-Tool 'semgrep')) {
-        if (($SastRunner -eq 'docker') -and (Test-Tool 'docker')) { $useDocker = $true }
-        else { Add-Deferred 'QG-SAST' 'sast' '' '' 'semgrep' 'SAST'; return }
+    # quality.scanners.sast names the scanner (semgrep, the default, or opengrep, its LGPL fork that takes the same rules and flags);
+    # when the named one is missing the other stands in, so a machine with either runs SAST. Rules: quality.sast_rules
+    # (default `auto`, the registry; opengrep has no registry, so give it a local rules folder or it is deferred).
+    $sast = 'semgrep'; if ($SastTool -eq 'opengrep') { $sast = 'opengrep' }
+    if (-not (Test-Tool $sast)) {
+        if (($sast -eq 'semgrep') -and (Test-Tool 'opengrep')) { $sast = 'opengrep' }
+        elseif (($sast -eq 'opengrep') -and (Test-Tool 'semgrep')) { $sast = 'semgrep' }
+        elseif (($SastRunner -eq 'docker' -or $SastRunner -eq 'auto') -and (Test-Tool 'docker')) { $useDocker = $true }   # auto: the image stands in when no scanner is on PATH (Windows has no native semgrep)
+        else { Add-Deferred 'QG-SAST' 'sast' '' '' $sast 'SAST'; return }
+    }
+    $rules = $SastRules
+    if (($sast -eq 'opengrep') -and ($rules -eq 'auto')) {
+        $local = Join-Path (Join-Path $RepoRoot 'architecture') 'sast-rules'
+        if (Test-Path -LiteralPath $local -PathType Container) { $rules = $local }
+        else { Add-Check 'QG-SAST' 'sast' '' '' 'deferred' 'warning' 'opengrep scan' $null 'opengrep has no rule registry: put rules under architecture/sast-rules/ or set quality.sast_rules; deferred (not a pass)' 'human' ''; return }
     }
     $out = Join-Path $Art 'semgrep.json'
     if ($useDocker) {
@@ -1086,17 +1224,303 @@ function Invoke-SastCheck {
         $rc = Invoke-Logged -Dir $WS -Argv (@('docker', 'run', '--rm', '-v', ($WS + ':/src'), '-v', ($Art + ':/out')) + $caArgs + @('semgrep/semgrep', 'semgrep', 'scan', '--config', 'auto', '--json', '--quiet', '--output', '/out/semgrep.json', '/src'))
         $shown = 'docker run --rm semgrep/semgrep semgrep scan --config auto --json'
     } else {
-        $rc = Invoke-Logged -Dir $WS -Argv @('semgrep', 'scan', '--config', 'auto', '--json', '--quiet', '--output', $out, $WS)
-        $shown = 'semgrep scan --config auto --json'
+        $rc = Invoke-Logged -Dir $WS -Argv @($sast, 'scan', '--config', $rules, '--json', '--quiet', '--output', $out, $WS)
+        $shown = $sast + ' scan --config ' + $rules + ' --json'
     }
-    if (-not (Test-Path -LiteralPath $out)) { Add-Check 'QG-SAST' 'sast' '' '' 'fail' 'error' $shown $rc ('semgrep failed (exit ' + $rc + ')') 'implementer' (Get-Rel $script:LastLog); return }
+    if (-not (Test-Path -LiteralPath $out)) {
+        # No result file: the scanner did not run to completion (rules unreachable, a crash). A tool error is deferred, never a code finding.
+        $first = ''
+        try { $first = @([IO.File]::ReadAllLines($script:LastLog) | Where-Object { $_.Trim() } | Select-Object -First 1)[0]; if ($first -and $first.Length -gt 160) { $first = $first.Substring(0, 160) } } catch { $first = '' }
+        Add-Check 'QG-SAST' 'sast' '' '' 'deferred' 'warning' $shown $rc ($sast + ' exited ' + $rc + ' without a result (a tool error, not a finding' + $(if ($first) { ': ' + $first } else { '' }) + '); deferred (not a pass)') 'human' (Get-Rel $script:LastLog); return
+    }
     $pat = 'ERROR'
     if ($FailSast -eq 'warning') { $pat = 'ERROR|WARNING' }
     if (($FailSast -eq 'info') -or ($FailSast -eq 'any')) { $pat = 'ERROR|WARNING|INFO' }
     $n = ([regex]::Matches([IO.File]::ReadAllText($out), ('"severity"\s*:\s*"(' + $pat + ')"'))).Count
-    if ($n -gt 0) { Add-Check 'QG-SAST' 'sast' '' '' 'fail' 'error' $shown $rc ('semgrep: ' + $n + ' finding(s) at severity >= ' + $FailSast) 'implementer' (Get-Rel $out) }
-    elseif ($rc -ne 0) { Add-Check 'QG-SAST' 'sast' '' '' 'fail' 'error' $shown $rc ('semgrep exited ' + $rc) 'implementer' (Get-Rel $out) }
-    else { Add-Check 'QG-SAST' 'sast' '' '' 'pass' 'none' $shown $rc ('semgrep: no findings at severity >= ' + $FailSast) 'implementer' (Get-Rel $out) }
+    if ($n -gt 0) { Add-Check 'QG-SAST' 'sast' '' '' 'fail' 'error' $shown $rc ($sast + ': ' + $n + ' finding(s) at severity >= ' + $FailSast) 'implementer' (Get-Rel $out) }
+    elseif (($rc -ne 0) -and ($rc -ne 1)) { Add-Check 'QG-SAST' 'sast' '' '' 'deferred' 'warning' $shown $rc ($sast + ' exited ' + $rc + ' (a tool error, not a finding); deferred (not a pass)') 'human' (Get-Rel $out) }
+    else { Add-Check 'QG-SAST' 'sast' '' '' 'pass' 'none' $shown $rc ($sast + ': no findings at severity >= ' + $FailSast) 'implementer' (Get-Rel $out) }
+}
+
+# ------------------------------------------------------------------ QG-STATIC (architecture/static-rules.tsv)
+# One rule per line, tab-separated: id <TAB> files <TAB> forbidden <TAB> allowed_in <TAB> message
+#   files      regex matched against the path relative to the workspace (which files the rule scans)
+#   forbidden  regex searched in every matching file (keep to the POSIX ERE subset so both shells agree)
+#   allowed_in regex of relative paths where the pattern IS permitted (may be empty)
+# '#' starts a comment line; a header row "id<TAB>files<TAB>..." is ignored. node_modules, dist, build, .git, coverage,
+# TestResults, lockfiles and the rules file itself are never scanned; test files are scanned like any other.
+function Test-RegexOk([string]$Pattern) {
+    try { $null = New-Object System.Text.RegularExpressions.Regex($Pattern); return $true } catch { return $false }
+}
+function Invoke-StaticCheck {
+    if (-not (Test-InScope 'static')) { return }
+    $rrel = 'architecture/static-rules.tsv'
+    $rules = Join-Path (Join-Path $RepoRoot 'architecture') 'static-rules.tsv'
+    if (-not (Test-Path -LiteralPath $rules -PathType Leaf)) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'skipped' 'none' '' $null 'no architecture/static-rules.tsv declared' 'architect' ''
+        return
+    }
+    $rid = New-Object System.Collections.ArrayList
+    $rfiles = New-Object System.Collections.ArrayList
+    $rpat = New-Object System.Collections.ArrayList
+    $rallow = New-Object System.Collections.ArrayList
+    $bad = New-Object System.Collections.ArrayList
+    $n = 0
+    foreach ($raw in [IO.File]::ReadAllLines($rules)) {
+        $n++
+        $line = $raw.TrimEnd("`r")
+        $t = $line.TrimStart()
+        if (($t.Length -eq 0) -or $t.StartsWith('#')) { continue }
+        $cols = $line.Split([char]9)
+        if ($cols.Count -lt 5) { [void]$bad.Add('line ' + $n + ': expected 5 tab-separated columns (id, files, forbidden, allowed_in, message), found ' + $cols.Count); continue }
+        $id = $cols[0]; $files = $cols[1]; $pat = $cols[2]; $allow = $cols[3]
+        $msg = ($cols[4..($cols.Count - 1)] -join "`t")
+        if (($id -eq 'id') -and ($files -eq 'files')) { continue }
+        if ((-not $id) -or (-not $files) -or (-not $pat) -or (-not $msg)) { [void]$bad.Add('line ' + $n + ': id, files, forbidden and message must not be empty'); continue }
+        if (-not (Test-RegexOk $files)) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'files' is not a valid regex"); continue }
+        if (-not (Test-RegexOk $pat)) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'forbidden' is not a valid regex"); continue }
+        if ($allow -and (-not (Test-RegexOk $allow))) { [void]$bad.Add('line ' + $n + ' (' + $id + "): 'allowed_in' is not a valid regex"); continue }
+        [void]$rid.Add($id); [void]$rfiles.Add($files); [void]$rpat.Add($pat); [void]$rallow.Add($allow)
+    }
+    if ($bad.Count -gt 0) {
+        $shownBad = @($bad | Select-Object -First 5)
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'fail' 'error' '' $null ($rrel + ' is malformed (' + $bad.Count + ' line(s)): ' + (($shownBad | ForEach-Object { $_ + '; ' }) -join '') + 'fix the rules file') 'architect' $rrel
+        return
+    }
+    if ($rid.Count -eq 0) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'skipped' 'none' '' $null ($rrel + ' declares no rules') 'architect' $rrel
+        return
+    }
+    # file list: relative paths (forward slashes), ordinal order, same pruning as the bash mirror
+    $skipDirs = @('node_modules', 'dist', 'build', '.git', 'coverage', 'TestResults')
+    $skipFiles = @('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'poetry.lock', 'Pipfile.lock', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock')
+    $rels = New-Object System.Collections.ArrayList
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue($WS)
+    $wsPrefix = $WS.TrimEnd('\', '/') + $Sep
+    $wsIsRoot = ($WS -ieq $RepoRoot)
+    while ($queue.Count -gt 0) {
+        $dir = $queue.Dequeue()
+        try {
+            foreach ($f in [IO.Directory]::GetFiles($dir)) {
+                $leaf = Split-Path -Leaf $f
+                if ($skipFiles -contains $leaf) { continue }
+                $r = $f.Substring($wsPrefix.Length).Replace('\', '/')
+                if ($wsIsRoot -and ($r -eq $rrel)) { continue }
+                [void]$rels.Add($r)
+            }
+        } catch { }
+        try {
+            foreach ($d in [IO.Directory]::GetDirectories($dir)) {
+                if ($skipDirs -contains (Split-Path -Leaf $d)) { continue }
+                $queue.Enqueue($d)
+            }
+        } catch { }
+    }
+    $relArr = $rels.ToArray()
+    [Array]::Sort($relArr, [StringComparer]::Ordinal)
+    $hits = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $rid.Count; $i++) {
+        $reFiles = New-Object System.Text.RegularExpressions.Regex($rfiles[$i])
+        $reAllow = $null
+        if ($rallow[$i]) { $reAllow = New-Object System.Text.RegularExpressions.Regex($rallow[$i]) }
+        $rePat = New-Object System.Text.RegularExpressions.Regex($rpat[$i])
+        $reAny = New-Object System.Text.RegularExpressions.Regex($rpat[$i], [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        foreach ($r in $relArr) {
+            if (-not $reFiles.IsMatch($r)) { continue }
+            if ($reAllow -and $reAllow.IsMatch($r)) { continue }
+            $text = $null
+            try { $text = [IO.File]::ReadAllText($wsPrefix + ($r -replace '/', $Sep)) } catch { continue }
+            if ($text.IndexOf([char]0) -ge 0) { continue }
+            if (-not $reAny.IsMatch($text)) { continue }
+            # Multi-stage Dockerfiles: `FROM <stage> AS <next>` names a stage declared earlier, not an untagged image (round 14, SR-018).
+            $stages = @()
+            if ($r -match '(^|/)Dockerfile[^/]*$') { $stages = @([regex]::Matches($text, '(?im)^\s*FROM\s+\S+\s+AS\s+([\w.-]+)') | ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() }) }
+            $ln = 0
+            foreach ($l in $text.Split([char]10)) {
+                $ln++
+                if (-not $rePat.IsMatch($l)) { continue }
+                if ($stages.Count -gt 0 -and $l -match '^\s*FROM\s+(\S+)' -and ($stages -contains $Matches[1].ToLowerInvariant())) { continue }
+                [void]$hits.Add($r + ':' + $ln + ' ' + $rid[$i])
+            }
+        }
+    }
+    $cmdShown = 'static-rules scan (' + $rid.Count + ' rule(s) from ' + $rrel + ')'
+    if ($hits.Count -eq 0) {
+        Add-Check 'QG-STATIC' 'static-rules' '' '' 'pass' 'none' $cmdShown 0 ('static rules: ' + $rid.Count + ' rule(s) over ' + $relArr.Count + ' file(s), no forbidden pattern found') 'implementer' ''
+        return
+    }
+    $ev = Join-Path $Art 'static-hits.txt'
+    $evLines = New-Object System.Collections.ArrayList
+    foreach ($h in ($hits | Select-Object -First 20)) { [void]$evLines.Add($h) }
+    if ($hits.Count -gt 20) { [void]$evLines.Add('... and ' + ($hits.Count - 20) + ' more') }
+    [IO.File]::WriteAllText($ev, (($evLines -join "`n") + "`n"))
+    $ids = @($hits | ForEach-Object { $_.Substring($_.LastIndexOf(' ') + 1) } | Sort-Object -Unique) -join ','
+    $first = (@($hits | Select-Object -First 3) -join ', ')
+    Add-Check 'QG-STATIC' 'static-rules' '' '' 'fail' 'error' $cmdShown 1 ('static rules: ' + $hits.Count + ' forbidden-pattern hit(s) (rule(s): ' + $ids + '); first: ' + $first + '; first 20 in the evidence file') 'implementer' (Get-Rel $ev)
+}
+
+# ------------------------------------------------------------------ QG-IMAGE image-scan-built (compose-built images)
+# Images come from the compose file(s) in the workspace or the repo root: the image: value of every service that has build:, or
+# <project>-<service> (what compose names it) when no image: is set. The compose file is parsed, not rendered with
+# "docker compose config", because that needs every required ${VAR:?} to be set and fails on a clean checkout.
+function Get-ComposeFiles {
+    $seen = @{}
+    $found = New-Object System.Collections.ArrayList
+    foreach ($d in @($WS, $RepoRoot)) {
+        foreach ($n in @('docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml')) {
+            $p = Join-Path $d $n
+            if ((Test-Path -LiteralPath $p -PathType Leaf) -and (-not $seen.ContainsKey($p.ToLowerInvariant()))) {
+                $seen[$p.ToLowerInvariant()] = $true
+                [void]$found.Add($p)
+            }
+        }
+    }
+    return ,$found
+}
+function Get-YamlValue([string]$Text) {
+    $v = $Text -replace '^[^:]*:\s*', ''
+    $v = $v -replace '\s+#.*$', ''
+    $v = $v.Trim()
+    if (($v.Length -ge 2) -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) { $v = $v.Substring(1, $v.Length - 2) }
+    return $v
+}
+# Returns @{ project = '<top-level name:>'; services = @( @{ name; image; build } ) }
+function Read-Compose([string]$File) {
+    $project = ''
+    $services = New-Object System.Collections.ArrayList
+    $insvc = $false; $svcind = 0; $propind = 0
+    $cur = $null
+    foreach ($raw in [IO.File]::ReadAllLines($File)) {
+        $line = $raw.TrimEnd("`r")
+        if ($line -match '^\s*(#.*)?$') { continue }
+        $ind = $line.Length - $line.TrimStart(' ').Length
+        $txt = $line.TrimStart(' ')
+        if ($ind -eq 0) {
+            if ($cur) { [void]$services.Add($cur); $cur = $null }
+            $insvc = ($txt -match '^services:\s*(#.*)?$')
+            if ($txt -match '^name:') { $project = Get-YamlValue $txt }
+            continue
+        }
+        if (-not $insvc) { continue }
+        if ($svcind -eq 0) { $svcind = $ind }
+        if ($ind -eq $svcind) {
+            if ($cur) { [void]$services.Add($cur) }
+            $nm = ($txt -replace ':.*$', '') -replace '["'' ]', ''
+            $cur = @{ name = $nm; image = ''; build = $false }
+            continue
+        }
+        if ($propind -eq 0) { $propind = $ind }
+        if (($ind -eq $propind) -and $cur) {
+            if ($txt -match '^build:') { $cur.build = $true }
+            elseif ($txt -match '^image:') { $cur.image = Get-YamlValue $txt }
+        }
+    }
+    if ($cur) { [void]$services.Add($cur) }
+    return @{ project = $project; services = $services }
+}
+function Expand-EnvRefs([string]$S) {
+    $re = '\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-([^}]*))?\}'
+    for ($k = 0; $k -lt 10; $k++) {
+        $m = [regex]::Match($S, $re)
+        if (-not $m.Success) { break }
+        $val = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+        if (-not $val) { $val = $m.Groups[3].Value }
+        $S = $S.Substring(0, $m.Index) + $val + $S.Substring($m.Index + $m.Length)
+    }
+    return $S
+}
+function Get-TrivyCount([string]$File) {
+    if (-not (Test-Path -LiteralPath $File)) { return 0 }
+    return ([regex]::Matches([IO.File]::ReadAllText($File), '"Severity"\s*:\s*"[A-Z]+"')).Count
+}
+# The first workspace file newer than the image's Created time (sources, manifests, lockfiles, Dockerfiles; build output and
+# dependency folders pruned), or '' when the image is newer than all of them or its time cannot be read.
+function Get-ImageStaleFile([string]$Img) {
+    $created = ''
+    try { $created = [string](& docker image inspect -f '{{.Created}}' $Img 2>$null | Select-Object -First 1) } catch { $created = '' }
+    if (-not $created) { return '' }
+    $created = ($created.Trim() -replace '\.(\d{1,7})\d*', '.$1')
+    $t = [DateTime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal
+    if (-not [DateTime]::TryParse($created, [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$t)) { return '' }
+    foreach ($f in (Get-WalkFiles $WS -1)) { try { if ([IO.File]::GetLastWriteTimeUtc($f) -gt $t) { return $f } } catch { } }
+    return ''
+}
+function Invoke-ImageBuiltCheck([bool]$HasDockerfile) {
+    $files = Get-ComposeFiles
+    if ($files.Count -eq 0) {
+        if ($HasDockerfile) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'skipped' 'none' '' $null 'no compose file declared (docker-compose.yml/compose.yml): built-image scan skipped' 'infrastructure-implementer' '' }
+        return
+    }
+    $imgs = New-Object System.Collections.ArrayList
+    foreach ($f in $files) {
+        $c = Read-Compose $f
+        $proj = $env:COMPOSE_PROJECT_NAME
+        if (-not $proj) { $proj = $c.project }
+        if (-not $proj) { $proj = Split-Path -Leaf (Split-Path -Parent $f) }
+        $proj = ($proj.ToLowerInvariant() -replace '[^a-z0-9_-]', '')
+        foreach ($s in $c.services) {
+            if (-not $s.build) { continue }
+            $img = Expand-EnvRefs $s.image
+            if (-not $img) { $img = $proj + '-' + $s.name }
+            if (-not ($imgs -contains $img)) { [void]$imgs.Add($img) }
+        }
+    }
+    if ($imgs.Count -eq 0) {
+        if ($HasDockerfile) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'skipped' 'none' '' $null 'compose file declares no service with build: built-image scan skipped' 'infrastructure-implementer' '' }
+        return
+    }
+    if (-not (Test-Tool 'docker')) { Add-Deferred 'QG-IMAGE' 'image-scan-built' '' '' 'docker' 'built-image scan'; return }
+    if (-not (Test-Tool 'trivy')) { Add-Deferred 'QG-IMAGE' 'image-scan-built' '' '' 'trivy' 'built-image scan'; return }
+    $sevs = 'CRITICAL'
+    switch ($FailDeps) { 'high' { $sevs = 'HIGH,CRITICAL' } 'medium' { $sevs = 'MEDIUM,HIGH,CRITICAL' } 'moderate' { $sevs = 'MEDIUM,HIGH,CRITICAL' } 'low' { $sevs = 'LOW,MEDIUM,HIGH,CRITICAL' } 'any' { $sevs = 'LOW,MEDIUM,HIGH,CRITICAL' } }
+    $i = 0
+    foreach ($img in $imgs) {
+        $i++
+        $rc = Invoke-Logged -Dir $WS -Argv @('docker', 'image', 'inspect', $img)
+        if ($rc -ne 0) {
+            # not built (or the daemon is unreachable): never a pass, and this tool does not build (builds are slow)
+            if ($Require) { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'fail' 'error' ('docker image inspect ' + $img) $rc ("built image '" + $img + "' not found locally: image not built: run docker compose build (-Require)") 'infrastructure-implementer' ('image-not-built:' + $img) }
+            else { Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'deferred' 'warning' ('docker image inspect ' + $img) $rc ("built image '" + $img + "' not found locally: image not built: run docker compose build; deferred (not a pass)") 'infrastructure-implementer' ('image-not-built:' + $img) }
+            continue
+        }
+        # An image older than the workspace files was not built from this code (round 12: images left over from an earlier run were
+        # scanned and failed the gate). Stale = deferred with a rebuild hint; only an image newer than every source file is scanned.
+        $newer = Get-ImageStaleFile $img
+        if ($newer) {
+            $when = ''; try { $when = ([string](& docker image inspect -f '{{.Created}}' $img 2>$null | Select-Object -First 1)).Trim(); if ($when.Length -gt 19) { $when = $when.Substring(0, 19) } } catch { $when = '' }
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'deferred' 'warning' ('docker image inspect ' + $img) 0 ("built image '" + $img + "' is older than the workspace file " + (Get-Rel $newer) + ' (built ' + $when + '): stale, not scanned; run docker compose build and re-run the gate; deferred (not a pass)') 'infrastructure-implementer' ('image-stale:' + $img)
+            continue
+        }
+        $out = Join-Path $Art ('trivy-image-' + $i + '.json')
+        $all = Join-Path $Art ('trivy-image-' + $i + '-all.json')
+        $shown = 'trivy image --severity ' + $sevs + ' --ignore-unfixed --exit-code 1 ' + $img
+        $rc = Invoke-Logged -Dir $WS -Argv @('trivy', 'image', '--severity', $sevs, '--ignore-unfixed', '--exit-code', '1', '--format', 'json', '--output', $out, $img)
+        $logf = $script:LastLog
+        if (($rc -ne 0) -and (($rc -ne 1) -or (-not (Test-Path -LiteralPath $out)))) {
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'deferred' 'warning' $shown $rc ('trivy image ' + $img + ' exited ' + $rc + ' without a report (a tool error or an unreachable database, not a finding); deferred (not a pass)') 'human' (Get-Rel $logf)
+            continue
+        }
+        $nfix = 0
+        if ($rc -eq 1) { $nfix = Get-TrivyCount $out }
+        # second pass without --ignore-unfixed: only to report how many findings have no fix (visible, never gating)
+        $unf = 'unfixed count unavailable'
+        $rc2 = Invoke-Logged -Dir $WS -Argv @('trivy', 'image', '--severity', $sevs, '--format', 'json', '--output', $all, $img)
+        if (($rc2 -eq 0) -and (Test-Path -LiteralPath $all)) {
+            $ntot = Get-TrivyCount $all
+            $nun = $ntot - $nfix
+            if ($nun -lt 0) { $nun = 0 }
+            $unf = [string]$nun + ' unfixed, not gating'
+        }
+        if ($rc -eq 0) {
+            $evf = $out
+            if (Test-Path -LiteralPath $all) { $evf = $all }
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'pass' 'none' $shown $rc ('trivy image ' + $img + ': no fixable finding at ' + $sevs + ' (' + $unf + ')') 'infrastructure-implementer' (Get-Rel $evf)
+        } else {
+            Add-Check 'QG-IMAGE' 'image-scan-built' '' '' 'fail' 'error' $shown $rc ('trivy image ' + $img + ': ' + $nfix + ' fixable finding(s) at ' + $sevs + ' (' + $unf + ')') 'infrastructure-implementer' (Get-Rel $out)
+        }
+    }
 }
 
 function Invoke-ContainerChecks {
@@ -1105,6 +1529,7 @@ function Invoke-ContainerChecks {
     if ($docker.Count -eq 0) {
         if (Test-InScope 'sbom') { Add-Check 'QG-SBOM' 'sbom' '' '' 'skipped' 'none' '' $null 'not a deployable (no Dockerfile/Containerfile)' 'infrastructure-implementer' '' }
         if (Test-InScope 'image') { Add-Check 'QG-IMAGE' 'image-scan' '' '' 'skipped' 'none' '' $null 'not a deployable (no Dockerfile/Containerfile)' 'infrastructure-implementer' '' }
+        if (Test-InScope 'image') { Invoke-ImageBuiltCheck $false }
         return
     }
     if (Test-InScope 'sbom') {
@@ -1126,12 +1551,22 @@ function Invoke-ContainerChecks {
             elseif (($rc -eq 1) -and (Test-Path -LiteralPath $out)) {
                 $n = ([regex]::Matches([IO.File]::ReadAllText($out), '"Severity"\s*:\s*"[A-Z]+"')).Count
                 Add-Check 'QG-IMAGE' 'image-scan' '' '' 'fail' 'error' $shown $rc ('trivy: ' + $n + ' finding(s) at ' + $sevs) 'infrastructure-implementer' (Get-Rel $out)
-            } else { Add-Check 'QG-IMAGE' 'image-scan' '' '' 'fail' 'error' $shown $rc ('trivy failed (exit ' + $rc + ')') 'infrastructure-implementer' (Get-Rel $script:LastLog) }
+            } else { Add-Check 'QG-IMAGE' 'image-scan' '' '' 'deferred' 'warning' $shown $rc ('trivy fs exited ' + $rc + ' without a report (a tool error or an unreachable database, not a finding); deferred (not a pass)') 'human' (Get-Rel $script:LastLog) }
         } else { Add-Deferred 'QG-IMAGE' 'image-scan' '' '' 'trivy' 'image/fs scan' }
+        Invoke-ImageBuiltCheck $true
     }
 }
 
 # ------------------------------------------------------------------ run
+if ((-not $ScopeGiven) -and (-not $Fast) -and $Spec) {
+    $planScope = Get-PlanScope $SpecDir
+    if ($planScope) {
+        $Scope = $planScope; $scopeList = @($Scope -split ','); $ScopeSource = 'plan.md Gates coverage'
+        $notc = @(); foreach ($n in @('lock', 'build', 'lint', 'test', 'coverage', 'secrets', 'deps', 'sast', 'static', 'sbom', 'image')) { if (-not (Test-InScope $n)) { $notc += $n } }
+        $notMsg = ''; if ($notc.Count -gt 0) { $notMsg = '; not covered by the plan (the architecture decides the gates): ' + ($notc -join ', ') }
+        Add-Check 'QG-SCOPE' 'gate-scope' '' '' 'pass' 'none' '' $null ('scope from ' + (Get-Rel $SpecDir) + '/plan.md -> ## Gates coverage: ' + $Scope + $notMsg) 'architect' (Get-Rel (Join-Path $SpecDir 'plan.md'))
+    }
+}
 $Projects = New-Object System.Collections.ArrayList
 $StacksOut = New-Object System.Collections.ArrayList
 if (-not $Fast) {
@@ -1179,6 +1614,7 @@ Invoke-SecretsCheck
 if (-not $Fast) {
     Invoke-DepsCheck $Projects
     Invoke-SastCheck
+    Invoke-StaticCheck
     Invoke-ContainerChecks
 }
 
@@ -1229,7 +1665,7 @@ $reportOut = $null
 if ($reportJson) { $reportOut = [ordered]@{ json = (Get-Rel $reportJson); md = (Get-Rel $reportMd) } }
 
 $doc = [ordered]@{
-    tool = 'quality-gate'; version = $Version; scope = $scopeOut; mode = $mode; spec = $specOut; idea = $ideaOut
+    tool = 'quality-gate'; version = $Version; scope = $scopeOut; scope_source = $ScopeSource; mode = $mode; spec = $specOut; idea = $ideaOut
     workspace = (Get-Rel $WS); require = [bool]$Require; coverage_min_pct = $CovMin; coverage_min_source = $CovSrc
     errors = $Errors; warnings = $Warnings; deferred = $Deferred; status = $Status; exit_code = $ExitCode
     stacks = @($StacksOut); checks = @($Checks); violations = @($violations); missing_tools = @($Missing)

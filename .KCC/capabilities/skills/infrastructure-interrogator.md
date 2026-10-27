@@ -44,6 +44,10 @@ applies. Skip only for pure local prototypes/throwaway scripts with no
 distribution. (Automatic firing from `auto` / idea-interrogator is handled
 elsewhere; this section states the skill's own applicability.)
 
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: skipped by `auto`; run it on request only.
+
 ## Steps
 
 1. Resolve `<ARGS>` to an idea folder, technical brief, or spec request.

@@ -1,10 +1,15 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UsageError, workspace } from "../args";
 import { readJson, writeJson } from "../fsutil";
-import { isWindows, runTool } from "../platform";
+import { isWindows, runTool, runToolAsync } from "../platform";
 import { readSettings } from "../settings";
-import { detectLimit, loadPatterns, sessionId } from "./limits";
+import { startDashboardServer, type DashServer } from "../commands/dashboard";
+import { type DashStamp, rebuildDashboard } from "./dashstale";
+import { attentionCounts, findRoadmap, laneDir, liveSyncLane, fanoutSpecs, scheduleSpecs, unfinishedLanes } from "./lanes";
+import { routeAll } from "./routing";
+import { detectLimit, latestTranscriptLimit, loadPatterns, sessionId } from "./limits";
 
 const RESUME_PROMPT = "Read coordination/checkpoints/latest.md and continue the KCC run from next_action.";
 const BYPASS = /dangerously|bypassPermissions|--yolo|skip-permissions/i;
@@ -109,6 +114,42 @@ async function superviseDriver(root: string, args: string[], p: Policy, wait: bo
   }
 }
 
+/**
+ * Runs one lane's driver on its own (`kcc run --lane SPEC-X ...`). Unlike the scheduler it used to copy nothing back, so the
+ * workspace and the dashboard kept showing the gate as open and the old bugs for the whole run. This keeps the same live sync
+ * the scheduler does while the driver runs, and prints a line so the console shows it is working.
+ */
+async function superviseLane(root: string, dir: string, spec: string, args: string[], p: Policy, wait: boolean): Promise<number> {
+  // The dashboard is rebuilt in the background (it used to block this process for the whole build) and only when a file it reads changed
+  // since the last build; the final sync is forced.
+  const stamp: DashStamp = { sig: "", at: 0 };
+  let building: Promise<unknown> = Promise.resolve();
+  const sync = (force = false): Promise<unknown> => {
+    try {
+      liveSyncLane(root, dir, spec);
+      building = building.then(() => rebuildDashboard(root, stamp, { force })).catch(() => undefined);
+    } catch {
+      /* a convenience copy; never stops the lane */
+    }
+    return building;
+  };
+  console.log(`kcc: running  in its lane; the workspace and the dashboard are synced every 20 seconds`);
+  const timer = setInterval(() => void sync(), 20000);
+  try {
+    let current = args;
+    for (let resumes = 0; ; resumes++) {
+      const r = await runToolAsync(dir, "kcc-run", current, { capture: false, env: wait ? { KCC_SUPERVISED: "1" } : {} });
+      if (r.status !== 5 || !wait) return r.status;
+      const rec = readJson<{ resets_at?: number | null }>(limitFile(dir));
+      if (!(await holdForReset(dir, p, "kcc-run", rec?.resets_at ?? undefined, resumes))) return 5;
+      current = ["--resume", "--repo-root", dir];
+    }
+  } finally {
+    clearInterval(timer);
+    await sync(true);
+  }
+}
+
 function resumeCommand(root: string, p: Policy, original: string[], lines: string[]): string {
   const c = readSettings(root)?.continuity ?? {};
   const sid = sessionId(lines);
@@ -118,7 +159,7 @@ function resumeCommand(root: string, p: Policy, original: string[], lines: strin
   if (BYPASS.test(tpl)) throw new UsageError(`the resume template for '${p.harness}' uses a permission-bypass flag; KCC will not run it. Edit continuity in .KCC/settings.json.`);
   return tpl
     .replaceAll("{session_id}", sid ?? "")
-    .replaceAll("{permission_mode}", c.permission_mode ?? "acceptEdits")
+    .replaceAll("{permission_mode}", c.permission_mode ?? "auto")
     .replaceAll("{resume_prompt}", RESUME_PROMPT)
     .replaceAll("{command}", quote(original[0] ?? p.harness));
 }
@@ -143,7 +184,39 @@ async function superviseWrapped(root: string, command: string[], p: Policy, wait
   }
 }
 
+/**
+ * The live dashboard of a run: served for as long as `kcc run` lives, rebuilt from the files on each request. The page
+ * therefore cannot go stale the way a generated file does when the process that regenerates it stops.
+ */
+function serveRunDashboard(argv: string[]): DashServer | undefined {
+  if (["--dry-run", "--help", "-h", "--wrap"].some((f) => argv.includes(f)) || process.env.KCC_NO_DASH_SERVER === "1") return undefined;
+  const i = argv.indexOf("--dir");
+  let root: string;
+  try {
+    root = workspace(i >= 0 ? argv[i + 1] : undefined);
+  } catch {
+    return undefined;
+  }
+  const dash = (readSettings(root) as { dashboard?: { serve?: unknown } } | undefined)?.dashboard;
+  if (dash?.serve === false) return undefined;
+  const server = startDashboardServer(root);
+  if (server) {
+    process.env.KCC_DASHBOARD_URL = server.url;
+    console.log(`kcc: live dashboard ${server.url} (rebuilt from the workspace files on every request; it ends with this command)`);
+  }
+  return server;
+}
+
 export async function run(argv: string[]): Promise<number> {
+  const server = serveRunDashboard(argv);
+  try {
+    return await runInner(argv);
+  } finally {
+    server?.stop();
+  }
+}
+
+async function runInner(argv: string[]): Promise<number> {
   // Own flags are taken out by hand: everything else belongs to kcc-run or the wrapped command.
   const sep = argv.indexOf("--");
   const own = sep >= 0 ? argv.slice(0, sep) : argv;
@@ -154,12 +227,18 @@ export async function run(argv: string[]): Promise<number> {
   let maxResumes: string | undefined;
   let wrap = false;
   let wait = true;
+  let lane: string | undefined;
+  let maxParallel = 4;
+  let maxFanout: number | undefined; // WRITE and PLAN: every spec at once unless --max-fanout N
   for (let i = 0; i < own.length; i++) {
     const a = own[i] ?? "";
     if (a === "--wrap") wrap = true;
     else if (a === "--no-wait") wait = false;
     else if (a === "--dir") dir = own[++i];
     else if (a === "--max-resumes") maxResumes = own[++i];
+    else if (a === "--lane") lane = (own[++i] ?? "").toUpperCase();
+    else if (a === "--max-parallel") maxParallel = Number(own[++i]);
+    else if (a === "--max-fanout") maxFanout = Number(own[++i]);
     else if (a === "--harness") {
       harness = own[++i];
       if (harness) rest.push("--harness", harness);
@@ -168,15 +247,96 @@ export async function run(argv: string[]): Promise<number> {
   const root = workspace(dir);
   const p = policy(root, harness, maxResumes);
   if (!Number.isInteger(p.maxResumes) || p.maxResumes < 0) throw new UsageError("--max-resumes expects a whole number");
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) throw new UsageError("--max-parallel expects a whole number >= 1");
+  if (maxFanout !== undefined && (!Number.isInteger(maxFanout) || maxFanout < 1)) throw new UsageError("--max-fanout expects a whole number >= 1");
 
   if (wrap) {
     if (!wrapped.length) throw new UsageError("usage: kcc run --wrap [--harness <name>] -- <harness command...>");
     return superviseWrapped(root, wrapped, p, wait);
   }
-  if (!rest.includes("--repo-root")) rest.push("--repo-root", root);
+  // `--lane SPEC-X` targets one spec's lane, e.g. to answer the gate it stopped at.
+  if (lane) {
+    const dir = laneDir(root, lane);
+    if (!existsSync(join(dir, "coordination", "run", "run.json"))) throw new UsageError(`no lane for ${lane} (expected ${dir})`);
+    return superviseLane(root, dir, lane, [...rest, "--repo-root", dir], p, wait);
+  }
   // A dry run or a status query never waits.
   const passive = rest.includes("--dry-run") || rest.includes("--help") || rest.includes("-h");
-  return superviseDriver(root, rest, p, wait && !passive);
+  const manual = ["--only", "--from", "--until", "--answer", "--dry-run", "--help", "-h"].some((f) => rest.includes(f));
+  const input = rest[rest.indexOf("--input") + 1] ?? "";
+  const lifecycle = !manual && ((rest.includes("--input") && !/^SPEC-\d+$/i.test(input)) || rest.includes("--resume"));
+  if (!lifecycle) {
+    if (!rest.includes("--repo-root")) rest.push("--repo-root", root);
+    return superviseDriver(root, rest, p, wait && !passive);
+  }
+  return lifecycleRun(root, rest, p, wait, maxParallel, maxFanout);
+}
+
+/** kcc-run flags that every lane and the closing run inherit. */
+function laneFlags(args: string[]): string[] {
+  const out: string[] = [];
+  const valued = new Set(["--depthlevel", "--accuracy", "--budget", "--currency", "--harness", "--max-attempts"]);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (valued.has(a)) out.push(a, args[++i] ?? "");
+    else if (["--silent", "--assume", "--fasttrack", "--parallel"].includes(a)) out.push(a);
+  }
+  return out;
+}
+
+/**
+ * The whole lifecycle: the shared states once (REPO .. SPECS), then the WRITE and PLAN states, each for every
+ * spec at the same time (a spec-writer, then a planner, per spec, ALL at once unless --max-fanout N, in lanes; --max-parallel bounds only the build lanes below), then every spec as soon as the specs it depends on are done
+ * (independent specs at the same time, in their own lanes), then CLOSE once. The bare kcc-run driver has no scheduler:
+ * it plans spec by spec, in the table's own order.
+ */
+async function lifecycleRun(root: string, args: string[], p: Policy, wait: boolean, maxParallel: number, maxFanout?: number): Promise<number> {
+  const flags = laneFlags(args);
+  const runJson = readJson<{ state?: string; status?: string; fasttrack?: string; depthlevel?: string; silent?: string }>(join(root, "coordination", "run", "run.json"));
+  // A resumed run keeps the policy it started with: its lanes must use the same state table.
+  if (runJson?.fasttrack === "1" && !flags.includes("--fasttrack")) flags.push("--fasttrack");
+  if (runJson?.silent === "1" && !flags.includes("--silent")) flags.push("--silent", "--assume");
+  if (runJson?.depthlevel && !flags.includes("--depthlevel")) flags.push("--depthlevel", runJson.depthlevel);
+  if (runJson?.status === "done") {
+    // CLOSE runs even when lanes were parked, so the run reads as done; a resume reopens it for the lanes that are not merged
+    // (round 14: "nothing to resume" right after the human had merged a conflicted lane by hand).
+    const left = unfinishedLanes(root);
+    if (!left.length) {
+      console.log("kcc: the run is DONE; nothing to resume");
+      return 0;
+    }
+    console.log(`kcc: the run closed with ${left.length} spec(s) not merged (${left.join(", ")}): reopening it for them`);
+    writeJson(join(root, "coordination", "run", "run.json"), { ...runJson, status: "running", state: "18", reason: `reopened for ${left.join(", ")}` });
+  }
+  const lanesStarted = existsSync(join(root, "coordination", "lanes.json"));
+  if (!lanesStarted && Number(runJson?.state ?? 0) <= 9) {
+    const a = await superviseDriver(root, [...args.filter((x) => x !== "--repo-root"), "--until", "9", "--repo-root", root], p, wait);
+    if (a !== 0) return a;
+  }
+  if (!findRoadmap(root)) {
+    console.error("kcc: the shared states finished but no specs/IDEA-*/ROADMAP.md exists");
+    return 6;
+  }
+  // Writing or planning one spec needs only its own files, the architecture and the dialects, so all specs go at the same time.
+  const fanned = await fanoutSpecs(root, { passthrough: flags, maxParallel, maxFanout });
+  // Exit 7 = a --silent --assume lane was parked as needs-attention: the run goes on with the other specs, then closes.
+  if (fanned.code !== 0 && fanned.code !== 7) return fanned.code;
+  try {
+    const routed = routeAll(root);
+    if (routed.length) console.log(`kcc: routed ${routed.reduce((n, r) => n + r.routes.length, 0)} backlog items in ${routed.length} plans (model and effort per item, in plan.md -> ## Routing)`);
+  } catch {
+    /* routing is guidance for the drivers; a plan it cannot read keeps the driver's own rules */
+  }
+  const b = await scheduleSpecs(root, { passthrough: flags, maxParallel, from: fanned.after, hold: fanned.attention });
+  if (b !== 0 && b !== 7) return b;
+  const closed = await superviseDriver(root, ["--resume", "--from", "18", ...flags, "--repo-root", root], p, wait);
+  // The run closed, but specs were parked: exit 7 (items need a human) rather than 0. The list is in coordination/NeedsAttention.md.
+  if (closed === 0 && (b === 7 || fanned.code === 7)) {
+    const c = attentionCounts(join(root, "coordination", "NeedsAttention.md"));
+    console.log(`kcc: needs attention: coordination/NeedsAttention.md - ${c.items} item(s), ${c.open} open`);
+    return 7;
+  }
+  return closed;
 }
 
 export function limits(argv: string[]): number {
@@ -196,7 +356,18 @@ export function limits(argv: string[]): number {
     return `${w.pct}%${w.resets_at ? `, resets ${clock(w.resets_at)}` : ""}`;
   };
   console.log("Usage (Claude Code status line; other harnesses do not report usage):");
-  console.log(usage ? `  5-hour window: ${win("five_hour")}\n  7-day window:  ${win("seven_day")}` : "  no data yet (coordination/usage.json is written by the Claude Code status line)");
+  if (usage) console.log(`  5-hour window: ${win("five_hour")}\n  7-day window:  ${win("seven_day")}`);
+  else {
+    console.log("  no percentages: coordination/usage.json is written only by the Claude Code status line,");
+    console.log("  which the VS Code extension and `claude -p` do not run. A limit that is hit is still caught");
+    console.log("  by the StopFailure hook (kcc-limit-hook), which reads the reset time from the session transcript.");
+  }
+  const seen = latestTranscriptLimit(root);
+  if (seen) {
+    const live = seen.resetsAt !== undefined && seen.resetsAt * 1000 > Date.now();
+    const reset = seen.resetsAt ? `reset ${clock(seen.resetsAt)}${live ? " (still blocked)" : " (already reset)"}` : "reset not stated";
+    console.log(`Claude session transcripts: last limit message ${seen.at ? clock(seen.at) : "(time unknown)"}${seen.window ? `, ${seen.window} window` : ""}, ${reset}`);
+  }
   console.log("Last limit:");
   if (!last) console.log("  none recorded");
   else {

@@ -2,8 +2,8 @@
 # Functional fields (consumed by harness adapters)
 name: implementer
 role: senior software engineer
-model-class: strong-reasoning
-effort: high
+model-class: balanced
+effort: medium
 description: >
   Implements a spec, wave, story, enabler, or bug item according to its
   approved plan and selected development dialects. Writes source code under
@@ -31,7 +31,7 @@ aliases:
 tags:
   - framework/agent
   - lifecycle/implement
-  - model-class/strong-reasoning
+  - model-class/fast-implementation
 created: 2026-05-24
 updated: 2026-09-21
 version: 4.0.0
@@ -57,10 +57,15 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
      locked -> stop and report (another unit owns it).
 3. Branch `spec/SPEC-{ID}` if git + project allow.
 4. Applicable `architecture/guardrails.md` + `architecture/quality-gates.md`
-   gates are requirements.
+   gates are requirements; the plan's `## Gates coverage` says how each is
+   proven for your items (a Test ID you write, or `check:QG-X`: run
+   `quality-gate` on your changes and get that check green).
 5. Load item dialects from `.KCC/kernel/protocols/dialects/`, plus
    `testing-unit` + `testing-integration` always and `testing-performance` /
-   `testing-security` when a Test ID has that level.
+   `testing-security` when a Test ID has that level. Also load any domain
+   protocol the plan's `## Standards coverage` names (`mobile-app-architecture`,
+   `data-engineering-and-science`, `privacy-and-cybersecurity-regions`, under
+   `.KCC/kernel/protocols/`); its rules are requirements for your items.
 6. **Stack fidelity (HARD RULE).** The ADR / `TechnicalDecisionBrief.md`
    dictates the stack, not the installed toolchain. Never swap stacks (e.g.
    static HTML/JS for declared TS + React), in any mode incl.
@@ -95,6 +100,14 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
     **Bug items:** write the regression Test ID first, run it red, fix, run
     it green; set the Bug `Status` `open -> fixing` at start, `fixed` when
     green (only the verifier sets `verified`).
+    **A Bug you may not fix.** When the fix needs a decision that is not yours (a limit of a framework tool, a change to an
+    ADR or a guardrail, a layout change outside the Bug's `## Impacted Files`, a waiver), do not leave it `open` and do not
+    write a longer note on every retry. Set its `Status` to `blocked` and write one `## Ruling needed` section in the Bug
+    file, once: what blocks the fix, the options (each with its cost), and the recommended option. Report it as blocked and
+    stop work on it. `kcc-run` opens a `ruling` human gate at once and does not run you again for that Bug. The human
+    answers `revise` (their ruling), `waive` (Status becomes `wontfix`) or `escalate`; on `revise`/`escalate` the driver sets
+    the Bug back to `open`, records the ruling under `## Ruling` in the Bug file (and in HumanDecisions where the trace keeps one) and in your prompt: follow it. A `revise` note that states the human's approval (e.g. "Option A approved: amend D10") is the recorded human decision that lets you make an edit the architect otherwise owns, such as the Decisions table in `architecture/architecture.md`; make exactly that edit and cite the ruling in the commit. The statuses
+    are `open -> fixing -> fixed -> verified`, plus `blocked` and `wontfix`.
 11. All source, tests, fixtures, configs, docs under `src/IDEA-{ID}-{slug}/`
     (even if a dialect allows `src/`); create/update its `README.md`. No
     repo-root or sibling-idea files; no unrelated docs.
@@ -103,6 +116,10 @@ Implement only a concrete `SPEC-{ID}`; never a raw idea, prompt, or `auto <idea>
     `SPEC-003 Story-001 T-004: ...`. Ask human review first if required.
 14. Screenshots -> `TestResults/IDEA-{ID}/SPEC-{ID}/screenshots/`, browser
     temp -> `.tmp/`/OS temp, never repo root.
+
+## Fast track and depth
+
+You execute the plan: follow the approved `plan.md`, its Waves, and the dialects exactly. If the plan is wrong or an item is harder than its Complexity says, stop and report so it can be re-planned or its effort raised (rule 7); do not improvise architecture. Under `fasttrack`: no butler or token-guard; the lock is open via `fasttrack-approved`. Security-sensitive work (authentication or authorization, crypto, secrets, personal or payment data, untrusted input, injection-prone construction) needs `high` Complexity in the plan: if an item like that reached you without it, stop and report so it is re-planned. Fast does not mean unfinished: the result must pass the full `quality-gate` (manifest and lockfile, lint, tests, coverage floor, no secrets, clean dependency audit, SAST), so run it on your own changes before you return. Under `--silent --assume`, do not stop for a question the ADRs, the plan, or `standards-catalog.md` already answer (a runtime newer than the plan's minimum, a library an `Accepted (assumed)` ADR names): proceed and note it in your report. Stop only for a `Proposed` ADR your item depends on, or a prohibited assumption. A minor or patch version bump inside the range an ADR declares needs no ADR change (note it in your report); a new major version or a different library does.
 
 ## Code Standards
 
@@ -125,6 +142,12 @@ verification commands + results; blocked/deferred (incl. `TOOLCHAIN_DEFERRED`).
   wrong/incomplete -> stop and report.
 - Never change the ADR-declared stack; missing toolchain -> install gate or
   `TOOLCHAIN_DEFERRED`, never a stack swap.
+- A dependency that fails only because its release does not support the
+  installed runtime (crash on load or teardown, native build failure): move
+  that package to the nearest release that does, add a row to `## Decisions`
+  (package, from, to, reason), say so in the return, and continue. That is a
+  version change, not a stack swap, and not a reason to ask for a machine
+  install.
 - Write only declared impacted files under `src/IDEA-{ID}-{slug}/`.
 - Every in-scope Test ID becomes a real, named test via its `testing-*`
   dialect, traceable to its AC.

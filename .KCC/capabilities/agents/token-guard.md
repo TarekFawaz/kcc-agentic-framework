@@ -90,16 +90,18 @@ Emit every event with `.KCC/tools/backchannel-append.ps1 -From token-guard`
 
 ### Shared rules (A, A1, C)
 
-- Model-class per step default: interrogate/create/plan/review ->
-  `strong-reasoning`; implement -> `balanced` (`fast-implementation` if
-  mechanical); test -> `balanced`; meta-agents -> `fast-implementation`.
+- Model-class per step default: interrogate/create/plan/test/review ->
+  `balanced`; implement -> `fast-implementation` (the executor; `balanced`
+  when the item is `high`/`extra-high`, see the orchestrator complexity
+  rule); meta-agents -> `fast-implementation`. `strong-reasoning` only on
+  an approved escalation.
   Spec override wins; [[butler]] `brief-issued` pattern entries may also
   justify an override.
 - Dialect complexity adjusts class: `low` -> `fast-implementation` for
-  mechanical, `balanced` for verification; `medium` -> `balanced`; `high` ->
-  `strong-reasoning` for plan/review, `balanced`/`strong-reasoning` for
-  implement; `extra-high` -> `strong-reasoning` and widen band unless prior
-  traces prove the work type stable.
+  mechanical, `balanced` for verification; `medium` -> `balanced` for plan/review, executor for
+  implement; `high` -> `balanced` (implement included); `extra-high` ->
+  `balanced` at high effort, widen the band unless prior traces prove the
+  work type stable.
 - $ only for hosted classes (`strong-reasoning`, `balanced`,
   `fast-implementation`) at rates in `.KCC/kernel/templates/ROI.md`; the
   idea's own `ROI.md` rates win if a human edited them. `local-strong` /

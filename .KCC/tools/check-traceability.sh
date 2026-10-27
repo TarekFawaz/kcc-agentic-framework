@@ -11,6 +11,8 @@
 #   TRC-002 implementer  Test ID not referenced by any test file under src/IDEA-{ID}-*/
 #   TRC-003 verifier     Test ID has no PASS result (test-run-summary.md row or JUnit XML)
 #   TRC-004 implementer  Test ID has only FAIL results
+#   TRC-006 human        (warning) summary row says DEFERRED: a tool or service it needs is missing; not a pass.
+#                        With no errors left the exit code is 3 (deferred).
 #
 # Without --spec only specs at Review/Done status (or with a review.md) are traced.
 #
@@ -35,19 +37,26 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-TOOL_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Spawn budget (Git Bash on Windows pays ~0.3-0.4 s per fork or exec): path work is parameter expansion, results come back in variables.
+case "$0" in */*) TOOL_DIR="${0%/*}" ;; *) TOOL_DIR="." ;; esac
+case "$TOOL_DIR" in /*) ;; *) TOOL_DIR="$PWD/$TOOL_DIR" ;; esac
 if [ -z "$REPO_ROOT" ]; then
+  TOOL_DIR="$(cd "$TOOL_DIR" && pwd)"
   PARENT="$(dirname "$TOOL_DIR")"
   if [ "$(basename "$PARENT")" = ".KCC" ]; then REPO_ROOT="$(dirname "$PARENT")"; else REPO_ROOT="$PARENT"; fi
 fi
 if [ ! -d "$REPO_ROOT" ]; then echo "workspace not found: $REPO_ROOT" >&2; exit 2; fi
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+case "$REPO_ROOT" in
+  /*) case "$REPO_ROOT/" in */./*|*/../*|*//*) REPO_ROOT="$(cd "$REPO_ROOT" && pwd)" ;; *) REPO_ROOT="${REPO_ROOT%/}"; [ -n "$REPO_ROOT" ] || REPO_ROOT="/" ;; esac ;;
+  *) REPO_ROOT="$(cd "$REPO_ROOT" && pwd)" ;;
+esac
 SPECS_DIR="$REPO_ROOT/specs"
 
 ERRORS=0
+DEFERRED_IDS=0
 WARNINGS=0
 VJSON=""
-TAB="$(printf '\t')"
+TAB=$'\t'
 
 je() {
   local s="$1"
@@ -58,22 +67,38 @@ je() {
   s="${s//$'\n'/\\n}"
   printf '%s' "$s"
 }
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# jev: je into JV; lc: lower-case $1 into LC (${x,,} where bash has it, tr on macOS bash 3.2). Neither forks.
+jev() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/}"
+  JV="${s//$'\n'/\\n}"
+}
+if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+  eval 'lc() { LC="${1,,}"; }'
+else
+  lc() { LC="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; }
+fi
+lower() { lc "$1"; printf '%s' "$LC"; }
 rel() { printf '%s' "${1#"$REPO_ROOT"/}"; }
 violation() { # id severity owner message [file]
-  local id="$1" sev="$2" owner="$3" msg="$4" file="${5:-}" obj
+  local id="$1" sev="$2" owner="$3" msg="$4" file="${5:-}" obj ej eo ef em
   if [ "$sev" = "error" ]; then ERRORS=$((ERRORS + 1)); else WARNINGS=$((WARNINGS + 1)); fi
-  obj="{\"id\":\"$(je "$id")\",\"severity\":\"$sev\",\"fix_owner\":\"$(je "$owner")\",\"file\":\"$(je "$file")\",\"message\":\"$(je "$msg")\"}"
+  jev "$id"; ej="$JV"; jev "$owner"; eo="$JV"; jev "$file"; ef="$JV"; jev "$msg"; em="$JV"
+  obj="{\"id\":\"$ej\",\"severity\":\"$sev\",\"fix_owner\":\"$eo\",\"file\":\"$ef\",\"message\":\"$em\"}"
   if [ -z "$VJSON" ]; then VJSON="$obj"; else VJSON="$VJSON,$obj"; fi
   if [ "$JSON" -eq 0 ]; then
-    printf '[%s] %s (%s) %s: %s\n' "$(printf '%s' "$sev" | tr '[:lower:]' '[:upper:]')" "$id" "$owner" "$file" "$msg"
+    case "$sev" in error) sev="ERROR" ;; warning) sev="WARNING" ;; *) sev="$(printf '%s' "$sev" | tr '[:lower:]' '[:upper:]')" ;; esac
+    printf '[%s] %s (%s) %s: %s\n' "$sev" "$id" "$owner" "$file" "$msg"
   fi
   return 0
 }
 
 section() {
   [ -f "$1" ] || return 0
-  awk -v pat="$(lower "$2")" '
+  lc "$2"; awk -v pat="$LC" '
     { sub(/\r$/, "") }
     /^##[ \t]/ {
       if (inside) stop = 1
@@ -84,7 +109,7 @@ section() {
 }
 
 table_field() {
-  awk -v col="$(lower "$2")" '
+  lc "$2"; awk -v col="$LC" '
     function trim(s) { gsub(/^[ \t*`]+|[ \t*`]+$/, "", s); return s }
     { sub(/\r$/, "") }
     fin { next }
@@ -108,7 +133,7 @@ table_field() {
 
 status_rank() {
   local t
-  t="$(lower "$1" | sed 's/^[[:space:]]*//')"
+  lc "$1"; t="${LC#"${LC%%[![:space:]]*}"}"
   case "$t" in
     "") echo -1 ;;
     draft*) echo 0 ;;
@@ -125,7 +150,7 @@ backlog_dir() { # spec-dir -> Backlog folder with its real on-disk casing
   local d first=""
   for d in "$1"/*; do
     [ -d "$d" ] || continue
-    case "$(basename "$d")" in
+    case "${d##*/}" in
       Backlog) printf '%s' "$d"; return 0 ;;
       [Bb][Aa][Cc][Kk][Ll][Oo][Gg]) if [ -z "$first" ]; then first="$d"; fi ;;
     esac
@@ -140,9 +165,9 @@ list_items() {
   [ -n "$bd" ] || return 0
   for f in "$bd"/*.md; do
     [ -f "$f" ] || continue
-    n="$(basename "$f")"
-    key="$(printf '%s' "$n" | grep -oE '^(Story|Enabler|Bug)-[0-9]+' || true)"
-    [ -n "$key" ] || continue
+    n="${f##*/}"
+    [[ "$n" =~ ^(Story|Enabler|Bug)-[0-9]+ ]] || continue
+    key="${BASH_REMATCH[0]}"
     printf '%s\t%s\t%s\n' "$key" "${key%%-*}" "$f"
   done
   return 0
@@ -182,12 +207,12 @@ list_all_specs() {
   [ -d "$SPECS_DIR" ] || return 0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    name="$(basename "$d")"
+    name="${d##*/}"
     [ -f "$d/$name.md" ] || continue
-    id="$(printf '%s' "$name" | grep -oE '^SPEC-[0-9]+' || true)"
-    [ -n "$id" ] || continue
-    group="$(dirname "$d")"
-    idea="$(basename "$group" | grep -oE '^IDEA-[0-9]+' || true)"
+    [[ "$name" =~ ^SPEC-[0-9]+ ]] || continue
+    id="${BASH_REMATCH[0]}"
+    group="${d%/*}"
+    idea=""; if [[ "${group##*/}" =~ ^IDEA-[0-9]+ ]]; then idea="${BASH_REMATCH[0]}"; fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$d" "$d/$name.md" "$idea"
   done <<EOF
 $(find "$SPECS_DIR" -type d -name 'SPEC-*' 2>/dev/null | LC_ALL=C sort)
@@ -198,8 +223,8 @@ EOF
 spec_match() {
   local s n
   [ -n "$SPEC" ] || return 0
-  s="$(lower "$SPEC")"; n="$(lower "$1")"
-  if [ "$n" = "$s" ] || [ "$(lower "$2")" = "$s" ]; then return 0; fi
+  lc "$SPEC"; s="$LC"; lc "$1"; n="$LC"; lc "$2"
+  if [ "$n" = "$s" ] || [ "$LC" = "$s" ]; then return 0; fi
   case "$n" in "$s"-*) return 0 ;; esac
   return 1
 }
@@ -345,13 +370,14 @@ EOF
         violation "TRC-002" "error" "implementer" "$id Test ID $t is not referenced by any test file under src/$idea-*/." "src/$idea"
       fi
     fi
-    pass=0; fail=0
+    pass=0; fail=0; deferred=0
     if [ -f "$summary" ]; then
       lines="$(tr -d '\r' < "$summary" | grep -E -- "$pat" || true)"
       if [ -n "$lines" ]; then
         while IFS= read -r l; do
           ll="$(lower "$l")"
-          if printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])fail(ed|ure)?([^a-z0-9_]|$)'; then fail=1
+          if printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])deferred([^a-z0-9_]|$)'; then deferred=1
+          elif printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])fail(ed|ure)?([^a-z0-9_]|$)'; then fail=1
           elif printf '%s' "$ll" | grep -qE '(^|[^a-z0-9_])pass(ed)?([^a-z0-9_]|$)'; then pass=1; fi
         done <<EOF
 $lines
@@ -364,7 +390,11 @@ EOF
       case "$jr" in *fail*) fail=1 ;; esac
     fi
     if [ "$pass" -eq 0 ]; then
-      if [ "$fail" -eq 1 ]; then
+      # A summary row the verifier marked DEFERRED outranks a JUnit failure (the runner writes a failure for an environment cause).
+      if [ "$deferred" -eq 1 ]; then
+        DEFERRED_IDS=$((DEFERRED_IDS + 1))
+        violation "TRC-006" "warning" "human" "$id Test ID $t is DEFERRED (a tool or service it needs is missing or unusable on this machine); this is not a pass." "$srel"
+      elif [ "$fail" -eq 1 ]; then
         violation "TRC-004" "error" "implementer" "$id Test ID $t has a FAIL result." "$srel"
       else
         violation "TRC-003" "error" "verifier" "$id Test ID $t has no PASS result in test-run-summary.md or JUnit XML under TestResults/." "$srel"
@@ -378,7 +408,7 @@ $SPECS
 EOF
 
 STATUS="pass"
-if [ "$ERRORS" -gt 0 ]; then STATUS="fail"; fi
+if [ "$ERRORS" -gt 0 ]; then STATUS="fail"; elif [ "$DEFERRED_IDS" -gt 0 ]; then STATUS="deferred"; fi
 if [ "$JSON" -eq 1 ]; then
   SPEC_JSON="null"
   if [ -n "$SPEC" ]; then SPEC_JSON="\"$(je "$SPEC")\""; fi
@@ -388,4 +418,5 @@ else
   echo "Errors: $ERRORS  Warnings: $WARNINGS"
 fi
 if [ "$ERRORS" -gt 0 ]; then exit 1; fi
+if [ "$DEFERRED_IDS" -gt 0 ]; then exit 3; fi
 exit 0

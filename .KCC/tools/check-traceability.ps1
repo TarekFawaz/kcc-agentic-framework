@@ -14,6 +14,8 @@ KCC framework (c) 2026 Tarek Fawaz, https://tikasway.dev/kcc. Licensed under the
          TestResults/IDEA-{ID}/SPEC-{ID}/test-run-summary.md containing the ID
          and PASS, or a JUnit <testcase> under TestResults/ whose name contains
          the ID and has no failure/error/skipped child         (TRC-003 verifier, TRC-004 implementer)
+         A summary row that says DEFERRED (the test needs a tool or service this machine does not have, for example a
+         Docker daemon) is not a pass and not a failure: TRC-006 (warning) and, when nothing else fails, exit 3.
 
     Read-only. PowerShell 5.1 compatible. Contract: kernel/contracts/tool-contract.md.
 
@@ -40,6 +42,7 @@ if (-not (Test-Path -LiteralPath $RepoRoot)) { [Console]::Error.WriteLine("works
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\', '/')
 
 $violations = New-Object System.Collections.ArrayList
+$script:DeferredIds = 0
 function Add-Violation([string]$Code, [string]$Severity, [string]$Owner, [string]$Message, [string]$File = '') {
     [void]$violations.Add([pscustomobject]@{ id = $Code; severity = $Severity; fix_owner = $Owner; file = $File; message = $Message })
 }
@@ -291,10 +294,11 @@ foreach ($sp in $specs) {
                 Add-Violation 'TRC-002' 'error' 'implementer' ("{0} Test ID {1} is not referenced by any test file under src/{2}-*/." -f $sp.Id, $id, $sp.IdeaId) ('src/' + $sp.IdeaId)
             }
         }
-        $pass = $false; $fail = $false
+        $pass = $false; $fail = $false; $deferred = $false
         foreach ($l in $summaryLines) {
             if ([regex]::IsMatch($l, $pat)) {
-                if ($l -match '(?i)\bFAIL(ED|URE)?\b') { $fail = $true }
+                if ($l -match '(?i)\bDEFERRED\b') { $deferred = $true }
+                elseif ($l -match '(?i)\bFAIL(ED|URE)?\b') { $fail = $true }
                 elseif ($l -match '(?i)\bPASS(ED)?\b') { $pass = $true }
             }
         }
@@ -304,7 +308,13 @@ foreach ($sp in $specs) {
             }
         }
         if (-not $pass) {
-            if ($fail) {
+            # A summary row the verifier marked DEFERRED outranks a JUnit failure: the verifier saw the cause (an image
+            # build that cannot trust the proxy certificate, a missing daemon) and a runner writes a failure for it.
+            if ($deferred) {
+                $script:DeferredIds++
+                Add-Violation 'TRC-006' 'warning' 'human' ("{0} Test ID {1} is DEFERRED (a tool or service it needs is missing or unusable on this machine); this is not a pass." -f $sp.Id, $id) $srel
+            }
+            elseif ($fail) {
                 Add-Violation 'TRC-004' 'error' 'implementer' ("{0} Test ID {1} has a FAIL result." -f $sp.Id, $id) $srel
             }
             else {
@@ -317,7 +327,7 @@ foreach ($sp in $specs) {
 $errors = @($violations | Where-Object { $_.severity -eq 'error' })
 $warnings = @($violations | Where-Object { $_.severity -eq 'warning' })
 $status = 'pass'
-if ($errors.Count -gt 0) { $status = 'fail' }
+if ($errors.Count -gt 0) { $status = 'fail' } elseif ($script:DeferredIds -gt 0) { $status = 'deferred' }
 if ($Json) {
     [pscustomobject]@{
         tool = 'check-traceability'; version = $ToolVersion; scope = $Scope; spec = $Spec
@@ -331,4 +341,4 @@ else {
     }
     Write-Output ("Errors: {0}  Warnings: {1}" -f $errors.Count, $warnings.Count)
 }
-if ($errors.Count -gt 0) { exit 1 } else { exit 0 }
+if ($errors.Count -gt 0) { exit 1 } elseif ($script:DeferredIds -gt 0) { exit 3 } else { exit 0 }

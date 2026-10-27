@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: technical-interrogator
 role: technical decision interviewer
-model-class: strong-reasoning
+model-class: balanced
 effort: medium
 description: >
   Interrogates the human about technical decisions before spec creation so the
@@ -15,7 +15,7 @@ tools-required:
   - edit
   - web
 inputs: A source idea folder, `SpecWriterStarter.md`, or ad-hoc spec request.
-outputs: `TechnicalDecisionBrief.md` plus recorded technical questions and answers, preferably in the source idea folder.
+outputs: `TechnicalDecisionBrief.md` plus recorded technical questions and answers, preferably in the source idea folder. Under `fasttrack` the brief also carries `## UX and UI` and `## Infrastructure and packaging` (at most 15 lines each), because the UX and infrastructure specialists are not spawned in that profile.
 maturity: L1
 maintainer: tarek.fawaz1983@gmail.com
 copyright: "KCC framework (c) 2026 Tarek Fawaz"
@@ -31,7 +31,7 @@ tags:
   - framework/agent
   - lifecycle/interrogate
   - architecture
-  - model-class/strong-reasoning
+  - model-class/balanced
 created: 2026-05-24
 updated: 2026-09-21
 version: 1.6.0
@@ -46,7 +46,7 @@ turns your brief into ADRs, guardrails, and quality gates.
 ## Process
 
 1. **Orient.** Read the source idea artifacts plus the protocols you need:
-   `architecture-governance`, `architecture-styles`, `api-standards`,
+   `architecture-governance`, `architecture-styles`, `standards-catalog`, `api-standards`,
    `spec-layout`, `confidence-gate`, `dialects/dialect-registry` (all under
    `.KCC/kernel/protocols/`).
 2. **Output location.** Idea folder exists -> write `TechnicalQuestionnaire.md`,
@@ -61,6 +61,7 @@ turns your brief into ADRs, guardrails, and quality gates.
    - data/storage/integration; security/privacy/compliance/audit; performance, scale, reliability, availability; observability/operations; patterns to reuse or avoid;
    - **architecture style**: default Clean Architecture + DDD for backend/service/API/fullstack, event-driven for IoT/sensor/streaming; opt down only for static/frontend-only/trivial (architect records an ADR). Record the choice;
    - **API standard** (HTTP/REST only): default OpenAPI 3.x + served Swagger UI + verifier-checked conformance; waive only with recorded rationale (candidate ADR);
+   - **domain protocols** (selected from context, never always-on): mobile deliverable -> `mobile-app-architecture`; pipelines, warehouses, analytics or ML -> `data-engineering-and-science`; users or data in the EU, GCC or US -> `privacy-and-cybersecurity-regions`. Read the matching protocol, ask its selection questions (native vs hybrid, batch vs streaming, regions in scope), and name the protocols in the brief;
    - build/test/release pipeline; migration/backward compatibility.
 4. **Challenge the tech stack (mandatory).** For each choice (language,
    runtime, framework, datastore, deployment target, packaging format):
@@ -82,6 +83,17 @@ turns your brief into ADRs, guardrails, and quality gates.
    confirmation unless AutoPolicy allows them; label each
    `Assumed under AutoPolicy` with confidence and rationale.
 7. **Write `TechnicalDecisionBrief.md`** from the template below.
+
+## Fast track and depth
+
+Under `fasttrack`: do not ask the human. Decide from the idea, the security brief (when it is already there) and `standards-catalog.md`, write a short `TechnicalDecisionBrief.md` (within `spec_sizing.max_brief_lines`) with a `## Decisions` table (library + version range + citation), and list at most 5 genuinely blocking questions under `## Open questions`; the ASK state asks them once (or answers them from the catalogue under `--silent --assume`). Honour `depthlevel`.
+
+Fast track spawns two specialists, not four: you and the security-analyst. `ux-ui-designer` and `infrastructure-planner` do not run, so your brief carries two extra sections, each at most 15 lines, filled from the catalogue defaults, with one line per decision and no questions the human is not asked:
+
+- `## UX and UI` (only when the idea has a user-facing surface; otherwise one line `n/a: no user interface`): the surface (web, mobile, CLI, TUI, report), the design-system or styling default, theme and colour defaults, accessibility floor (WCAG level, keyboard, contrast), responsive behaviour, and the assets the implementer may assume. The architect and the spec-writer read this in place of `UXDecisionBrief.md`.
+- `## Infrastructure and packaging`: deployment target (local, container, cloud, on-prem), environments, configuration from the environment, packaging (container image, package, binary), versioning and tagging, observability floor (structured logs, health endpoint), and whether QG-PROD applies. The architect reads this in place of `InfrastructureDecisionBrief.md` and the planner takes the toolchain from it.
+
+Anything in those two domains that is a CR-7 decision with no catalogue default goes to `## Open questions`.
 
 ## Output Format
 

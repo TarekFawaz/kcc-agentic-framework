@@ -183,6 +183,48 @@ required `payload` keys:
 | 22 | `remember-stored` | butler | broadcast | `entry_ids`, `summary` | [[butler]] (every remember) |
 | 23 | `session-closed` | butler | broadcast | `session_id`, `summary` | [[butler]] (run close) |
 
+Human hints (see [[hints]]) add `hint-issued` (`hint`, `to`, `by`, `expires_at`),
+`hint-delivered` (`hints`, `reader`, `agent_type`, `event`) and `hint-cleared`
+(`hint`). Usage-limit handling adds `limit-reached`, `resume-scheduled`,
+`resume-started` and `resume-skipped` (`harness`, `reason`; the human continued
+the session before the reset).
+
+`auto --fasttrack` adds `fasttrack-approved` (`depthlevel`, `scope`; emitted by
+kcc-run right after `auto-policy-parsed`, and the only approval `check-impl-lock`
+accepts without an idea or spec id, valid until the next `auto-policy-parsed`).
+The complexity rule in the spawn protocol adds `model-escalated` (`agent`,
+`item`, `from`, `to`, `reason`).
+`model-selected` (`agent`, `item`, `tier`, `model`, `effort`, `reasons`, `source: plan-routing`; the driver's own also `mode` and, for the verifier, `pass: full|scoped`) records what a driver read from
+`plan.md -> ## Routing` for a wave or the FIX pass.
+A failed TEST or REVIEW sends the spec to the FIX state (`implementer --bugs`), which closes the open Bug items and
+emits `fix-completed` before TEST runs again. When there is no open Bug item and the violations that sent the spec back name no
+`implementer` owner, no agent runs and the event carries `skipped: true`.
+
+`kcc-run` emits one `agent-run-started` and one `agent-run-ended` per harness dispatch (state, state_name, agent, attempt, wave,
+log, exit, seconds, started, ended). `agent-run-started` also carries the justification for the choice, so a page can say why a model
+or effort was used without joining events: `model`, `effort`, `tier` (the router's tier: fast | balanced | strong), `reasons` (the router's
+reasons string, the same text as in `model-selected`), `pass` (`full` | `scoped` for a TEST dispatch, `""` otherwise) and `dispatch` (the
+number in the log name `state-<id>-<spec>-<dispatch>.log`; `attempt` is the retry counter, `dispatch` counts every dispatch of the unit, so a
+second TEST pass is `dispatch: 2` with `attempt: 1`). `agent-run-ended` repeats `attempt` and `dispatch`.
+
+Deferred external tools: `deferral-accepted` (`gate`, `verdict`: `QUALITY_DEFERRED` | `TOOLCHAIN_DEFERRED`, `by`: `human` | `policy`, `tools`: the
+missing tools, comma separated, `checks`: the quality-gate checks that did not run) is emitted when a human or the silent policy accepts a
+deferred check for a spec; it is never a pass. The verdict vocabulary is one set everywhere: `APPROVED`, `CHANGES_NEEDED`,
+`QUALITY_DEFERRED`, `TOOLCHAIN_DEFERRED` (review.md frontmatter `verdict:`, hyphenated lower case in `status:`; kcc-run, check-run-conformance and
+the dashboard read both spellings).
+
+`human-gate-decision` from `kcc-run` also carries `answered_by` (`human` | `policy`; `policy` = a `--silent --assume` run answered it, with the
+reason in `note`; the answer `needs-attention` means the gate had no safe continuing answer and the spec was parked). `needs-attention`
+(`status`: `open` | `decided`, `gate`, `decided`, `reason`, `todo`, `file`: `coordination/NeedsAttention.md`; `state`, `state_name`) is emitted for
+every item written to that file (see [[kcc-run]] -> *Silent runs never stop for a human*).
+DeepThinking (`deep-thinking.md`) adds `deep-proposed` (`agent`, `task`, `reason`,
+`est_usd_low`, `est_usd_high`), `deep-approved` (`agent`, `task`, `effort`,
+`est_usd_high`, `approved_by`: `human` | `pre-approved`), `deep-declined` (`agent`,
+`task`, `fallback`: `strong` | `none`, `approved_by`), `deep-spawned` (`agent`, `task`,
+`model`, `effort`) and `deep-completed` (`agent`, `task`, `actual_usd`, `tokens`).
+`check-run-conformance -Scope deep` requires an unused `deep-approved` before each
+`deep-spawned`.
+
 Beyond the spine, token accounting adds `actual-recorded` (and
 `calibration-update`) once harness/API actuals exist (see those kinds below).
 

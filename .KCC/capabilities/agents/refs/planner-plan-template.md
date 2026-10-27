@@ -19,6 +19,7 @@ Write into `specs/IDEA-{ID}-{slug}-Specs/SPEC-{ID}-{slug}/plan.md`:
 
 ## Architecture Gate Check
 {Guardrails / quality gates that apply, or "No architecture gates defined yet."}
+- Gates: {QG-IDs from `architecture/quality-gates.md` that apply to this spec, comma-separated}
 
 ## Backlog Coverage
 | Item | Type | Dialect | Complexity | Wave | Plan coverage | Notes |
@@ -57,6 +58,24 @@ it. See [[.KCC/kernel/protocols/parallel-execution]].
 {Any new files needed: tests, configs, docs, migrations, etc., all under
 `src/IDEA-{ID}-{slug}/`}
 
+## Toolchain
+{Runtime and tool major-version ranges copied from `architecture/architecture.md`
+-> `## Toolchain`. PREFLIGHT checks each row (`node@>=20`).}
+
+| Tool | Version |
+|--|--|
+| node | >=20 |
+
+## Wave file allowances
+{One row per item for every file or glob it writes beyond its Impacted Files:
+test files, fixtures, lockfiles, generated code, configs. `check-wave-scope`
+reads ONLY this table (plus Impacted Files) and fails the wave on any other
+changed file under `src/`. Item `any` applies to every wave.}
+
+| Item | Paths (backticked, `src/IDEA-{ID}-{slug}/...`, `/**` allowed) |
+|--|--|
+| Enabler-001 | `src/IDEA-{ID}-{slug}/api/test/**` |
+
 ## Risk Flags
 {Lock ordering, breaking changes, config changes, rollback concerns,
 cross-idea infrastructure leaks}
@@ -72,7 +91,43 @@ cross-idea infrastructure leaks}
 Every item AC appears at least once; <= 8 rows per item (SZ-4). Bug items get
 a failing regression Test ID first. Levels: `unit`, `integration`,
 `performance`, `security` (the last two only when that dialect is loaded).
-The Test ID must appear in the real test's name/annotation/tag.
+The Test ID must appear in the real test's name/annotation/tag. A Test ID is a
+test in a test file: builds, typechecks, lint, audits and compose checks are
+Verification Steps, or a test that spawns them.
+
+## Standards coverage
+
+| Standard | Verifier check | Covered by |
+|--|--|--|
+| api-standards | checked-in OpenAPI 3.x document, routes match it | T-027, T-028 |
+
+One row per standard the architecture cites. A required deliverable is a Test ID
+or a file in an item's Impacted Files; the plan follows the standard when they differ.
+
+## Gates coverage
+
+| Gate | Covered by |
+|--|--|
+| QG-TRACE | check:QG-TEST |
+| QG-PROD-7 | check:QG-SBOM, check:QG-IMAGE |
+| QG-STATIC | T-043 |
+| QG-A11Y | T-037..T-038, verifier:visual review of the dark theme |
+| GR-001, GR-002 | static-rules:SR-001 SR-003 |
+| GR-012 | verifier:every package in the Decisions table is imported by src and in the lockfile |
+| GR-006 | n/a: this spec has no web client |
+
+One row per `QG-*` id on the `Gates:` line, plus one `QG-PROD-<n>` row per numbered
+item of the QG-PROD checklist when QG-PROD is cited, plus one row per guardrail `GR-nnn`
+(`architecture/guardrails.md` or the `## Guardrails` table; ids may share a row) (PLAN-007, error).
+`Covered by`: Test IDs that exist in the atomic table, `check:<QG-ID>` (a check `quality-gate`
+implements: QG-LOCK QG-BUILD QG-LINT QG-TEST QG-COV QG-SECRETS QG-DEPS QG-SAST
+QG-SBOM QG-IMAGE QG-STATIC; the implementer runs `quality-gate` on its changes and
+gets it green), or `verifier:<step>`; a guardrail may also use `static-rules:<rule-id>`
+(an id in `architecture/static-rules.tsv`) or `n/a:<reason>`. Comma-separated. A gate no
+check implements gets its own Test ID (a static rule: a test that greps for the forbidden pattern).
+
+## Routing
+Written by `kcc route` from the Complexity column above; do not fill it by hand.
 
 ## Verification Steps
 {Concrete commands or checks mapped to epic criteria and backlog items; cite

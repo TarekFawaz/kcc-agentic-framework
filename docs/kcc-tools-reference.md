@@ -32,7 +32,7 @@ bash .KCC/tools/bootstrap-mac-linux.sh
 | show-backchannel | yes | yes | Read the backchannel in a human-friendly format. |
 | build-dashboard | yes | yes | Generate the offline dashboard. |
 | start-agent-session | yes | yes | Start a visible or sandboxed harness session for an agent. |
-| toolchain-preflight | yes | yes | Detect required build/test tools without installing them. |
+| toolchain-preflight | yes | yes | Detect required build/test tools without installing them; probe the Docker registry and build network (`PROBE` / `LIMIT` lines). |
 | adapt-workflow | yes | yes | Scaffold migration folders for external agentic workflows. |
 | bootstrap-mac-linux | no | yes | Prepare bash tools on macOS/Linux. |
 | memory-append | yes | no | Butler-owned deterministic memory writer. |
@@ -41,14 +41,16 @@ bash .KCC/tools/bootstrap-mac-linux.sh
 | check-traceability | yes | yes | Acceptance criterion -> Test ID -> test -> PASS. |
 | check-wave-scope | yes | yes | A wave's changes stay inside its declared files. |
 | check-impl-lock | yes | yes | Source changes only with an approved plan and budget. |
-| quality-gate | yes | yes | Build, lint, tests, coverage, secrets, dependencies, SAST. |
+| quality-gate | yes | yes | Build, lint, tests, coverage, secrets, dependencies, SAST, SBOM, image scans, in the scope the plan declares (`QG-SCOPE`). |
 | repo-bootstrap | yes | yes | Git init/remote gate; installs the KCC git hooks. |
 | check-commit-msg | yes | yes | Commit message convention. |
 | check-branch | yes | yes | Branch naming and protected-branch push guard. |
 | kcc-checkpoint | yes | yes | Write a restore point. |
-| kcc-run | yes | yes | Deterministic lifecycle driver. |
+| kcc-run | yes | yes | Deterministic lifecycle driver; under `--silent --assume` it answers every gate by policy and never pauses. |
 | kcc-limit-watch | yes | yes | Detached resume after a usage limit. |
-| kcc-limit-guard, kcc-statusline | yes | yes | Claude Code usage-limit hook and status line. |
+| kcc-limit-guard, kcc-statusline | yes | yes | Claude Code usage-limit hook and status line. The status line does not run in the VS Code extension. |
+| kcc-limit-hook | yes | no | Claude Code `StopFailure` hook: records a usage limit, writes a restore point, arms the watcher. Runs under bash (Git Bash on Windows). |
+| kcc-hint | yes | yes | Human hints for a running session: `add`, `list`, `clear`, `pending`; `inject` (bash) is the Claude Code hook. |
 | kcc-handover | yes | yes | Move a run to another harness. |
 | record-token-actuals | yes | yes | Record actual token use at session end. |
 
@@ -66,7 +68,7 @@ These tools were added in release 0.5.0 and share one contract
 | | |
 |---|---|
 | Common arguments | `-RepoRoot` / `--repo-root`, `-Json` / `--json`, `-Spec` / `--spec`, `-Scope` / `--scope`, `-DryRun` / `--dry-run` (mutating tools) |
-| Exit codes | 0 pass, 1 violations, 2 usage or environment error, 3 deferred (a required external tool is missing; never a pass) |
+| Exit codes | 0 pass, 1 violations, 2 usage or environment error, 3 deferred (a required external tool is missing or exited without a result, or the item needs a human; never a pass) |
 | JSON | `{ tool, version, scope, errors, warnings, status, violations: [{ id, severity, fix_owner, file, message }] }` |
 
 | Tool | Tool-specific arguments | Notes |
@@ -75,12 +77,12 @@ These tools were added in release 0.5.0 and share one contract
 | `check-traceability` | `-Spec` | Run by the verifier before a review verdict. |
 | `check-wave-scope` | `-Spec`, `-Wave N`, `-Base <ref or manifest>`, `-TestCommand` | Compares against the newest restore point by default. Extra paths can be allowed in `plan.md -> ## Wave file allowances`. |
 | `check-impl-lock` | `-Path <file>`, `-Staged`, `-Hook` | `-Hook` is the Claude Code `PreToolUse` mode (exit 2 blocks the edit). |
-| `quality-gate` | `-Spec`, `-Path`, `-Fast`, `-Require`, `-Emit` | Commands are detected per stack; override them in `settings.json -> quality.commands`. `-Fast` scans staged files for secrets. `-Require` turns a deferred scanner into a failure (CI). A repo `.gitleaks.toml` is honoured. Set `quality.scanners.sast_runner` to `docker` where semgrep has no native build. |
+| `quality-gate` | `-Spec`, `-Path`, `-Scope`, `-Fast`, `-Require`, `-Emit` | Commands are detected per stack; override them in `settings.json -> quality.commands`. The scope of `-Spec` comes from the plan's `## Gates coverage` table and is printed in the first row, `QG-SCOPE`: checks the plan does not cover are out of scope, not failed; `-Scope` overrides, and a plan without the table means `all`. Rows are `pass`, `fail`, `deferred` or `skipped`, each with a `fix_owner` (`implementer`, `infrastructure-implementer`, `human`, `architect`); a scanner that exits without a result, a gate tool error or a built image older than the workspace (`QG-IMAGE`, with a rebuild hint) is `deferred`, never an implementer failure. `QG-DEPS` calls osv-scanner per lockfile (`-L`), falls back to the per-stack audit, counts production groups and names dev-only advisories, which gate only when `quality.audit_dev_dependencies` is true. `quality.scanners.sast` is `semgrep` or `opengrep` (the other stands in when the named one is missing); `quality.sast_rules` (default `auto`) names the rules, and opengrep needs `architecture/sast-rules/`. `-Fast` scans staged files for secrets. `-Require` turns a deferred scanner into a failure (CI). A repo `.gitleaks.toml` is honoured. Set `quality.scanners.sast_runner` to `docker` where the scanner has no native build. |
 | `repo-bootstrap` | `-Apply init-local\|connect-remote\|skip`, `-RemoteUrl`, `-InstallHook` | Never stores credentials and never pushes. Installs `pre-commit`, `commit-msg`, and `pre-push`. |
 | `check-commit-msg` | `-File <path>` or `-Message <text>` | See [git-workflow.md](./git-workflow.md). |
 | `check-branch` | `-Branch <name>`, `-Push` | `-Push` is the `pre-push` mode. |
 | `kcc-checkpoint` | `-Reason`, `-NextAction`, `-Harness`, `-SessionId`, `-NoGit` | Writes `coordination/checkpoints/CP-NNN.md` and, in a git repo, a `kcc/cp-NNN` tag. |
-| `kcc-run` | `-Input`, `-Silent`, `-Assume`, `-Accuracy`, `-Budget`, `-Currency`, `-Parallel`, `-Harness`, `-Resume`, `-Answer`, `-From`, `-Only`, `-DryRun` | Exit 4 paused at a gate, 5 suspended on a usage limit, 6 stopped. Protocol: `.KCC/kernel/protocols/kcc-run.md`. |
+| `kcc-run` | `-Input`, `-Silent`, `-Assume`, `-Accuracy`, `-Budget`, `-Currency`, `-Parallel`, `-Fasttrack`, `-DepthLevel`, `-Harness`, `-Resume`, `-Answer`, `-From`, `-Until`, `-Only`, `-MaxAttempts`, `-Note`, `-DryRun`, `-Json` | Exit 4 paused at a gate, 5 suspended on a usage limit, 6 stopped, 7 done with `[open]` items in `coordination/NeedsAttention.md` (unattended runs only). Gates and answers: `waiver` (`waive`, `recheck`, `abort`; opened by a `WAIVER_NEEDED` review or by `REVIEW-004 (human)`), `ruling` (`revise`, `waive`, `escalate`, `abort`), `quality-deferred-on-exit-3` (`install`, `accept-deferred`, `abort`), `loop` (`revise`, `escalate`, `abort`), `toolchain` (`install`, `human-install`, `defer`). Under `-Silent -Assume` every gate is answered by policy and exit 4 never happens. A scoped TEST with nothing to verify emits `test-skipped` instead of running the verifier; PREFLIGHT `LIMIT` lines reach the TEST prompt as `KNOWN ENVIRONMENT LIMITS`. Protocol: `.KCC/kernel/protocols/kcc-run.md`; guide: [unattended-runs.md](./unattended-runs.md). |
 | `kcc-limit-watch` | `-Arm`, `-Run`, `-Wrap`, `-ResetAt`, `-Command` | Use when the `kcc` binary is not installed; `kcc run` replaces it. |
 | `kcc-handover` | `-To claude\|codex\|opencode\|generic`, `-From`, `-Launch`, `-Unattended` | Writes the envelope and prints the start command. |
 
@@ -340,6 +342,23 @@ Arguments:
 | `-Tools` / `--tools` | yes | Comma-separated tool names. |
 
 Install decisions must be human-gated and traceable.
+
+After the per-tool lines (present, `MISSING`, or `WRONG` for a version outside
+the range the plan's `## Toolchain` table asks for), two environment probes run
+when `docker` is required and present, one line each:
+
+```text
+LIMIT docker-daemon unreachable: docker is installed but its daemon is not running (...)
+PROBE    docker-registry reachable (docker pull hello-world)
+PROBE    docker-build-network reachable (a RUN step reached registry.npmjs.org over TLS)
+LIMIT docker-build-network unreachable: a RUN step inside a build cannot reach registries over TLS (...); see KCC_CA_BUNDLE
+```
+
+A `LIMIT` line never fails the preflight and never opens the install gate.
+`kcc-run` copies the lines into the TEST prompt as `KNOWN ENVIRONMENT LIMITS`,
+so the verifier defers the checks they rule out at once. What to do about the
+limit: [unattended-runs.md](./unattended-runs.md) -> *Machines behind a
+TLS-intercepting proxy or antivirus*.
 
 ## adapt-workflow
 

@@ -17,6 +17,7 @@
   },
   "defaults": {
     "model_class_overrides": {},
+    "depthlevel": 5,
     "auto_policy": {
       "silent": false,
       "assume": false,
@@ -46,15 +47,20 @@
     "max_items": 6,
     "max_files_per_item": 5,
     "max_tests_per_item": 8,
-    "max_spec_lines": 150
+    "max_spec_lines": 150,
+    "max_backlog_item_lines": 80,
+    "max_plan_lines": 250,
+    "max_brief_lines": 100,
+    "max_specs_fasttrack": 8
   },
   "quality": {
     "coverage_min_pct": 80,
+    "audit_dev_dependencies": false,
     "scanners": {
       "secrets": "gitleaks",
       "dependencies": "osv-scanner",
       "sast": "semgrep",
-      "sast_runner": "local"
+      "sast_runner": "auto"
     },
     "fail_on": {
       "secrets": "any",
@@ -68,7 +74,7 @@
     "resume_grace_seconds": 120,
     "default_wait_minutes": 300,
     "max_resumes": 5,
-    "permission_mode": "acceptEdits",
+    "permission_mode": "auto",
     "resume": {
       "claude": "claude -p --resume {session_id} --permission-mode {permission_mode} \"{resume_prompt}\"",
       "codex": "codex exec resume {session_id} \"{resume_prompt}\"",
@@ -85,6 +91,27 @@
   "run": {
     "max_attempts": 3,
     "state_timeout_minutes": 60,
-    "harness": "claude"
+    "harness": "claude",
+    "orchestrator_tier": "fast",
+    "orchestrator_effort": "low",
+    "escalation_tier": "balanced",
+    "fasttrack_direct": true,
+    "butler": "on"
+  },
+  "routing": {
+    "implement_max_tier": "balanced"
+  },
+  "deep": {
+    "enabled": true,
+    "max_per_run": 2,
+    "default_effort": "xhigh",
+    "pre_approved_usd": 0
+  },
+  "dashboard": {
+    "auto_open": "ask",
+    "serve": true
+  },
+  "notices": {
+    "model_tiers_v2": true
   }
 }

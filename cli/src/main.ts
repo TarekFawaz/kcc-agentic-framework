@@ -1,7 +1,12 @@
 #!/usr/bin/env bun
 import { HARNESSES, parse, target, UsageError, workspace } from "./args";
 import { doctor } from "./commands/doctor";
+import { hint } from "./commands/hint";
 import { init } from "./commands/init";
+import { dashboard } from "./commands/dashboard";
+import { models } from "./commands/models";
+import { report } from "./commands/report";
+import { route } from "./commands/route";
 import { runTailor } from "./commands/tailor";
 import { upgrade } from "./commands/upgrade";
 import { registerMcp } from "./mcp/register";
@@ -27,15 +32,46 @@ Set up
   mcp [--register]    Serve KCC over MCP (stdio), or register the server with the harnesses.
 
 Check
-  doctor [--json]     Check the installation; exit 1 when something must be fixed.
+  doctor [--json] [--fix-hooks]
+                      Check the installation; exit 1 when something must be fixed.
+                      --fix-hooks adds missing KCC hooks to .claude/settings.json.
+  models [--check | --refresh] [--deep]
+                      The model of each tier per harness (kernel/models.json). --check probes the
+                      pinned Claude ids and the generated agents; --refresh also shows what each
+                      alias resolves to today (a newer generation shows up here).
+                      --deep adds the DeepThinking tier to the probes (about $0.80 each).
+  route [SPEC-ID] [--dry-run] [--json]
+                      Decide the model and reasoning effort per backlog item from the plan (Complexity, files,
+                      domain, security risk) and write them into plan.md as ## Routing. kcc run does this after SPECS.
+  report [--skeleton-min N] [--app-min N] [--out file]
+                      Measure the run in this folder: time per stage, human waits, agents and cost, and a
+                      verdict against a budget (default skeleton 45 min, whole app 180); exit 1 on a miss.
+  dashboard [--check]  Rebuild dashboard/index.html and prove it compiles; --check also renders it
+                      headless (Chrome or Edge) and fails on a blank page.
+  dashboard --serve [--port N]
+                      A live page on http://127.0.0.1:<port>/ rebuilt from the files on every request, so it
+                      cannot go stale. kcc run serves it for the length of the run.
   validate [--mode cell|repo]
                       Run the framework validator.
   limits [--json]     Show usage, the last limit hit, and the next resume.
+
+Steer
+  hint "<text>" [--to all|main|subagents|<agent>] [--expires <minutes>]
+                      Give the running session (and its subagents) a hint about behaviour or
+                      expectations. Also: kcc --hint "<text>". Works while the session is busy.
+  hint --list | --clear <H-NNN|all> | --pending [--for <agent>]
+                      Show, withdraw, or read (hook-less harnesses) the active hints.
 
 Run
   run --input <idea|path|IDEA-ID|SPEC-ID|all> [kcc-run options]
                       Drive the lifecycle; on a usage limit it waits and resumes.
   run --resume        Continue a suspended or paused run.
+                      After SPECS, the spec-writer (WRITE) and the planner (PLAN) run for ALL specs
+                      at the same time (no limit; --max-fanout N sets one); then each spec builds as
+                      soon as the specs it depends on are done, independent ones side by side
+                      (--max-parallel N, default 4, bounds only these build lanes).
+  run --lane SPEC-X --answer <choice>
+                      Answer the gate a spec stopped at, then: kcc run --resume
   run --wrap [--harness <name>] -- <command...>
                       Supervise any harness command the same way.
   tool <name> [args]  Run any tool from .KCC/tools (bash-style flags on every OS).
@@ -78,6 +114,9 @@ async function main(argv: string[]): Promise<number> {
       return doctor(rest);
     case "limits":
       return limits(rest);
+    case "hint":
+    case "--hint":
+      return hint(rest);
     case "run":
       return run(rest);
     case "sync": {
@@ -88,6 +127,14 @@ async function main(argv: string[]): Promise<number> {
       const root = workspace(t.dir);
       return runTool(root, "sync-adapters", ["--harness", harness, "--repo-root", root]).status;
     }
+    case "dashboard":
+      return await dashboard(rest);
+    case "models":
+      return models(rest);
+    case "report":
+      return report(rest);
+    case "route":
+      return route(rest);
     case "validate": {
       const { positionals, values } = parse(rest, [], ["dir", "mode"]);
       const root = workspace(target(positionals, values.dir, false).dir);

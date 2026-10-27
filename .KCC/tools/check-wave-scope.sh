@@ -13,6 +13,9 @@
 #   WAVE-001 implementer  changed src/ file not declared for the wave
 #   WAVE-002 implementer  --test-command exited non-zero
 #   WAVE-003 planner      wave has no items in plan.md
+#   WAVE-004 implementer  the wave declares src/ files and none of them changed
+# Files declared by an earlier wave of the same spec are accepted too (nothing
+# commits between waves, so earlier work still shows as changed).
 #
 # Usage: bash .KCC/tools/check-wave-scope.sh --spec SPEC-ID --wave N [--base REF|MANIFEST]
 #        [--test-command "CMD"] [--repo-root PATH] [--json]
@@ -110,11 +113,14 @@ backlog_dir() {
 impacted_files() {
   section "$1" 'impacted files' | awk '
     /^[ \t]*[-*][ \t]+[^ \t]/ {
-      l = $0
-      if (match(l, /`[^`]+`/)) p = substr(l, RSTART + 1, RLENGTH - 2)
-      else { sub(/^[ \t]*[-*][ \t]+/, "", l); split(l, a, /[ \t]+/); p = a[1] }
-      gsub(/^[ \t]+|[ \t]+$/, "", p); gsub(/\\/, "/", p); sub(/^\.\//, "", p)
-      print p
+      # Every backticked path on the bullet counts, not only the first; a backticked route (`/healthz`) is not a file.
+      l = $0; n = 0
+      while (match(l, /`[^` \t]+`/)) {
+        p = substr(l, RSTART + 1, RLENGTH - 2); l = substr(l, RSTART + RLENGTH)
+        if (p ~ /^\// || p !~ /[.\/]/) continue
+        gsub(/\\/, "/", p); sub(/^\.\//, "", p); print p; n++
+      }
+      if (n == 0) { l = $0; sub(/^[ \t]*[-*][ \t]+/, "", l); split(l, a, /[ \t]+/); p = a[1]; gsub(/\\/, "/", p); sub(/^\.\//, "", p); print p }
     }'
 }
 
@@ -206,6 +212,7 @@ if [ -n "$BD" ] && [ -n "$WAVE_ITEMS" ]; then
 $WAVE_ITEMS
 EOF
 fi
+DECLARED_IMPACTED_RAW="$DECLARED"
 # Plan-declared allowances: plan.md '## Wave file allowances' rows
 # '| Story-001 | `src/.../tests/x/**` `src/.../*.csproj` |'. Item 'any' applies to every wave.
 if [ -f "$SPEC_DIR/plan.md" ] && [ -n "$WAVE_ITEMS" ]; then
@@ -286,8 +293,30 @@ EOF
     END { for (p in k) if (substr(p, 1, 4) == "src/" && !(p in seen)) print orig[p] }')"
 fi
 
+# Only the items' own Impacted Files count as proof that the wave did its work (WAVE-004); allowances
+# (tests, fixtures, lockfiles, item 'any') are extras and must not make a wave that wrote nothing look done.
+DECLARED_IMPACTED="$DECLARED_IMPACTED_RAW"
+# Files declared by earlier waves of this spec.
+EARLIER_DECLARED=""
+if [ -n "$WSRC" ] && [ -n "$BD" ]; then
+  EARLIER_ITEMS="$(printf '%s
+' "$WSRC" | wave_list | awk -F'	' -v w="$WAVE_N" '($1 + 0) < (w + 0) && !seen[$2]++ { print $2 }')"
+  while IFS= read -r it; do
+    [ -n "$it" ] || continue
+    for f in "$BD/$it"*.md; do
+      [ -f "$f" ] || continue
+      case "$(basename "$f")" in "$it"[0-9]*) continue ;; esac
+      EARLIER_DECLARED="$EARLIER_DECLARED$(impacted_files "$f" | tr '[:upper:]' '[:lower:]')
+"
+    done
+  done <<EOF
+$EARLIER_ITEMS
+EOF
+fi
+
 # --- WAVE-001 ---
 SRC_CHANGED=0
+CUR_HIT=0
 while IFS= read -r c; do
   [ -n "$c" ] || continue
   r="${c//\\//}"
@@ -306,6 +335,30 @@ while IFS= read -r c; do
   done <<EOF
 $DECLARED
 EOF
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    hit=0
+    if [ "$d" = "$low" ]; then hit=1; fi
+    case "$d" in
+      */) case "$low" in "$d"*) hit=1 ;; esac ;;
+      *\**) case "$low" in $d) hit=1 ;; esac ;;
+    esac
+    if [ "$hit" -eq 1 ]; then CUR_HIT=$((CUR_HIT + 1)); break; fi
+  done <<EOF
+$DECLARED_IMPACTED
+EOF
+  if [ "$ok" -eq 0 ]; then
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ "$d" = "$low" ]; then ok=1; break; fi
+      case "$d" in
+        */) case "$low" in "$d"*) ok=1; break ;; esac ;;
+        *\**) case "$low" in $d) ok=1; break ;; esac ;;
+      esac
+    done <<EOF
+$EARLIER_DECLARED
+EOF
+  fi
   if [ "$ok" -eq 0 ]; then
     violation "WAVE-001" "error" "implementer" "$r changed but is not in the Impacted Files of any wave $WAVE_N item ($ITEMS_CSV)." "$r"
   fi
@@ -313,9 +366,59 @@ done <<EOF
 $(printf '%s\n' "$CHANGED" | grep -v '^$' | LC_ALL=C sort -u || true)
 EOF
 
+# --- WAVE-004: a wave that declares src/ files must change at least one of them ---
+DECLARES_SRC=0
+case "$DECLARED_IMPACTED" in src/*|*"
+src/"*) DECLARES_SRC=1 ;; esac
+if [ -n "$WAVE_ITEMS" ] && [ "$DECLARES_SRC" -eq 1 ] && [ "$CUR_HIT" -eq 0 ]; then
+  violation "WAVE-004" "error" "implementer" "Wave $WAVE_N ($ITEMS_CSV) declares src/ files but none of them changed: the implementer wrote nothing." "$PREL"
+fi
+
 # --- WAVE-002 ---
 TEST_EXIT="null"
-if [ -n "$TEST_COMMAND" ]; then
+# --test-command auto: run the tests the workspace already has, per project (npm test where a test script exists and
+# dependencies are installed, go test, dotnet test, pytest), so a later wave that breaks an earlier wave's test fails
+# at the wave that broke it. Nothing runnable yet (a scaffold wave) is a warning, not a failure.
+auto_test_commands() { # prints "dir<TAB>command" lines
+  local src="$REPO_ROOT/src" top d tab
+  tab="$(printf '\t')"
+  [ -d "$src" ] || return 0
+  for top in "$src"/*/; do
+    [ -d "$top" ] || continue
+    for d in "${top%/}" "${top%/}"/*/; do
+      d="${d%/}"; [ -d "$d" ] || continue
+      case "$(basename "$d")" in node_modules|dist|build|coverage|.venv|venv|__pycache__|bin|obj|target) continue ;; esac
+      if [ -f "$d/package.json" ] && [ -d "$d/node_modules" ] && grep -q '"test"[[:space:]]*:' "$d/package.json"; then printf '%s%s%s\n' "$d" "$tab" 'npm test --silent'; continue; fi
+      if [ -f "$d/go.mod" ]; then printf '%s%s%s\n' "$d" "$tab" 'go test ./...'; continue; fi
+      if ls "$d"/*.sln "$d"/*.csproj >/dev/null 2>&1; then printf '%s%s%s\n' "$d" "$tab" 'dotnet test --nologo'; continue; fi
+      if [ -f "$d/pytest.ini" ] || [ -f "$d/pyproject.toml" ] || ls "$d"/test_*.py >/dev/null 2>&1; then printf '%s%s%s\n' "$d" "$tab" 'python -m pytest -q'; fi
+    done
+  done
+}
+if [ "$TEST_COMMAND" = "auto" ]; then
+  AUTO_CMDS="$(auto_test_commands)"
+  if [ -z "$AUTO_CMDS" ]; then
+    violation "WAVE-005" "warning" "implementer" "No runnable tests in the workspace yet (no test script with installed dependencies); nothing to run for this wave." ""
+  fi
+  FAILED_PROJECTS=""
+  TAB_CH="$(printf '\t')"
+  while IFS="$TAB_CH" read -r acd acc; do
+    [ -n "$acd" ] || continue
+    aout="$(cd "$acd" && bash -c "$acc" 2>&1)"; arc=$?
+    printf '%s\n' "$aout" 1>&2
+    if [ "$arc" -ne 0 ]; then
+      atail="$(printf '%s' "$aout" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 8 | tr '\n' '|' | cut -c1-500)"
+      FAILED_PROJECTS="$FAILED_PROJECTS${FAILED_PROJECTS:+ ;; }${acd#"$REPO_ROOT"/} ($acc, exit $arc): $atail"
+    fi
+  done <<AUTO_EOF
+$AUTO_CMDS
+AUTO_EOF
+  TEST_EXIT=0
+  if [ -n "$FAILED_PROJECTS" ]; then
+    TEST_EXIT=1
+    violation "WAVE-002" "error" "implementer" "The workspace tests fail after this wave; fix the code or the stale test that now disagrees with it. $FAILED_PROJECTS" ""
+  fi
+elif [ -n "$TEST_COMMAND" ]; then
   rc=0
   (cd "$REPO_ROOT" && bash -c "$TEST_COMMAND") 1>&2 || rc=$?
   TEST_EXIT="$rc"

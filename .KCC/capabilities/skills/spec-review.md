@@ -2,7 +2,7 @@
 # Functional fields (consumed by harness adapters)
 name: spec-review
 description: >
- Quick diff review of epic spec changes against epic criteria, story/enabler backlog items (under `Backlog/`), and the planner's atomic test-case table - without writing the full verifier report. Usage: /spec-review SPEC-003
+ Quick diff review of epic spec changes against epic criteria, story/enabler backlog items (under `Backlog/`), and the planner's atomic test-case table - without writing the full verifier report. Usage: /spec-review SPEC-003 [--fasttrack] [--depthlevel 1-5]
 argument-placeholder: <ARGS>
 delegates-to:
   - verifier
@@ -26,6 +26,12 @@ status: active
 # Spec Review
 
 Quick review of <ARGS> implementation.
+
+## Flags
+
+`--depthlevel N` (1-5, default 5) sets how much detail you write; follow `.KCC/kernel/protocols/depth-levels.md` and never drop a required section. `--fasttrack`: no butler, trace, or token-guard. The review checks are unchanged.
+
+The review is a quick diff review, so the driver routes it at `balanced` tier and `high` effort at most (`model-routing.md`).
 
 ## Steps
 

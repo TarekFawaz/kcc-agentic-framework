@@ -276,16 +276,28 @@ $GitIgnoreContent = @'
 .agents/
 ollama/
 
+# Ideas, specs, architecture and src/ are the project's deliverables and ARE committed.
 Traces/Session-*/
-ideation/IDEA-*/
-specs/IDEA-*-Specs/
 solution/*/
 migrations/IMPORT-*/
-src/
 dashboard/
 
 coordination/backchannel.jsonl
 coordination/backchannel-*.jsonl
+coordination/run/
+coordination/gates/
+coordination/checkpoints/
+.kcc-lanes/
+.kcc-lane/
+coordination/lanes.json
+
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
 
 .tmp/
 .tmp-*

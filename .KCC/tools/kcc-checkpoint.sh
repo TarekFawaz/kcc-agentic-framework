@@ -24,8 +24,19 @@
 set -euo pipefail
 
 TOOL_VERSION="1.0.0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# abs_dir DIR -> ABS: what `cd DIR && pwd` prints, with no fork for an absolute path that has no dot segments (a fork costs ~0.3 s on Git
+# Bash for Windows); a folder that is not there still fails in cd.
+abs_dir() {
+  [[ -d "$1" ]] || cd "$1"
+  case "$1" in
+    /*) case "$1/" in */./*|*/../*|*//*) ABS="$(cd "$1" && pwd)" ;; *) ABS="${1%/}"; [[ -n "$ABS" ]] || ABS=/ ;; esac ;;
+    *) ABS="$(cd "$1" && pwd)" ;;
+  esac
+}
+SCRIPT_DIR="${BASH_SOURCE[0]}"
+case "$SCRIPT_DIR" in */*) SCRIPT_DIR="${SCRIPT_DIR%/*}" ;; *) SCRIPT_DIR="." ;; esac
+abs_dir "$SCRIPT_DIR"; SCRIPT_DIR="$ABS"
+REPO_ROOT=""
 REASON="manual"
 HARNESS=""
 SESSION_ID=""
@@ -44,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     --harness|-Harness) HARNESS="${2:-}"; shift 2 ;;
     --session-id|-SessionId) SESSION_ID="${2:-}"; shift 2 ;;
     --next-action|-NextAction) NEXT_ACTION="${2:-}"; shift 2 ;;
-    --repo-root|-RepoRoot) REPO_ROOT="$(cd "$2" && pwd)"; shift 2 ;;
+    --repo-root|-RepoRoot) abs_dir "$2"; REPO_ROOT="$ABS"; shift 2 ;;
     --json|-Json) JSON=1; shift ;;
     --dry-run|-DryRun) DRY=1; shift ;;
     --no-git|-NoGit) NO_GIT=1; shift ;;
@@ -53,6 +64,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$REPO_ROOT" ]]; then abs_dir "$SCRIPT_DIR/../.."; REPO_ROOT="$ABS"; fi
 case "$REASON" in
   limit-soft|limit-hard|spec-reviewed|manual|handover) ;;
   *) echo "error: --reason must be limit-soft|limit-hard|spec-reviewed|manual|handover" >&2; exit 2 ;;
@@ -131,15 +143,32 @@ PREV_ID=""
 CP_REL="coordination/checkpoints/$CP_ID.md"
 
 # --- previous restore point ---------------------------------------------------
-fm_get() { # file key -> frontmatter scalar
+# fm_get_v FILE KEY -> FMV: the frontmatter scalar (the first line "---" opens it, the next one closes it; the value has its leading blanks
+# and one quote at each end removed). Read in bash: this was an awk per key.
+fm_get_v() {
+  FMV=""
   [[ -f "$1" ]] || return 0
-  awk -v k="$2" 'NR==1 && $0=="---"{f=1; next} f && $0=="---"{exit} f { i=index($0,":"); if (i>0 && substr($0,1,i-1)==k) { v=substr($0,i+1); sub(/^[ \t]+/,"",v); gsub(/^"|"$/,"",v); print v; exit } }' "$1"
+  local l n=0 i k v
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    n=$((n + 1))
+    if [[ $n -eq 1 ]]; then [[ "$l" == "---" ]] || return 0; continue; fi
+    [[ "$l" == "---" ]] && return 0
+    if [[ "$l" == *:* ]]; then
+      k="${l%%:*}"
+      if [[ "$k" == "$2" ]]; then
+        v="${l#*:}"; v="${v#"${v%%[![:blank:]]*}"}"; v="${v#\"}"; v="${v%\"}"
+        FMV="$v"; return 0
+      fi
+    fi
+  done < "$1"
+  return 0
 }
+fm_get() { fm_get_v "$1" "$2"; if [[ -n "$FMV" ]]; then printf '%s\n' "$FMV"; fi; }
 PREV_FILE=""
 [[ -n "$PREV_ID" && -f "$CPDIR/$PREV_ID.md" ]] && PREV_FILE="$CPDIR/$PREV_ID.md"
-PREV_LAST_EVENT="$(fm_get "$PREV_FILE" last_event_id)"
-PREV_NEXT="$(fm_get "$PREV_FILE" next_action)"
-PREV_NEXT_SRC="$(fm_get "$PREV_FILE" next_action_source)"
+fm_get_v "$PREV_FILE" last_event_id; PREV_LAST_EVENT="$FMV"
+fm_get_v "$PREV_FILE" next_action; PREV_NEXT="$FMV"
+fm_get_v "$PREV_FILE" next_action_source; PREV_NEXT_SRC="$FMV"
 PREV_LAST_NUM=0
 [[ "$PREV_LAST_EVENT" =~ ^BC-0*([0-9]+)$ ]] && PREV_LAST_NUM="${BASH_REMATCH[1]}"
 
@@ -314,11 +343,43 @@ MANIFEST_TMP=""
 if [[ "$IS_GIT" -eq 1 ]]; then
   GIT_MODE="git"
   GIT_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-  GIT_TAG="kcc/cp-${CP_ID#CP-}"
-  if [[ -n "$PREV_ID" ]] && git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/kcc/cp-${PREV_ID#CP-}" >/dev/null 2>&1; then
-    CHANGES="$( { git -C "$REPO_ROOT" diff --name-status "kcc/cp-${PREV_ID#CP-}" -- 2>/dev/null | awk -F'\t' '{print $1 "\t" $NF}'; git -C "$REPO_ROOT" ls-files --others --exclude-standard 2>/dev/null | awk '{print "?\t" $0}'; } | awk -F'\t' '$2 !~ /^coordination\//' | head -n 200 || true)"
+  # Tags are repository-wide: a lane (a worktree of the workspace repository, or a copy) names its own after its spec.
+  TAG_NS="kcc/"
+  if [[ -f "$REPO_ROOT/.kcc-lane/base.json" ]]; then
+    lane_spec="$(sed -nE 's/.*"spec"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$REPO_ROOT/.kcc-lane/base.json" | head -n 1)"
+    [[ -n "$lane_spec" ]] && TAG_NS="kcc/$lane_spec/"
+  fi
+  GIT_TAG="${TAG_NS}cp-${CP_ID#CP-}"
+  if [[ -n "$PREV_ID" ]] && git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${TAG_NS}cp-${PREV_ID#CP-}" >/dev/null 2>&1; then
+    # git diff --name-status <tag> plus the untracked files, "status<TAB>path", outside coordination/, the first 200 (bash loops, no awk/head)
+    cp_diff="$(git -C "$REPO_ROOT" diff --name-status "${TAG_NS}cp-${PREV_ID#CP-}" -- 2>/dev/null || true)"
+    cp_untr="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard 2>/dev/null || true)"
+    CHANGES=""; cp_n=0
+    while IFS= read -r cp_l; do
+      [[ -n "$cp_l" ]] || continue
+      cp_p="${cp_l##*$'\t'}"; cp_s="${cp_l%%$'\t'*}"
+      [[ "$cp_p" == coordination/* ]] && continue
+      [[ $cp_n -lt 200 ]] || break
+      CHANGES+="${CHANGES:+$'\n'}$cp_s"$'\t'"$cp_p"; cp_n=$((cp_n + 1))
+    done <<< "$cp_diff"
+    while IFS= read -r cp_l; do
+      [[ -n "$cp_l" ]] || continue
+      [[ "$cp_l" == coordination/* ]] && continue
+      [[ $cp_n -lt 200 ]] || break
+      CHANGES+="${CHANGES:+$'\n'}?"$'\t'"$cp_l"; cp_n=$((cp_n + 1))
+    done <<< "$cp_untr"
   else
-    CHANGES="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | awk '{s=$1; $1=""; sub(/^ /,""); print s "\t" $0}' | awk -F'\t' '$2 !~ /^coordination\//' | head -n 200 || true)"
+    # git status --porcelain: "status<TAB>path" (awk's field splitting: runs of blanks in a path collapse), outside coordination/, the first 200
+    cp_st="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)"
+    CHANGES=""; cp_n=0
+    while IFS= read -r cp_l; do
+      [[ -n "$cp_l" ]] || continue
+      read -r -a cp_f <<< "$cp_l"
+      cp_s="${cp_f[0]-}"; cp_p="${cp_f[*]:1}"
+      [[ "$cp_p" == coordination/* ]] && continue
+      [[ $cp_n -lt 200 ]] || break
+      CHANGES+="${CHANGES:+$'\n'}$cp_s"$'\t'"$cp_p"; cp_n=$((cp_n + 1))
+    done <<< "$cp_st"
   fi
   if [[ -z "$GIT_HEAD" ]]; then
     WARNINGS+=("CP-W-GIT: repository has no commits; tag skipped")
@@ -346,11 +407,25 @@ else
   fi
 fi
 CHANGE_COUNT=0
-[[ -n "$CHANGES" ]] && CHANGE_COUNT="$(printf '%s\n' "$CHANGES" | grep -c . || true)"
+if [[ -n "$CHANGES" ]]; then
+  while IFS= read -r cc_l; do if [[ -n "$cc_l" ]]; then CHANGE_COUNT=$((CHANGE_COUNT + 1)); fi; done <<< "$CHANGES"
+fi
 
 # --- render ---------------------------------------------------------------------
 yq() { local s="${1//\"/\'}"; printf '"%s"' "$s"; }
-CHANGE_LINES="$(printf '%s\n' "$CHANGES" | awk -F'\t' 'NF>=2 { n++; if (n <= 60) print "- " $1 " " $2 } END { if (n > 60) print "- ... " (n - 60) " more" }')"
+yq_v() { local s="${1//\"/\'}"; YQ="\"$s\""; }
+# the quoted frontmatter values are computed here, not with $(yq ...) inside the template (ten forks per checkpoint)
+yq_v "$SESSION_ID"; Y_SESSION_ID="$YQ"; yq_v "$TRACE_SESSION"; Y_TRACE_SESSION="$YQ"; yq_v "$SPEC"; Y_SPEC="$YQ"; yq_v "$STAGE"; Y_STAGE="$YQ"
+yq_v "$PREV_ID"; Y_PREV_ID="$YQ"; yq_v "$LAST_EVENT_ID"; Y_LAST_EVENT_ID="$YQ"; yq_v "$GIT_HEAD"; Y_GIT_HEAD="$YQ"; yq_v "$GIT_TAG"; Y_GIT_TAG="$YQ"
+yq_v "$NEXT_ACTION"; Y_NEXT_ACTION="$YQ"; yq_v "$RESUME_PROMPT"; Y_RESUME_PROMPT="$YQ"
+# the first 60 changes as "- status path" lines, and a count of the rest (was an awk over the list)
+CHANGE_LINES=""; cl_n=0
+while IFS= read -r cl_l; do
+  [[ "$cl_l" == *$'\t'* ]] || continue
+  cl_n=$((cl_n + 1))
+  if [[ $cl_n -le 60 ]]; then cl_a="${cl_l%%$'\t'*}"; cl_r="${cl_l#*$'\t'}"; cl_b="${cl_r%%$'\t'*}"; CHANGE_LINES+="${CHANGE_LINES:+$'\n'}- $cl_a $cl_b"; fi
+done <<< "$CHANGES"
+if [[ $cl_n -gt 60 ]]; then CHANGE_LINES+="${CHANGE_LINES:+$'\n'}- ... $((cl_n - 60)) more"; fi
 
 render() {
   cat <<EOF
@@ -359,19 +434,19 @@ id: $CP_ID
 created: $CREATED
 reason: $REASON
 harness: $HARNESS
-session_id: $(yq "$SESSION_ID")
-trace_session: $(yq "$TRACE_SESSION")
-spec: $(yq "$SPEC")
-stage: $(yq "$STAGE")
-previous: $(yq "$PREV_ID")
-last_event_id: $(yq "$LAST_EVENT_ID")
+session_id: $Y_SESSION_ID
+trace_session: $Y_TRACE_SESSION
+spec: $Y_SPEC
+stage: $Y_STAGE
+previous: $Y_PREV_ID
+last_event_id: $Y_LAST_EVENT_ID
 open_gates: $OPEN_GATES_COUNT
 git_mode: $GIT_MODE
-git_head: $(yq "$GIT_HEAD")
-git_tag: $(yq "$GIT_TAG")
-next_action: $(yq "$NEXT_ACTION")
+git_head: $Y_GIT_HEAD
+git_tag: $Y_GIT_TAG
+next_action: $Y_NEXT_ACTION
 next_action_source: $NEXT_SRC
-resume_prompt: $(yq "$RESUME_PROMPT")
+resume_prompt: $Y_RESUME_PROMPT
 tags:
   - kcc/checkpoint
 ---
@@ -488,7 +563,9 @@ if [[ "$DRY" -eq 0 ]]; then
   fi
   PAYLOAD="{\"cp_id\":\"$CP_ID\",\"reason\":\"$REASON\",\"harness\":\"$HARNESS\",\"path\":\"$CP_REL\",\"git_mode\":\"$GIT_MODE\",\"open_gates\":$OPEN_GATES_COUNT,\"next_action\":\"$(json_escape "$NEXT_ACTION")\"}"
   if [[ -f "$SCRIPT_DIR/backchannel-append.sh" ]]; then
-    bash "$SCRIPT_DIR/backchannel-append.sh" --kind checkpoint-created --from kcc-checkpoint --spec "$SPEC" --session "$SESSION_ID" --payload "$PAYLOAD" --repo-root "$REPO_ROOT" --no-dashboard >/dev/null 2>&1 || WARNINGS+=("CP-W-EMIT: backchannel-append failed")
+    # in-process: source the appender and call it (running it as a script costs a dozen forks and execs per event on Git Bash for Windows)
+    source "$SCRIPT_DIR/backchannel-append.sh"
+    bc_append checkpoint-created kcc-checkpoint broadcast "$SPEC" "$SESSION_ID" "$PAYLOAD" "$REPO_ROOT" 1 >/dev/null 2>&1 || WARNINGS+=("CP-W-EMIT: backchannel-append failed")
   fi
 fi
 [[ -n "$MANIFEST_TMP" ]] && rm -f "$MANIFEST_TMP" 2>/dev/null || true

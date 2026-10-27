@@ -117,6 +117,14 @@ workspace_rel() { # path base-dir
 }
 
 # Sets LOCK_REASON ('' when open) for one IDEA-ID.
+# `auto --fasttrack` records one run-wide approval (kcc-run emits fasttrack-approved right after
+# auto-policy-parsed). It counts only while it is newer than the latest auto-policy-parsed.
+fasttrack_approved() {
+  local f="$REPO_ROOT/coordination/backchannel.jsonl"
+  [ -f "$f" ] || return 1
+  tr -d '\r' < "$f" | awk '/"kind"[ \t]*:[ \t]*"fasttrack-approved"/ { ft = NR } /"kind"[ \t]*:[ \t]*"auto-policy-parsed"/ { pp = NR } END { exit !(ft > 0 && ft > pp) }'
+}
+
 lock_reason() {
   local idea="$1" g d plan any_plan=0 ready="" sid bc hd s lidea
   lidea="$(lower "$idea")"
@@ -144,6 +152,7 @@ lock_reason() {
     if [ "$any_plan" -eq 1 ]; then LOCK_REASON="no plan.md of $idea declares status: ready"; else LOCK_REASON="no plan.md exists for any spec of $idea"; fi
     return 0
   fi
+  if fasttrack_approved; then LOCK_REASON=""; return 0; fi
   bc=""
   if [ -f "$REPO_ROOT/coordination/backchannel.jsonl" ]; then
     bc="$(tr -d '\r' < "$REPO_ROOT/coordination/backchannel.jsonl" | grep -E '"kind"[[:space:]]*:[[:space:]]*"(estimate-approved|estimate-auto-approved|auto-policy-approved|auto-policy-approved-bounded|auto-policy-approved-unlimited)"' || true)"
@@ -210,6 +219,9 @@ fi
 TARGETS=""
 if [ "$STAGED" -eq 1 ]; then
   TARGETS="$(git -C "$REPO_ROOT" -c core.quotepath=off diff --cached --name-only --relative 2>/dev/null)" || usage_fail "not a git repository (or git failed); --staged needs git."
+  # Only src/IDEA-* paths can be locked. Filtering first keeps a large commit (e.g. the bootstrap commit
+  # of a whole .KCC/ tree) from paying several process forks per file, which took minutes on Windows.
+  TARGETS="$(printf '%s\n' "$TARGETS" | grep -iE '^src/IDEA-[0-9]+' || true)"
 elif [ -n "$PATH_ARG" ]; then
   TARGETS="$PATH_ARG"
 else

@@ -34,6 +34,14 @@ butler keeps only the rare non-obvious + reusable entries. Most runs store
 nothing in memory - that is the correct outcome for routine work - but tracing
 still records what happened.
 
+## Flags
+
+`--fasttrack`: memory only. Create and write nothing under `Traces/` (skip any trace-session or token step); the
+butler works in its fasttrack mode and the backchannel events are emitted as usual. A fast-track run that produced
+no durable fact (no decision or preference worth reusing) writes nothing at all: no empty index, schema or note
+(the framework sync installs `memory/index.json`, `memory/memory.md` and `memory/schema.md`; the butler adds no
+empty entries to them). The answer is then `No new entries`, with `remember-stored` carrying `entry_ids=none`.
+
 ## Steps
 
 1. If <ARGS> is empty, ask the caller for a summary or trace path and stop.
