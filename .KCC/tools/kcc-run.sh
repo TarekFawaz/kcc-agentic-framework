@@ -170,7 +170,7 @@ flat_get() { fget_v "$1" "$2"; printf '%s\n' "$FGV"; }
 STATES_FLAT="$(json_flat "$STATES_JSON")" || fail_usage "cannot parse $STATES_JSON"
 eval "$(awk -F'\t' '
 function q(v){ gsub(/\047/, "\047\\\047\047", v); return "\047" v "\047" }
-function app(a,i,v,sep){ a[i] = (i in a) ? a[i] sep v : v }
+function app(a,i,v,sep){ if (i in a) a[i] = a[i] sep v; else a[i] = v }   # not a ternary: mawk evaluates a[i] first and prepends the separator, which made every check arg list start with an empty argument
 $1 ~ /^states\.[0-9]+\./ {
   split($1, p, "."); i=p[2]; if(i+0>mx) mx=i+0; seen[i]=1
   r=$1; sub(/^states\.[0-9]+\./, "", r); v=$2
@@ -862,9 +862,10 @@ resolve_claude_model() { resolve_claude_model_v "$1"; printf '%s\n' "$RV"; }
 # kernel/harnesses.json says how each harness takes an agent, a model and an effort; kernel/models.json says which model each
 # tier is on each harness (settings run.registry picks another column, e.g. 'ollama' behind the opencode harness).
 hprofile_v() { # key -> RV: settings harness_invoke.<harness>.<key>, else kernel/harnesses.json
-  local v
-  setting_v "harness_invoke.$HARNESS.$1" ""; v="$FGV"
-  if [[ -z "$v" ]]; then fget_v "$HARNESSES_FLAT" "harnesses.$HARNESS.$1"; v="$FGV"; fi
+  local v k=$'\n'"harness_invoke.$HARNESS.$1"$'\t'
+  # a project override that is present but empty ("effort": "") means "this harness takes no such flag": it is not a fallback
+  if [[ $'\n'"$SETTINGS_FLAT" == *"$k"* ]]; then fget_v "$SETTINGS_FLAT" "harness_invoke.$HARNESS.$1"; v="$FGV"
+  else fget_v "$HARNESSES_FLAT" "harnesses.$HARNESS.$1"; v="$FGV"; fi
   if [[ "$v" == "null" ]]; then v=""; fi
   RV="$v"
 }

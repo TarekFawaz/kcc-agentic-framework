@@ -373,6 +373,8 @@ function Invoke-InitialCommit {
     if ($S.commits -gt 0) { Add-Action ('repository already has ' + $S.commits + ' commit(s); no bootstrap commit'); return }
     $name = ((Invoke-Git @('config', 'user.name')).Out -join '').Trim()
     $email = ((Invoke-Git @('config', 'user.email')).Out -join '').Trim()
+    # git's own view of the identity: config, or the GIT_AUTHOR_* / GIT_COMMITTER_* variables (a CI runner has no config)
+    if (((-not $name) -or (-not $email)) -and (Invoke-Git @('var', 'GIT_AUTHOR_IDENT')).Code -eq 0 -and (Invoke-Git @('var', 'GIT_COMMITTER_IDENT')).Code -eq 0) { $name = 'env'; $email = 'env' }
     $idMsg = 'git identity not configured (not set by KCC). Run: git config --global user.name "Your Name"; git config --global user.email you@example.com'
     if ($DryRun) {
         Add-Action "would commit 'chore: KCC workspace bootstrap' (git add -A)"

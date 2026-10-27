@@ -332,8 +332,10 @@ describe("the router is asked for every dispatch, in every cycle", () => {
     const log = logText(root, "state-1-run-1.log");
     expect(log).toContain("Routing (kcc-route): spawn the idea-interrogator subagent on tier balanced, effort high");
     const cmd = log.split(String.fromCharCode(10))[1] ?? "";
-    expect(cmd).not.toContain("--model");
-    expect(cmd).not.toContain("--agent");
+    const flags = cmd.slice(0, Math.max(0, cmd.indexOf("KCC run state"))); // the session's flags; the prompt itself names kcc-route --agent
+    expect(flags).toContain("stub");
+    expect(flags).not.toContain("--model");
+    expect(flags).not.toContain("--agent");
     expect(readFileSync(join(root, "coordination", "backchannel.jsonl"), "utf8")).toContain('"mode":"wrapper"');
   });
 });

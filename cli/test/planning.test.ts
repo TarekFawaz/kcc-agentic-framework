@@ -31,7 +31,10 @@ describe("repo-bootstrap init-local", () => {
     try {
       applyPayload(dir);
       const t0 = Date.now();
-      const r = runTool(dir, "repo-bootstrap", ["--apply", "init-local", "--repo-root", dir], { capture: true });
+      // a CI runner has no git identity in its config; the bootstrap accepts git's own environment identity
+      const ident = { GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@example.com" };
+      const r = runTool(dir, "repo-bootstrap", ["--apply", "init-local", "--repo-root", dir], { capture: true, env: ident });
+      if (r.status !== 0) console.error(r.stdout, r.stderr);
       expect(r.status).toBe(0);
       expect(Date.now() - t0).toBeLessThan(120000); // it used to hang for many minutes
       expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain("coordination/run/");

@@ -235,9 +235,9 @@ load_states() {
   [[ -f "$f" ]] || return 0
   txt="$(<"$f")"; txt="${txt//$'\r'/}"; txt="${txt//$'\n'/}"
   if [[ "$txt" =~ $re_max ]]; then STATES_MAXATT="${BASH_REMATCH[1]}"; fi
-  shopt -s extglob
-  pat='{*( )"id"'; nlrec=$'\n{ "id"'; txt="${txt//$pat/$nlrec}"
-  shopt -u extglob
+  # cut at every `{ "id"` with literal patterns (one, two, no spaces): the extglob `{*( )"id"` this used took 5 s of CPU per
+  # build on Linux bash 5.2, which timed out every dashboard test on the release runner (0.6.0)
+  nlrec=$'\n{ "id"'; txt="${txt//\{ \"id\"/$nlrec}"; txt="${txt//\{  \"id\"/$nlrec}"; txt="${txt//\{\"id\"/$nlrec}"
   while IFS= read -r rec || [[ -n "$rec" ]]; do
     [[ "$rec" =~ $re_id ]] || continue
     id="${BASH_REMATCH[1]}"

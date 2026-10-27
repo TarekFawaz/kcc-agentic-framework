@@ -404,7 +404,7 @@ if [ "$TEST_COMMAND" = "auto" ]; then
   TAB_CH="$(printf '\t')"
   while IFS="$TAB_CH" read -r acd acc; do
     [ -n "$acd" ] || continue
-    aout="$(cd "$acd" && bash -c "$acc" 2>&1)"; arc=$?
+    arc=0; aout="$(cd "$acd" && bash -c "$acc" 2>&1)" || arc=$?   # || keeps set -e from ending the check on a failing test
     printf '%s\n' "$aout" 1>&2
     if [ "$arc" -ne 0 ]; then
       atail="$(printf '%s' "$aout" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 8 | tr '\n' '|' | cut -c1-500)"

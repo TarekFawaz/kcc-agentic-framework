@@ -360,6 +360,8 @@ initial_commit() {
   if [[ "$COMMITS" -gt 0 ]]; then act "repository already has $COMMITS commit(s); no bootstrap commit"; return 0; fi
   local name email
   name="$(g config user.name 2>/dev/null || true)"; email="$(g config user.email 2>/dev/null || true)"
+  # git's own view of the identity: config, or the GIT_AUTHOR_* / GIT_COMMITTER_* variables (a CI runner has no config)
+  if [[ -z "$name" || -z "$email" ]] && g var GIT_AUTHOR_IDENT >/dev/null 2>&1 && g var GIT_COMMITTER_IDENT >/dev/null 2>&1; then name="env"; email="env"; fi
   if [[ $DRY_RUN -eq 1 ]]; then
     act "would commit 'chore: KCC workspace bootstrap' (git add -A)"
     [[ -n "$name" && -n "$email" ]] || add_v RB-IDENTITY warning human "." "git identity not configured; the commit would fail. Run: git config --global user.name \"Your Name\"; git config --global user.email you@example.com"

@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # the suite takes minutes; the 0.6.0 run sat in the test step for over two hours
     steps:
       - uses: actions/checkout@v4
 

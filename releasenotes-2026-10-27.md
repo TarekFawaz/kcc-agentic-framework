@@ -21,6 +21,33 @@ uses none of the new flags behaves as before. Upgrade steps: *Updating an existi
 
 ## What changed
 
+### Release-runner fixes: the bash tools on a Linux box, after the first 0.6.0 run
+
+The first v0.6.0 release run (Ubuntu, bash 5.2) sat in its test step for over two hours and ended with nine failures.
+The whole suite had passed on Windows, where the PowerShell tools do the real runs and the bash tools are only
+dry-run; a Linux rehearsal in a Debian container (`oven/bun`, with `mawk` as the default `awk`, stricter than the
+runner's `gawk`) reproduced every failure. All fixed:
+
+- **`build-dashboard.sh` took 5 s of CPU per build** (11 s on the runner): the state table was cut at every record
+  with an extglob pattern (`{*( )"id"`), which bash 5.2 matches very slowly. Literal patterns now; a build is 15 ms.
+  Every driver state builds the dashboard, so this alone made a one-state run take half a minute and the dashboard
+  tests time out.
+- **`kcc-run.sh` sent an empty first argument to every state check on `mawk`** (Debian, Alpine, any box without
+  `gawk`): the awk helper that joins a check's `args` list used `a[i] = (i in a) ? a[i] sep v : v`, and `mawk`
+  evaluates `a[i]` first, so the list started with the separator. `repo-bootstrap` then refused `''` with a usage
+  error and the run stopped at state 0. The helper is an `if`/`else` now, which every awk agrees on.
+- **`check-wave-scope.sh --test-command auto` died on the first failing test** instead of reporting WAVE-002: the
+  script runs with `set -e`, and the command substitution that captured the test output ended it. Mirrors the
+  PowerShell behaviour now (exit code captured, output tail in the violation).
+- **A project override `harness_invoke.<harness>.effort: ""` was ignored by the bash driver**, which read an empty
+  value as "not set" and fell back to the kernel profile, so Codex still received `-c model_reasoning_effort`. A
+  present-but-empty override now means "no such flag", as it does in PowerShell.
+- **`repo-bootstrap --apply init-local` on a machine with no git identity in its config** (a CI runner) reported
+  RB-IDENTITY even when `GIT_AUTHOR_*` / `GIT_COMMITTER_*` were set. Both scripts now ask git itself
+  (`git var GIT_AUTHOR_IDENT`), so an environment identity is accepted.
+- **The release workflow has a 45-minute job timeout** instead of GitHub's six hours, and the full-lifecycle routing
+  test looks at the session's flags only (the routing sentence in the prompt legitimately names `kcc-route --agent`).
+
 ### Round 14 fixes: a closed run resumes, a waiver is never hidden, Docker limits say what they are
 
 Test round 14 (fast track, depth 2, the first on the 0.6.0 tree) approved two specs that were built at the same time in
