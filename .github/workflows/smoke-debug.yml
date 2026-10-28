@@ -82,6 +82,21 @@ jobs:
           while IFS="$SEP" read -r k t v; do echo "k=[$k] t=[$t] v=[$v]"; done < /tmp/t.meta
           while IFS="$SEP" read -r k t v; do echo "meta k=[$k] t=[$t] v=[${v:0:40}]"; done < /tmp/a0.meta | head -8
 
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: the sync script from this checkout (the fix under test), on the installed workspace
+        shell: bash
+        run: |
+          cd work
+          cp "$GITHUB_WORKSPACE/src/.KCC/tools/sync-adapters.sh" .KCC/tools/sync-adapters.sh
+          rm -rf .claude/agents .claude/skills
+          bash .KCC/tools/sync-adapters.sh --harness claude --repo-root "$PWD" | tail -n 4
+          echo "--- generated agents with the checkout's script"; ls .claude/agents | wc -l; ls .claude/agents
+          head -n 8 .claude/agents/architect.md
+          kcc doctor || true
+
       - name: tailor and doctor
         shell: bash
         run: |

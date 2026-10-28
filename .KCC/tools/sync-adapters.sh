@@ -55,7 +55,7 @@ CACHE="$(mktemp -d)"
 trap 'rm -rf "$CACHE"' EXIT
 
 NL=$'\n'
-SEP=$'\001'      # field separator in the parse cache
+SEP=$'\002'      # field separator in the parse cache (not \001: bash 3.2 on macOS uses it internally and `read` never splits on it)
 LSEP=$'\037'     # list-item separator
 NLC=$'\036'      # newline inside a cached scalar
 
@@ -251,7 +251,7 @@ function emit(key, t, v) {
   gsub(/\n/, NLC, v)
   printf "%s%s%s%s%s\n", key, SEP, t, SEP, v > META
 }
-BEGIN { SEP = sprintf("%c", 1); LSEP = sprintf("%c", 31); NLC = sprintf("%c", 30); n = 0; nk = 0 }
+BEGIN { SEP = sprintf("%c", 2); LSEP = sprintf("%c", 31); NLC = sprintf("%c", 30); n = 0; nk = 0 }
 { sub(/\r$/, ""); L[++n] = $0 }
 END {
   if (n < 1 || L[1] != "---") { print "File does not start with YAML frontmatter delimiter." > "/dev/stderr"; exit 3 }

@@ -45,6 +45,9 @@ runner's `gawk`) reproduced every failure. All fixed:
 - **`repo-bootstrap --apply init-local` on a machine with no git identity in its config** (a CI runner) reported
   RB-IDENTITY even when `GIT_AUTHOR_*` / `GIT_COMMITTER_*` were set. Both scripts now ask git itself
   (`git var GIT_AUTHOR_IDENT`), so an environment identity is accepted.
+- **`sync-adapters.sh` on macOS generated one agent named `.md`** (the release smoke on macos-latest): the parse cache
+  separated fields with byte `\001`, which bash 3.2's `read` never splits on (bash uses that byte internally), so every
+  name, class and description came back empty. The separator is `\002` now; Linux output is byte-identical.
 - **The release workflow has a 45-minute job timeout** instead of GitHub's six hours, and the full-lifecycle routing
   test looks at the session's flags only (the routing sentence in the prompt legitimately names `kcc-route --agent`).
 
