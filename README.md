@@ -1,12 +1,39 @@
+<p align="center">
+  <a href="https://tikasway.dev"><img src="./docs/images/tikasway-logo.svg" alt="Tika's Way (tikasway.dev)" width="360"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/TarekFawaz/kcc-agentic-framework/releases/latest"><img src="https://img.shields.io/github/v/release/TarekFawaz/kcc-agentic-framework?label=release&color=0e6f72" alt="Latest release"></a>
+  <a href="https://github.com/TarekFawaz/kcc-agentic-framework/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/TarekFawaz/kcc-agentic-framework/release.yml?label=release%20build" alt="Release build"></a>
+  <a href="https://github.com/TarekFawaz/kcc-agentic-framework/releases"><img src="https://img.shields.io/github/downloads/TarekFawaz/kcc-agentic-framework/total?label=downloads&color=0e6f72" alt="Downloads"></a>
+  <a href="https://github.com/TarekFawaz/kcc-agentic-framework/commits/main"><img src="https://img.shields.io/github/last-commit/TarekFawaz/kcc-agentic-framework" alt="Last commit"></a>
+  <a href="https://github.com/TarekFawaz/kcc-agentic-framework/stargazers"><img src="https://img.shields.io/github/stars/TarekFawaz/kcc-agentic-framework?style=flat&color=0e6f72" alt="GitHub stars"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-KCC%20License-green" alt="License"></a>
+</p>
+<p align="center">
+  <a href="./docs/alignment-matrix.md"><img src="https://img.shields.io/badge/status-public-0e6f72" alt="Status: public"></a>
+  <a href="./CLI-Guide.md#windows-winget-recommended"><img src="https://img.shields.io/badge/winget-Tikasway.KCC-0078D4" alt="winget install Tikasway.KCC"></a>
+  <a href="./CLI-Guide.md#macos-and-linux-homebrew-recommended"><img src="https://img.shields.io/badge/homebrew-tarekfawaz%2Fkcc%2Fkcc-FBB040?logo=homebrew&logoColor=white" alt="brew install tarekfawaz/kcc/kcc"></a>
+</p>
+<p align="center">
+  <a href="#supported-harnesses"><img src="https://img.shields.io/badge/Claude%20Code-adapter-D97757?logo=claude&logoColor=white" alt="Claude Code adapter"></a>
+  <a href="#supported-harnesses"><img src="https://img.shields.io/badge/Codex%20CLI-adapter-000000" alt="Codex CLI adapter"></a>
+  <a href="#supported-harnesses"><img src="https://img.shields.io/badge/OpenCode-adapter-1C1C1C?logo=opencode&logoColor=white" alt="OpenCode adapter"></a>
+  <a href="#supported-harnesses"><img src="https://img.shields.io/badge/Ollama-adapter-333333?logo=ollama&logoColor=white" alt="Ollama adapter"></a>
+  <a href="#supported-harnesses"><img src="https://img.shields.io/badge/generic-.agents%20bundle-6c757d" alt="Generic .agents bundle"></a>
+</p>
+<p align="center">
+  <a href="./CLI-Guide.md#install"><img src="https://img.shields.io/badge/Windows-x64-0078D4" alt="Windows x64"></a>
+  <a href="./CLI-Guide.md#install"><img src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-000000?logo=apple&logoColor=white" alt="macOS arm64 and x64"></a>
+  <a href="./CLI-Guide.md#install"><img src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-FCC624?logo=linux&logoColor=black" alt="Linux x64 and arm64"></a>
+  <a href="./docs/kcc-tools-reference.md"><img src="https://img.shields.io/badge/tools-bash%20%2B%20PowerShell-4EAA25?logo=gnubash&logoColor=white" alt="bash and PowerShell tools"></a>
+  <a href="./CLI-Guide.md#building-from-source"><img src="https://img.shields.io/badge/built%20with-Bun%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="Built with Bun and TypeScript"></a>
+</p>
+
 # KCC: Agentic AI Operating Model and Spec-Driven Workflow Framework
 
 KCC helps software teams use AI coding agents without losing governance,
 traceability, cost awareness, quality gates, or reusable learning.
-
-[![Status: public alpha](https://img.shields.io/badge/status-public%20alpha-blue)](./docs/alignment-matrix.md)
-[![License](https://img.shields.io/badge/license-see%20LICENSE-green)](./LICENSE)
-[![Harnesses](https://img.shields.io/badge/harnesses-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode%20%7C%20Ollama-informational)](#initialize-or-sync)
-
 
 **Official KCC page:** [tikasway.dev/kcc](https://tikasway.dev/kcc)
 
@@ -246,12 +273,12 @@ framework.
 |---|---|
 | Framework release | 0.6.0 (implements the KCC v0.4 operating-model specification) |
 | Source agents | 18 |
-| Source skills | 25 |
-| Dialects | 26 |
+| Source skills | 27 |
+| Dialects | 31 |
 | Command line | `kcc` 0.6.0: Windows x64, macOS arm64/x64, Linux x64/arm64 |
 | Harness adapter targets | Claude Code, Codex CLI, OpenCode, generic `.agents`, Ollama |
 | Structural validation | Passing with 0 errors (PowerShell + bash, cell + repo modes); the largest agents and skills carry line-budget warnings |
-| Current maturity | Public alpha / field-pilot reference implementation |
+| Current maturity | Public: every runtime feature exercised locally end to end (test rounds 13-14, 0.6.0 release smoke on Windows, macOS, Linux); see the alignment matrix for the rows that are still definitions only |
 
 The detailed implementation status lives in
 [docs/alignment-matrix.md](./docs/alignment-matrix.md).

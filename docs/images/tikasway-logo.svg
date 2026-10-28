@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 120" width="450" height="120" role="img" aria-labelledby="t">
+  <title id="t">Tika's Way (tikasway.dev)</title>
+  <rect x="0.5" y="0.5" width="449" height="119" rx="14" fill="#faf7f2" stroke="#e6e0d6"/>
+  <defs>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#1a1a2e" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <g transform="translate(8 10) scale(0.2778) translate(-70 -60)" fill="none">
+    <path d="M141 325C100 236 128 134 214 91" stroke="#0e6f72" stroke-width="8.3" stroke-linecap="round"/>
+    <path d="M248 83C292 78 334 89 370 112" stroke="#0e6f72" stroke-width="5.2" stroke-linecap="round"/>
+    <path d="M397 157C418 199 421 247 406 290" stroke="#0e6f72" stroke-width="5.2" stroke-linecap="round"/>
+    <path d="M393 337C356 384 294 407 233 391" stroke="#0e6f72" stroke-width="8.3" stroke-linecap="round"/>
+    <path d="M197 384C176 377 157 366 140 351" stroke="#0e6f72" stroke-width="8.3" stroke-linecap="round"/>
+    <g filter="url(#s)" stroke="#1a1a2e" stroke-width="5" stroke-linecap="round" opacity="0.9">
+      <path d="M256 222L331 124"/>
+      <path d="M222 273L145 363"/>
+      <path d="M274 272L351 355"/>
+    </g>
+    <circle cx="247" cy="246" r="67" fill="#faf7f2" stroke="#1a1a2e" stroke-width="4" filter="url(#s)"/>
+    <circle cx="247" cy="246" r="47" fill="#1a1a2e" opacity="0.96"/>
+    <circle cx="340" cy="112" r="24" fill="#0e6f72" opacity="0.9" filter="url(#s)"/>
+    <circle cx="131" cy="363" r="24" fill="#0e6f72" opacity="0.9" filter="url(#s)"/>
+    <circle cx="365" cy="364" r="24" fill="#0e6f72" opacity="0.9" filter="url(#s)"/>
+  </g>
+  <text x="122" y="66" fill="#1a1a2e" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="46" font-weight="500">Tika’s Way</text>
+  <text x="124" y="95" fill="#1a1a2e" opacity="0.62" font-family="'JetBrains Mono', Consolas, Menlo, monospace" font-size="11" letter-spacing="2.4">DOCTRINE<tspan fill="#0e6f72" opacity="1"> · </tspan>ENGINEERING<tspan fill="#0e6f72" opacity="1"> · </tspan>HUMANITY</text>
+</svg>
